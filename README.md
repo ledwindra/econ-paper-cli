@@ -2,7 +2,7 @@
 
 A free, open-source, local-first conversational literature search tool for economists.
 
-The goal is to let users ask research questions in natural language and receive synthesized answers backed by inspectable evidence.
+The goal is to let users ask research questions in natural language and receive synthesized answers backed by inspectable evidence. The following session is an illustration of the intended product, not current behavior:
 
 ```text
 $ econpapers chat
@@ -49,7 +49,15 @@ The MVP should not require:
 - a GPU;
 - internet access after required artifacts are installed.
 
-## Planned CLI
+## CLI scaffold
+
+Install the project from the repository using Python 3.10 or newer:
+
+```bash
+python -m pip install -e .
+```
+
+The package currently exposes these commands:
 
 ```bash
 econpapers setup
@@ -58,7 +66,10 @@ econpapers status
 econpapers update
 ```
 
-### Example workflow
+All four commands are deterministic placeholders. They do not download files,
+access the network, retrieve papers, or run a language model.
+
+### Intended future workflow
 
 ```bash
 econpapers setup
@@ -105,7 +116,10 @@ The project may distribute:
 
 The project must not bundle converted full-text papers unless redistribution permission is established.
 
-## Repository structure
+## Repository direction
+
+The repository is growing toward this structure as later scoped issues add the
+remaining layers:
 
 ```text
 econ-paper-cli/
@@ -136,7 +150,14 @@ Development is issue-driven:
 5. Update documentation when behavior changes.
 6. Run linting and tests before merge.
 
-Recommended checks:
+Install the package and development tools in editable mode from an activated
+Python 3.10 or newer virtual environment:
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+Run the required checks before opening a pull request:
 
 ```bash
 ruff check .
@@ -157,17 +178,19 @@ pytest
 
 ## Current status
 
-This project is in the repository-initialization and architecture stage.
+This project has an installable package, placeholder CLI commands, initial
+requirements and architecture documents, and cross-platform CI configuration.
+Retrieval, local inference, artifact management, and conversational behavior
+are not implemented.
 
 The immediate priorities are:
 
-1. establish the package scaffold;
-2. define corpus and artifact manifests;
-3. implement a small legal fixture corpus;
-4. build a retrieval baseline;
-5. add a local `llama.cpp` generation adapter;
-6. implement grounded synthesis and evidence validation;
-7. test installation on Windows, macOS, and Linux.
+1. define corpus and artifact manifests;
+2. implement a small legal fixture corpus;
+3. build a retrieval baseline;
+4. add an approved local generation adapter;
+5. implement grounded synthesis and evidence validation;
+6. validate installation on Windows, macOS, and Linux.
 
 ## Contributing
 
@@ -177,4 +200,5 @@ Pull requests should be small, issue-linked, tested, and limited to one coherent
 
 ## License
 
-The source code is intended to be released under the MIT License. Models, corpora, indexes, and datasets retain their own licenses and terms.
+The source code is released under the [MIT License](LICENSE). Models, corpora,
+indexes, and datasets retain their own licenses and terms.
