@@ -136,7 +136,14 @@ Development is issue-driven:
 5. Update documentation when behavior changes.
 6. Run linting and tests before merge.
 
-Recommended checks:
+Install the package and development tools in editable mode from an activated
+Python 3.10 or newer virtual environment:
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+Run the required checks before opening a pull request:
 
 ```bash
 ruff check .
