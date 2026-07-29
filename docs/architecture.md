@@ -35,8 +35,16 @@ against retrieved evidence before display.
 
 Issue 1 contains a standard-library CLI adapter and side-effect-free placeholder
 application services. The CLI parses commands, delegates once, prints the
-result, and returns an exit code. No domain model, protocol, infrastructure
-adapter, retrieval engine, or inference runtime exists yet.
+result, and returns an exit code.
+
+Issue 2 adds the first domain object: an immutable artifact manifest with pure
+mapping conversion and validation. It describes provenance, licensing,
+expected size, checksum syntax, update policy, copyrighted-full-text status,
+and a portable relative path. It performs no filesystem or network effects;
+future adapters will own loading manifests and verifying artifact bytes.
+
+No protocol, infrastructure adapter, retrieval engine, or inference runtime
+exists yet.
 
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.
