@@ -12,7 +12,9 @@ features are available.
 
 ## 2. Artifact contracts
 
-- Define manifests, checksums, local paths, and actionable validation errors
+- Define manifests, checksum syntax, local paths, and actionable validation
+  errors (schema-version-1 domain contract implemented)
+- Add filesystem loading and checksum calculation behind adapters
 - Keep downloads absent until sources, licenses, sizes, and update policies are
   approved
 

@@ -179,13 +179,14 @@ pytest
 ## Current status
 
 This project has an installable package, placeholder CLI commands, initial
-requirements and architecture documents, and cross-platform CI configuration.
-Retrieval, local inference, artifact management, and conversational behavior
-are not implemented.
+requirements and architecture documents, cross-platform CI configuration, and
+a pure domain contract for validating artifact metadata. Artifact loading and
+file verification, retrieval, local inference, and conversational behavior are
+not implemented.
 
 The immediate priorities are:
 
-1. define corpus and artifact manifests;
+1. add manifest loading and checksum verification behind filesystem adapters;
 2. implement a small legal fixture corpus;
 3. build a retrieval baseline;
 4. add an approved local generation adapter;

@@ -25,6 +25,17 @@ The MVP must:
 - distribute only metadata, permitted derived artifacts, and content with
   documented redistribution rights.
 
+## Artifact requirements
+
+Every corpus, index, or model artifact must have versioned metadata describing
+its source, license, redistribution status, expected size, SHA-256 digest,
+update policy, copyrighted-full-text status, and portable local path. Manifest
+validation does not itself establish legal permission or verify file contents.
+
+Artifact metadata and checksum verification must remain separable from network
+downloads and filesystem persistence. Unknown or prohibited redistribution
+status must never be interpreted as authorization to download or redistribute.
+
 ## Issue 1 behavior
 
 Issue 1 establishes only the installable package and command scaffold. The
@@ -42,3 +53,9 @@ model. Follow-up and evidence-inspection behavior remain future work.
 
 Model, corpus, artifact, and citation decisions require explicit design and
 maintainer approval before implementation.
+
+## Issue 2 behavior
+
+Issue 2 adds an immutable schema-version-1 domain contract for one artifact.
+It validates JSON-compatible metadata without reading files, calculating file
+digests, accessing a network, or selecting a real artifact.
