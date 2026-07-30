@@ -20,8 +20,8 @@ features are available.
 
 ## 3. Evidence and retrieval contracts
 
-- Add typed paper, passage, score, evidence, and citation objects
-- Establish deterministic protocol tests with synthetic text
+- Add typed paper, passage, score, evidence, and citation objects (implemented)
+- Establish deterministic protocol tests with synthetic text (implemented)
 - Select a retrieval adapter only after representative evaluation
 
 ## 4. Local inference and synthesis

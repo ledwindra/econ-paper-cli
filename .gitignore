@@ -7,10 +7,14 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Virtual environments
+# Virtual environments and local settings
 .venv/
 venv/
 env/
+.env
+.python-version
+.vscode/
+.idea/
 
 # Packaging outputs
 build/

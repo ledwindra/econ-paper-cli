@@ -180,14 +180,15 @@ pytest
 
 This project has an installable package, placeholder CLI commands, initial
 requirements and architecture documents, cross-platform CI configuration, a
-pure domain contract for validating artifact metadata, and filesystem adapters
-for loading local manifests, checking file sizes, and verifying SHA-256 digests.
+pure domain contract for validating artifact metadata, filesystem adapters
+for loading local manifests and verifying file checksums, and pure domain
+contracts for papers, passages, retrieval evidence, and citations.
 Downloads, corpus ingestion, retrieval, local inference, and conversational
 execution are not implemented.
 
 The immediate priorities are:
 
-1. implement a small legal fixture corpus;
+1. implement a small legal fixture corpus and local corpus loader;
 2. build a retrieval baseline;
 3. add an approved local generation adapter;
 4. implement grounded synthesis and evidence validation;
