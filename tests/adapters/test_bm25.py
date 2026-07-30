@@ -1,6 +1,7 @@
 """Tests for the pure-Python BM25 sparse retriever adapter."""
 
 import math
+import sys
 from pathlib import Path
 from typing import cast
 from unittest.mock import patch
@@ -439,6 +440,26 @@ def test_bm25_extreme_finite_configuration_does_not_overflow() -> None:
     assert len(results) == 1
     assert math.isfinite(results[0].score)
     assert results[0].score > 0.0
+
+
+def test_bm25_max_finite_k1_returns_matching_passage_deterministically() -> None:
+    """Test max finite k1 does not overflow and discard a longer match."""
+    p_short = make_passage("p_short", "road", ordinal=0)
+    p_long = make_passage("p_long", "road infrastructure", ordinal=1)
+    corpus = make_corpus([p_short, p_long])
+    retriever = BM25Retriever(corpus, k1=sys.float_info.max, b=1.0)
+    request = RetrievalRequest(query="road", top_k=2)
+
+    first_results = retriever.retrieve(request)
+    second_results = retriever.retrieve(request)
+
+    assert [result.passage.passage_id for result in first_results] == [
+        "p_short",
+        "p_long",
+    ]
+    assert math.isfinite(first_results[1].score)
+    assert first_results[1].score > 0.0
+    assert second_results == first_results
 
 
 def test_bm25_ranking_score_descending_order_and_tie_breaking() -> None:

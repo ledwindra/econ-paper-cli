@@ -163,10 +163,17 @@ class BM25Retriever:
             for t, idf in idfs.items():
                 tf = entry.term_counts.get(t, 0)
                 if tf > 0:
-                    denom = tf + self._k1 * (
+                    length_norm = (
                         1.0 - self._b + self._b * (entry.doc_len / self._avgdl)
                     )
-                    score_t = idf * (tf / denom) * (self._k1 + 1.0)
+                    if self._k1 >= 1.0:
+                        tf_weight = (
+                            tf * (1.0 + 1.0 / self._k1) / (tf / self._k1 + length_norm)
+                        )
+                    else:
+                        denom = tf + self._k1 * length_norm
+                        tf_weight = (tf / denom) * (self._k1 + 1.0)
+                    score_t = idf * tf_weight
                     contributions.append(score_t)
 
             if contributions:
