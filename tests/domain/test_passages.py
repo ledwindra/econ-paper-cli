@@ -9,14 +9,14 @@ from econ_paper_cli.domain import DomainError, Passage, PassageValidationError
 
 
 def valid_passage_mapping(**overrides: object) -> dict[str, object]:
-    """Return a dictionary representing valid passage metadata."""
+    """Return a dictionary representing valid synthetic passage metadata."""
     data: dict[str, object] = {
-        "passage_id": "autor-2003:p1279:pos0",
-        "paper_id": "autor-2003-computerization",
-        "text": "Computerization alters job tasks rather than simply replacing workers...",
-        "section_heading": "II. A Model of Task Substitution",
-        "page_start": 1279,
-        "page_end": 1280,
+        "passage_id": "synthetic-elections-roads-2024:sec1:p3:pos0",
+        "paper_id": "synthetic-elections-roads-2024",
+        "text": "Direct democratic elections in local municipal jurisdictions may enhance responsiveness to voter demands...",
+        "section_heading": "I. Introduction and Motivation",
+        "page_start": 3,
+        "page_end": 4,
         "ordinal_position": 0,
     }
     data.update(overrides)
@@ -28,10 +28,10 @@ def test_passage_round_trips_canonical_mapping() -> None:
     data = valid_passage_mapping()
     passage = Passage.from_mapping(data)
 
-    assert passage.passage_id == "autor-2003:p1279:pos0"
-    assert passage.paper_id == "autor-2003-computerization"
-    assert passage.page_start == 1279
-    assert passage.page_end == 1280
+    assert passage.passage_id == "synthetic-elections-roads-2024:sec1:p3:pos0"
+    assert passage.paper_id == "synthetic-elections-roads-2024"
+    assert passage.page_start == 3
+    assert passage.page_end == 4
     assert passage.ordinal_position == 0
     assert passage.to_mapping() == data
 

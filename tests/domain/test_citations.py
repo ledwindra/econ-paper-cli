@@ -14,14 +14,14 @@ from econ_paper_cli.domain import (
 
 
 def valid_passage_mapping(**overrides: object) -> dict[str, object]:
-    """Return a dictionary representing valid passage metadata."""
+    """Return a dictionary representing valid synthetic passage metadata."""
     data: dict[str, object] = {
-        "passage_id": "autor-2003:p1279:pos0",
-        "paper_id": "autor-2003-computerization",
-        "text": "Computerization alters job tasks rather than simply replacing workers...",
-        "section_heading": "II. A Model of Task Substitution",
-        "page_start": 1279,
-        "page_end": 1280,
+        "passage_id": "synthetic-elections-roads-2024:sec1:p3:pos0",
+        "paper_id": "synthetic-elections-roads-2024",
+        "text": "Direct democratic elections in local municipal jurisdictions may enhance responsiveness...",
+        "section_heading": "I. Introduction and Motivation",
+        "page_start": 3,
+        "page_end": 4,
         "ordinal_position": 0,
     }
     data.update(overrides)
@@ -44,8 +44,8 @@ def valid_citation_mapping(**overrides: object) -> dict[str, object]:
     """Return a dictionary representing a valid citation."""
     data: dict[str, object] = {
         "citation_id": "1",
-        "paper_id": "autor-2003-computerization",
-        "passage_id": "autor-2003:p1279:pos0",
+        "paper_id": "synthetic-elections-roads-2024",
+        "passage_id": "synthetic-elections-roads-2024:sec1:p3:pos0",
     }
     data.update(overrides)
     return data
@@ -57,8 +57,8 @@ def test_citation_round_trips_canonical_mapping() -> None:
     citation = Citation.from_mapping(data)
 
     assert citation.citation_id == "1"
-    assert citation.paper_id == "autor-2003-computerization"
-    assert citation.passage_id == "autor-2003:p1279:pos0"
+    assert citation.paper_id == "synthetic-elections-roads-2024"
+    assert citation.passage_id == "synthetic-elections-roads-2024:sec1:p3:pos0"
     assert citation.to_mapping() == data
 
 
@@ -78,8 +78,8 @@ def test_citation_mismatches_other_evidence() -> None:
     evidence_diff_passage = RetrievalEvidence.from_mapping(
         valid_evidence_mapping(
             passage={
-                "passage_id": "other:p1:pos0",
-                "paper_id": "autor-2003-computerization",
+                "passage_id": "synthetic-other:p1:pos0",
+                "paper_id": "synthetic-elections-roads-2024",
                 "text": "Different passage text...",
                 "section_heading": None,
                 "page_start": 1,
