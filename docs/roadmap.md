@@ -53,8 +53,17 @@ Not yet implemented:
 
 ## 5. Local inference and synthesis
 
-- Define a replaceable local generation protocol
-- Validate citations, preserve uncertainty, and support abstention
+Completed:
+- Replaceable backend-independent generation protocol
+- Immutable JSON-compatible generation request and response contracts
+- Structural citation membership and canonical-order validation
+- Explicit insufficient-evidence abstention contract
+
+Not yet implemented:
+- Concrete local model adapter or default model selection
+- Semantic grounded-generation evaluation for factual support, causal
+  characterization, uncertainty, disagreement, and evidence sufficiency
+- Claim-level citation association or inline rendering
 - Approve a default model separately before adding download behavior
 
 ## 6. End-to-end MVP
