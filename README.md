@@ -183,16 +183,17 @@ requirements and architecture documents, cross-platform CI configuration, a
 pure domain contract for validating artifact metadata, filesystem adapters
 for loading local manifests and verifying file checksums, pure domain
 contracts for papers, passages, retrieval evidence, citations, and corpora,
-and a synthetic CC0 fixture corpus with a local corpus loader adapter.
-PDF/document ingestion, passage segmentation, retrieval, local inference, and conversational
-execution are not implemented.
+a synthetic CC0 fixture corpus with a local corpus loader adapter, and a
+backend-independent retrieval protocol (`Retriever`, `RetrievalRequest`,
+`validate_retrieval_results`). PDF/document ingestion, passage segmentation,
+concrete retrieval algorithms, local inference, and conversational execution are not implemented.
 
 The immediate priorities are:
 
-1. build a retrieval baseline;
+1. build a deterministic sparse retrieval baseline and evaluate it on synthetic economics queries;
 2. add an approved local generation adapter;
 3. implement grounded synthesis and evidence validation;
-4. validate installation on Windows, macOS, and Linux.
+4. validate end-to-end MVP installation and runtime execution across Windows, macOS, and Linux.
 
 ## Contributing
 

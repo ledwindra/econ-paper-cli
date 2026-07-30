@@ -31,12 +31,15 @@ features are available.
 Completed:
 - `Paper`, `Passage`, `RetrievalEvidence`, and `Citation` domain contracts
 - Synthetic CC0 corpus suitable for deterministic retrieval evaluation
+- Replaceable retrieval protocol (`Retriever`)
+- Immutable retrieval request (`RetrievalRequest`)
+- Deterministic retrieval-result contract validation (`validate_retrieval_results`)
+- Protocol and contract unit tests
 
 Not yet implemented:
-- Replaceable retrieval protocol interface
-- Deterministic retrieval contract tests
 - Sparse retrieval baseline adapter (e.g. BM25 / TF-IDF)
-- Representative retrieval evaluation on economics queries
+- Retrieval index
+- Representative retrieval evaluation on synthetic economics queries
 - Retrieval adapter selection
 
 ## 5. Local inference and synthesis

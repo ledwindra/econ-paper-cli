@@ -52,6 +52,10 @@ status must never be interpreted as authorization to download or redistribute.
 
 - Substantive claims in synthesized answers must cite valid retrieved evidence passages.
 - Citation identifiers in generated answers must be verified against retrieved evidence before output is rendered.
+- Retrieval results must preserve paper identity and passage boundaries.
+- Results must expose deterministic ranks and scores at the protocol boundary.
+- Higher scores represent stronger matches at the protocol boundary.
+- Retrieval implementations must be replaceable.
 - When retrieved evidence is insufficient to answer a query, the system must explicitly abstain rather than fabricate claims.
 
 ## Deferred capabilities
