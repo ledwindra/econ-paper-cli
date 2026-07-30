@@ -44,7 +44,7 @@ Issue 3 implements local filesystem adapters in `econ_paper_cli.adapters.filesys
 
 Issue 4 adds pure, immutable domain contracts for `Paper`, `Passage`, `RetrievalEvidence`, and `Citation` with strict validation rules and JSON-compatible mapping conversion.
 
-No network adapter, retrieval engine, or local inference runtime exists yet.
+Issue 5 introduces a 100% synthetic, legally redistributable CC0-1.0 economics fixture corpus (`tests/fixtures/corpus/synthetic-economics-v1.json`) and a local corpus loader adapter (`econ_paper_cli.adapters.corpus`) that parses and validates corpus records into typed `Paper` and `Passage` domain objects.
 
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.
