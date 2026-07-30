@@ -9,16 +9,16 @@ from econ_paper_cli.domain import DomainError, Paper, PaperValidationError
 
 
 def valid_paper_mapping(**overrides: object) -> dict[str, object]:
-    """Return a dictionary representing valid paper metadata."""
+    """Return a dictionary representing valid synthetic paper metadata."""
     data: dict[str, object] = {
-        "paper_id": "autor-2003-computerization",
-        "title": "The Skill Content of Recent Technological Change",
-        "authors": ["David H. Autor", "Frank Levy", "Richard J. Murnane"],
-        "year": 2003,
-        "abstract": "We apply a task-based framework to analyze skill demand...",
-        "source_name": "Quarterly Journal of Economics",
-        "source_identifier": "10.1162/003355303322552801",
-        "source_url": "https://doi.org/10.1162/003355303322552801",
+        "paper_id": "synthetic-elections-roads-2024",
+        "title": "Direct Municipal Elections and Local Road Infrastructure: Evidence from Fictional District Reforms in Valdonia",
+        "authors": ["Elena Rostova", "Marcus Vance"],
+        "year": 2024,
+        "abstract": "We examine the introduction of direct mayoral elections across 140 fictional municipalities in Valdonia between 2012 and 2020.",
+        "source_name": "Econ Paper CLI Synthetic Fixture Series",
+        "source_identifier": "synthetic-fixture-paper-001",
+        "source_url": "https://example.invalid/synthetic-fixture-paper-001",
     }
     data.update(overrides)
     return data
@@ -29,9 +29,9 @@ def test_paper_round_trips_canonical_mapping() -> None:
     data = valid_paper_mapping()
     paper = Paper.from_mapping(data)
 
-    assert paper.paper_id == "autor-2003-computerization"
-    assert paper.authors == ("David H. Autor", "Frank Levy", "Richard J. Murnane")
-    assert paper.year == 2003
+    assert paper.paper_id == "synthetic-elections-roads-2024"
+    assert paper.authors == ("Elena Rostova", "Marcus Vance")
+    assert paper.year == 2024
     assert paper.to_mapping() == data
 
 

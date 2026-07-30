@@ -17,30 +17,30 @@ from econ_paper_cli.domain import (
 
 
 def valid_paper_mapping(**overrides: object) -> dict[str, object]:
-    """Return a valid paper mapping."""
+    """Return a valid synthetic paper mapping."""
     data: dict[str, object] = {
-        "paper_id": "autor-2003-computerization",
-        "title": "The Skill Content of Recent Technological Change",
-        "authors": ["David H. Autor", "Frank Levy", "Richard J. Murnane"],
-        "year": 2003,
-        "abstract": "We apply a task-based framework to analyze skill demand...",
-        "source_name": "Quarterly Journal of Economics",
-        "source_identifier": "10.1162/003355303322552801",
-        "source_url": "https://doi.org/10.1162/003355303322552801",
+        "paper_id": "synthetic-elections-roads-2024",
+        "title": "Direct Municipal Elections and Local Road Infrastructure: Evidence from Fictional District Reforms in Valdonia",
+        "authors": ["Elena Rostova", "Marcus Vance"],
+        "year": 2024,
+        "abstract": "We examine the introduction of direct mayoral elections across 140 fictional municipalities in Valdonia between 2012 and 2020. Using a difference-in-differences design with municipal fixed effects, we find that direct electoral accountability increases local road construction spending by 18.4% relative to administrative appointment regimes.",
+        "source_name": "Econ Paper CLI Synthetic Fixture Series",
+        "source_identifier": "synthetic-fixture-paper-001",
+        "source_url": "https://example.invalid/synthetic-fixture-paper-001",
     }
     data.update(overrides)
     return data
 
 
 def valid_passage_mapping(**overrides: object) -> dict[str, object]:
-    """Return a valid passage mapping."""
+    """Return a valid synthetic passage mapping."""
     data: dict[str, object] = {
-        "passage_id": "autor-2003:p1279:pos0",
-        "paper_id": "autor-2003-computerization",
-        "text": "Computerization alters job tasks rather than simply replacing workers...",
-        "section_heading": "II. A Model of Task Substitution",
-        "page_start": 1279,
-        "page_end": 1280,
+        "passage_id": "synthetic-elections-roads-2024:sec1:p3:pos0",
+        "paper_id": "synthetic-elections-roads-2024",
+        "text": "Direct democratic elections in local municipal jurisdictions may enhance responsiveness to voter demands for basic infrastructure services. In developing regional economies, local road connectivity represents a highly visible public good.",
+        "section_heading": "I. Introduction and Motivation",
+        "page_start": 3,
+        "page_end": 4,
         "ordinal_position": 0,
     }
     data.update(overrides)

@@ -15,14 +15,14 @@ from econ_paper_cli.domain import (
 
 
 def valid_passage_mapping(**overrides: object) -> dict[str, object]:
-    """Return a dictionary representing valid passage metadata."""
+    """Return a dictionary representing valid synthetic passage metadata."""
     data: dict[str, object] = {
-        "passage_id": "autor-2003:p1279:pos0",
-        "paper_id": "autor-2003-computerization",
-        "text": "Computerization alters job tasks rather than simply replacing workers...",
-        "section_heading": "II. A Model of Task Substitution",
-        "page_start": 1279,
-        "page_end": 1280,
+        "passage_id": "synthetic-elections-roads-2024:sec1:p3:pos0",
+        "paper_id": "synthetic-elections-roads-2024",
+        "text": "Direct democratic elections in local municipal jurisdictions may enhance responsiveness...",
+        "section_heading": "I. Introduction and Motivation",
+        "page_start": 3,
+        "page_end": 4,
         "ordinal_position": 0,
     }
     data.update(overrides)
@@ -46,7 +46,7 @@ def test_evidence_round_trips_canonical_mapping() -> None:
     data = valid_evidence_mapping()
     evidence = RetrievalEvidence.from_mapping(data)
 
-    assert evidence.passage.passage_id == "autor-2003:p1279:pos0"
+    assert evidence.passage.passage_id == "synthetic-elections-roads-2024:sec1:p3:pos0"
     assert evidence.score == 14.82
     assert evidence.rank == 1
     assert evidence.retrieval_method == "bm25"

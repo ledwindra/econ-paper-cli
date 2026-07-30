@@ -1,5 +1,9 @@
 # Product requirements
 
+## Implementation status
+
+Implementation status and milestone progress are tracked in [`docs/architecture.md`](architecture.md) and [`docs/roadmap.md`](roadmap.md).
+
 ## Mission
 
 Econ Paper CLI is a free, open-source, local-first conversational literature
@@ -36,26 +40,23 @@ Artifact metadata and checksum verification must remain separable from network
 downloads and filesystem persistence. Unknown or prohibited redistribution
 status must never be interpreted as authorization to download or redistribute.
 
-## Issue 1 behavior
+## Privacy and offline operation
 
-Issue 1 establishes only the installable package and command scaffold. The
-`setup`, `status`, `chat`, and `update` commands are deterministic placeholders.
-They do not download artifacts, access a network, retrieve papers, or run a
-model. Follow-up and evidence-inspection behavior remain future work.
+- Retrieval, generation, indexing, and corpus inspection run locally.
+- No user queries, documents, or search history may be uploaded to external services by default.
+- Internet connectivity is required only during initial setup or manual artifact updates.
 
-## Out of scope for Issue 1
+## Evidence and grounding
 
-- Corpus selection or distribution
-- Model selection, download, or inference
-- Embeddings, indexes, vector stores, or retrieval
-- Evidence and citation-format decisions
-- Telemetry, hosted inference, and web search
+- Substantive claims in synthesized answers must cite valid retrieved evidence passages.
+- Citation identifiers in generated answers must be verified against retrieved evidence before output is rendered.
+- When retrieved evidence is insufficient to answer a query, the system must explicitly abstain rather than fabricate claims.
 
-Model, corpus, artifact, and citation decisions require explicit design and
-maintainer approval before implementation.
+## Deferred capabilities
 
-## Issue 2 behavior
+Model, corpus, index, artifact, and citation format decisions require explicit design and maintainer approval before implementation. The following remain out of scope for default execution:
 
-Issue 2 adds an immutable schema-version-1 domain contract for one artifact.
-It validates JSON-compatible metadata without reading files, calculating file
-digests, accessing a network, or selecting a real artifact.
+- Paid cloud inference APIs (e.g. OpenAI, Anthropic)
+- Mandatory Docker or GPU requirements
+- Redistribution of copyrighted paper full text without permission
+- Automatic background telemetry or query tracking

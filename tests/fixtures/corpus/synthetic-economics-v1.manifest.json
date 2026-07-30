@@ -10,5 +10,5 @@
   "sha256": "c98c0a6099e6a5669b65a145aae63c0680886bc94fab9259b14d66e0d57179b3",
   "source": "https://example.invalid/synthetic-economics-v1",
   "update_policy": "Pinned synthetic economics fixture corpus; any fixture modifications require updates to version, expected_size_bytes, and sha256.",
-  "version": "1.0.0"
+  "version": "1.0.1"
 }
