@@ -1,14 +1,14 @@
 {
   "artifact_id": "synthetic-economics-v1",
   "contains_copyrighted_full_text": false,
-  "expected_size_bytes": 16332,
+  "expected_size_bytes": 16238,
   "kind": "corpus",
   "license": "CC0-1.0",
   "local_path": "tests/fixtures/corpus/synthetic-economics-v1.json",
   "redistribution_status": "permitted",
   "schema_version": 1,
-  "sha256": "1b5e1101d4baa8c0fded6d6fd2d1d0094a1a88b1648c4200d8da003280391a0a",
+  "sha256": "c98c0a6099e6a5669b65a145aae63c0680886bc94fab9259b14d66e0d57179b3",
   "source": "https://example.invalid/synthetic-economics-v1",
-  "update_policy": "Pinned synthetic economics fixture corpus; update manually.",
+  "update_policy": "Pinned synthetic economics fixture corpus; any fixture modifications require updates to version, expected_size_bytes, and sha256.",
   "version": "1.0.0"
 }

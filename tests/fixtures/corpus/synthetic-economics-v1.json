@@ -1,6 +1,5 @@
 {
   "corpus_id": "synthetic-economics-v1",
-  "description": "CC0-1.0 synthetic economics literature fixture corpus for Econ Paper CLI.",
   "papers": [
     {
       "abstract": "We examine the introduction of direct mayoral elections across 140 fictional municipalities in Valdonia between 2012 and 2020. Using a difference-in-differences design with municipal fixed effects, we find that direct electoral accountability increases local road construction spending by 18.4% relative to administrative appointment regimes. However, investment is heavily skewed toward visible voter-centric feeder roads prior to election cycles rather than long-term industrial trunk roads.",

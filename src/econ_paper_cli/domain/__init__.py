@@ -7,6 +7,7 @@ from econ_paper_cli.domain.artifacts import (
     RedistributionStatus,
 )
 from econ_paper_cli.domain.citations import Citation
+from econ_paper_cli.domain.corpora import Corpus, CorpusValidationError
 from econ_paper_cli.domain.errors import (
     CitationValidationError,
     DomainError,
@@ -24,6 +25,8 @@ __all__ = [
     "ArtifactManifestError",
     "Citation",
     "CitationValidationError",
+    "Corpus",
+    "CorpusValidationError",
     "DomainError",
     "EvidenceValidationError",
     "Paper",

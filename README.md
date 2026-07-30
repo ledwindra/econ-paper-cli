@@ -182,8 +182,8 @@ This project has an installable package, placeholder CLI commands, initial
 requirements and architecture documents, cross-platform CI configuration, a
 pure domain contract for validating artifact metadata, filesystem adapters
 for loading local manifests and verifying file checksums, pure domain
-contracts for papers, passages, retrieval evidence, and citations, and a
-synthetic CC0 fixture corpus with a local corpus loader adapter.
+contracts for papers, passages, retrieval evidence, citations, and corpora,
+and a synthetic CC0 fixture corpus with a local corpus loader adapter.
 Downloads, corpus ingestion, retrieval, local inference, and conversational
 execution are not implemented.
 
