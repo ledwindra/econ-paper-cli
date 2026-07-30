@@ -190,10 +190,11 @@ concrete retrieval algorithms, local inference, and conversational execution are
 
 The immediate priorities are:
 
-1. build a deterministic sparse retrieval baseline and evaluate it on synthetic economics queries;
-2. add an approved local generation adapter;
-3. implement grounded synthesis and evidence validation;
-4. validate end-to-end MVP installation and runtime execution across Windows, macOS, and Linux.
+1. implement a deterministic sparse retrieval baseline;
+2. evaluate it on representative synthetic economics queries;
+3. add an approved local generation adapter;
+4. implement grounded synthesis and evidence validation;
+5. validate end-to-end MVP installation and runtime behavior across Windows, macOS, and Linux.
 
 ## Contributing
 

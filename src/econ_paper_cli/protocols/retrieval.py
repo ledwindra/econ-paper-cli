@@ -19,6 +19,9 @@ class RetrievalResultValidationError(RetrievalContractError):
     """Raised when returned retrieval results violate output contract rules."""
 
 
+_REQUEST_FIELDS = frozenset({"query", "top_k"})
+
+
 @dataclass(frozen=True, slots=True)
 class RetrievalRequest:
     """Immutable domain representation of a retrieval query request."""
@@ -47,30 +50,29 @@ class RetrievalRequest:
             )
 
         provided = set(data)
-        if "query" not in provided:
+        missing_fields = sorted(_REQUEST_FIELDS - provided)
+        if missing_fields:
             raise RetrievalRequestValidationError(
-                "RetrievalRequest mapping missing required field: query."
+                "RetrievalRequest mapping is missing required fields: "
+                + ", ".join(missing_fields)
+                + "."
             )
 
-        allowed = {"query", "top_k"}
-        unknown = sorted(provided - allowed)
-        if unknown:
+        unknown_fields = sorted(provided - _REQUEST_FIELDS)
+        if unknown_fields:
             raise RetrievalRequestValidationError(
                 "RetrievalRequest mapping contains unknown fields: "
-                + ", ".join(unknown)
+                + ", ".join(unknown_fields)
                 + "."
             )
 
         raw_query = data["query"]
         _validate_query(raw_query)
 
-        top_k = 10
-        if "top_k" in data:
-            raw_top_k = data["top_k"]
-            _validate_top_k(raw_top_k)
-            top_k = cast(int, raw_top_k)
+        raw_top_k = data["top_k"]
+        _validate_top_k(raw_top_k)
 
-        return cls(query=cast(str, raw_query), top_k=top_k)
+        return cls(query=cast(str, raw_query), top_k=cast(int, raw_top_k))
 
     def to_mapping(self) -> dict[str, object]:
         """Return the canonical JSON-compatible mapping representation."""
@@ -83,9 +85,10 @@ class Retriever(Protocol):
 
     Implementations are configured over a corpus or index during construction.
 
-    Note on @runtime_checkable: @runtime_checkable performs structural attribute
-    checking (verifying that the object exposes a callable `retrieve` attribute).
-    It does not perform full runtime parameter or return type verification.
+    Note on @runtime_checkable: Runtime protocol checking verifies structural
+    presence of the required `retrieve` attribute but does not validate the full
+    method signature, argument types, return type, or retrieval semantics.
+    Application correctness must not rely on `isinstance(obj, Retriever)`.
     """
 
     def retrieve(

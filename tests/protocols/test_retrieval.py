@@ -91,16 +91,25 @@ def test_retrieval_request_valid_direct_construction() -> None:
 
 
 def test_retrieval_request_valid_mapping_construction() -> None:
-    """Test valid construction from a mapping."""
+    """Test valid construction from a mapping requiring query and top_k."""
     data = {"query": "road connectivity", "top_k": 20}
     req = RetrievalRequest.from_mapping(data)
     assert req.query == "road connectivity"
     assert req.top_k == 20
 
-    # Optional top_k defaults to 10
-    req_default = RetrievalRequest.from_mapping({"query": "tax reform"})
-    assert req_default.query == "tax reform"
-    assert req_default.top_k == 10
+
+def test_retrieval_request_rejects_missing_top_k() -> None:
+    """Test that from_mapping rejects mappings missing top_k."""
+    with pytest.raises(
+        RetrievalRequestValidationError, match="missing required fields: top_k"
+    ):
+        RetrievalRequest.from_mapping({"query": "tax reform"})
+
+
+def test_retrieval_request_to_mapping_always_emits_query_and_top_k() -> None:
+    """Test that to_mapping always includes both query and top_k."""
+    req_default = RetrievalRequest(query="default test")
+    assert req_default.to_mapping() == {"query": "default test", "top_k": 10}
 
 
 def test_retrieval_request_canonical_mapping_round_trip() -> None:
@@ -183,7 +192,7 @@ def test_retrieval_request_rejects_string_top_k() -> None:
 def test_retrieval_request_rejects_missing_query() -> None:
     """Test that from_mapping rejects missing query key."""
     with pytest.raises(
-        RetrievalRequestValidationError, match="missing required field: query"
+        RetrievalRequestValidationError, match="missing required fields: query"
     ):
         RetrievalRequest.from_mapping({"top_k": 5})
 
@@ -191,7 +200,9 @@ def test_retrieval_request_rejects_missing_query() -> None:
 def test_retrieval_request_rejects_unknown_mapping_fields() -> None:
     """Test that from_mapping rejects unknown fields."""
     with pytest.raises(RetrievalRequestValidationError, match="unknown fields: extra"):
-        RetrievalRequest.from_mapping({"query": "valid query", "extra": 123})
+        RetrievalRequest.from_mapping(
+            {"query": "valid query", "top_k": 5, "extra": 123}
+        )
 
 
 def test_retrieval_request_rejects_non_string_mapping_keys() -> None:
@@ -224,14 +235,14 @@ def test_retriever_protocol_runtime_checkable_non_conformance() -> None:
 
 
 def test_retriever_protocol_documentation_note_on_runtime_checkable() -> None:
-    """Verify runtime_checkable behavior note: it checks attribute existence, not full type signature."""
+    """Verify runtime_checkable behavior: checks structural presence of attribute, not full signature/types."""
 
     class StructurallyConformingDummy:
         def retrieve(self, request: object) -> object:
             return None
 
     dummy = StructurallyConformingDummy()
-    # @runtime_checkable evaluates isinstance(dummy, Retriever) as True because 'retrieve' exists
+    # @runtime_checkable verifies structural presence of the required 'retrieve' attribute
     assert isinstance(dummy, Retriever)
 
 
