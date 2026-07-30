@@ -20,6 +20,8 @@ Application Services -> Retriever Protocol -> Concrete Retrieval Adapter
 
 Retrievers are configured with their target corpus or index during construction. The corpus or index is **not** passed into individual `retrieve(...)` invocations.
 
+`BM25Retriever` (`econ_paper_cli.adapters.bm25.BM25Retriever`) is the first concrete adapter conforming to this protocol. The protocol remains strictly backend-independent, and implementing `BM25Retriever` does not select it as the permanent default backend.
+
 ## Components
 
 ### 1. `RetrievalRequest`

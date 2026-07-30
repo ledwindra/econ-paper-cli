@@ -1,5 +1,9 @@
 """Adapters for interacting with external systems and the filesystem."""
 
+from econ_paper_cli.adapters.bm25 import (
+    BM25ConfigurationError,
+    BM25Retriever,
+)
 from econ_paper_cli.adapters.corpus import (
     CorpusDomainValidationError,
     CorpusEncodingError,
@@ -39,6 +43,8 @@ from econ_paper_cli.adapters.filesystem import (
 __all__ = [
     "ArtifactFileNotFoundError",
     "ArtifactNotARegularFileError",
+    "BM25ConfigurationError",
+    "BM25Retriever",
     "ChecksumMismatchError",
     "CorpusDomainValidationError",
     "CorpusEncodingError",

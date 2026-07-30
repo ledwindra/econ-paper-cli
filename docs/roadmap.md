@@ -35,12 +35,17 @@ Completed:
 - Immutable retrieval request (`RetrievalRequest`)
 - Deterministic retrieval-result contract validation (`validate_retrieval_results`)
 - Protocol and contract unit tests
+- Deterministic pure-Python BM25 sparse retrieval baseline (`BM25Retriever`)
+- In-memory corpus statistics for BM25 query-time retrieval
+- Normalized lexical duplicate suppression
+- Adapter contract and unit tests
 
 Not yet implemented:
-- Sparse retrieval baseline adapter (e.g. BM25 / TF-IDF)
-- Retrieval index
-- Representative retrieval evaluation on synthetic economics queries
-- Retrieval adapter selection
+- Representative retrieval evaluation
+- Retrieval quality metrics and relevance judgments
+- Adapter comparison or final adapter selection
+- Persisted retrieval index or index artifact
+- CLI integration
 
 ## 5. Local inference and synthesis
 

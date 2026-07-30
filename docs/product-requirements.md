@@ -56,6 +56,7 @@ status must never be interpreted as authorization to download or redistribute.
 - Results must expose deterministic ranks and scores at the protocol boundary.
 - Higher scores represent stronger matches at the protocol boundary.
 - Retrieval implementations must be replaceable.
+- A concrete retrieval implementation must be evaluated on representative economics questions before it is selected or described as the default retrieval backend.
 - When retrieved evidence is insufficient to answer a query, the system must explicitly abstain rather than fabricate claims.
 
 ## Deferred capabilities
