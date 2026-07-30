@@ -179,19 +179,19 @@ pytest
 ## Current status
 
 This project has an installable package, placeholder CLI commands, initial
-requirements and architecture documents, cross-platform CI configuration, and
-a pure domain contract for validating artifact metadata. Artifact loading and
-file verification, retrieval, local inference, and conversational behavior are
-not implemented.
+requirements and architecture documents, cross-platform CI configuration, a
+pure domain contract for validating artifact metadata, and filesystem adapters
+for loading local manifests, checking file sizes, and verifying SHA-256 digests.
+Downloads, corpus ingestion, retrieval, local inference, and conversational
+execution are not implemented.
 
 The immediate priorities are:
 
-1. add manifest loading and checksum verification behind filesystem adapters;
-2. implement a small legal fixture corpus;
-3. build a retrieval baseline;
-4. add an approved local generation adapter;
-5. implement grounded synthesis and evidence validation;
-6. validate installation on Windows, macOS, and Linux.
+1. implement a small legal fixture corpus;
+2. build a retrieval baseline;
+3. add an approved local generation adapter;
+4. implement grounded synthesis and evidence validation;
+5. validate installation on Windows, macOS, and Linux.
 
 ## Contributing
 
