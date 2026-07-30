@@ -42,8 +42,11 @@ mapping conversion and validation.
 
 Issue 3 implements local filesystem adapters in `econ_paper_cli.adapters.filesystem` to load artifact manifests from JSON files and verify local file sizes and SHA-256 digests using chunked streams.
 
+Issue 4 adds pure, immutable domain contracts for `Paper`, `Passage`, `RetrievalEvidence`, and `Citation` with strict validation rules and JSON-compatible mapping conversion.
+
 No network adapter, retrieval engine, or local inference runtime exists yet.
 
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.
+
 
