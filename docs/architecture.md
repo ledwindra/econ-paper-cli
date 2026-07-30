@@ -59,5 +59,16 @@ validated before retrieval. The untuned `BM25Retriever` is measured by this
 benchmark but is not selected as the permanent default or claimed to outperform
 another adapter. See [`docs/retrieval-evaluation.md`](retrieval-evaluation.md).
 
+Issue 9 selects `BM25Retriever` as the initial, replaceable retrieval backend.
+The decision uses the frozen benchmark together with installation, artifact,
+CPU, portability, licensing, privacy, and maintenance evidence; it does not
+claim BM25 is permanently optimal. `econ_paper_cli.evaluation.resources` adds a
+backend-independent, standard-library observation boundary for stable result
+digests, initialization and query timings, Python heap, available process RSS,
+and machine metadata. Correctness remains CI-gated while timing and memory are
+non-gating observations. No second adapter, production dependency, model
+artifact, persisted index, CLI wiring, or generation integration is added. See
+[`docs/retrieval-selection.md`](retrieval-selection.md).
+
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.

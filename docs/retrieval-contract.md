@@ -20,7 +20,11 @@ Application Services -> Retriever Protocol -> Concrete Retrieval Adapter
 
 Retrievers are configured with their target corpus or index during construction. The corpus or index is **not** passed into individual `retrieve(...)` invocations.
 
-`BM25Retriever` (`econ_paper_cli.adapters.bm25.BM25Retriever`) is the first concrete adapter conforming to this protocol. The protocol remains strictly backend-independent, and implementing `BM25Retriever` does not select it as the permanent default backend.
+`BM25Retriever` (`econ_paper_cli.adapters.bm25.BM25Retriever`) is the first
+concrete adapter conforming to this protocol and is selected by Issue 9 as the
+initial backend. The protocol remains strictly backend-independent; this is a
+replaceable MVP decision, not selection of a permanent or universally superior
+retrieval method. Issue 9 does not wire the selection into the CLI.
 
 ## Components
 
@@ -85,8 +89,17 @@ thresholds, baseline results, and limitations are documented in
 [`docs/retrieval-evaluation.md`](retrieval-evaluation.md).
 
 Passing this benchmark is a regression signal for its small synthetic corpus.
-It is not evidence that an adapter is optimal, and Issue 8 does not select a
-default retrieval backend.
+It is not evidence that an adapter is optimal. Issue 8 did not select a default;
+Issue 9 selects BM25 as the initial replaceable backend using the benchmark plus
+dependency, portability, licensing, privacy, resource, and maintenance
+considerations. The rationale and measurement boundary are documented in
+[`docs/retrieval-selection.md`](retrieval-selection.md).
+
+Cross-platform correctness comparisons use a stable digest of query IDs,
+passage IDs, contiguous ranks, and `retrieval_method`. Raw floating-point scores
+are excluded from that digest, but remain finite, validated, and locally
+repeatable. Timing and memory values are observations only and are never
+retrieval-contract or CI thresholds.
 
 ## Exception Hierarchy
 
