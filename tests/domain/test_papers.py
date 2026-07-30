@@ -109,6 +109,38 @@ def test_paper_optional_text_fields_reject_empty_sentinels(
         Paper.from_mapping(valid_paper_mapping(**{field: value}))
 
 
+@pytest.mark.parametrize(
+    "valid_url",
+    [
+        "http://example.org/paper",
+        "https://doi.org/10.1162/003355303322552801",
+        "HTTP://EXAMPLE.COM/DOC",
+    ],
+)
+def test_paper_source_url_accepts_valid_http_urls(valid_url: str) -> None:
+    """Test Option B: source_url accepts valid absolute HTTP(S) URLs."""
+    paper = Paper.from_mapping(valid_paper_mapping(source_url=valid_url))
+    assert paper.source_url == valid_url
+
+
+@pytest.mark.parametrize(
+    "invalid_url",
+    [
+        "ftp://example.org/paper",
+        "file:///path/to/paper.pdf",
+        "not-a-url",
+        "http://",
+        "https://",
+        "mailto:test@example.org",
+        "/relative/path/url",
+    ],
+)
+def test_paper_source_url_rejects_invalid_urls(invalid_url: str) -> None:
+    """Test Option B: source_url rejects non-HTTP(S) or invalid URLs."""
+    with pytest.raises(PaperValidationError, match="source_url"):
+        Paper.from_mapping(valid_paper_mapping(source_url=invalid_url))
+
+
 def test_paper_error_inherits_from_domain_error() -> None:
     """Verify that PaperValidationError inherits from DomainError."""
     with pytest.raises(DomainError):

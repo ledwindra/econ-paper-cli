@@ -21,15 +21,27 @@ class RetrievalEvidence:
     retrieval_method: str | None
 
     def __post_init__(self) -> None:
-        """Validate direct construction."""
+        """Validate and normalize direct construction.
+
+        Normalizes integer scores to float values.
+        """
         _validate_passage(self.passage)
         _validate_score(self.score)
+        if isinstance(self.score, int) and not isinstance(self.score, bool):
+            object.__setattr__(self, "score", float(self.score))
         _validate_rank(self.rank)
         _validate_optional_text("retrieval_method", self.retrieval_method)
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, object]) -> "RetrievalEvidence":
-        """Validate and construct RetrievalEvidence from a JSON-compatible mapping."""
+        """Validate and construct RetrievalEvidence from a JSON-compatible mapping.
+
+        Note on nested validation errors:
+        If data['passage'] is a mapping and fails passage validation,
+        PassageValidationError is propagated directly without being wrapped.
+        DomainError serves as the top-level catch-all exception for any domain
+        parsing failure.
+        """
         if not isinstance(data, Mapping):
             raise EvidenceValidationError(
                 "RetrievalEvidence metadata must be a mapping."
@@ -67,10 +79,8 @@ class RetrievalEvidence:
             )
 
         raw_score = data["score"]
-        if isinstance(raw_score, int) and not isinstance(raw_score, bool):
-            score = float(raw_score)
-        else:
-            score = cast(float, raw_score)
+        _validate_score(raw_score)
+        score = float(cast(int | float, raw_score))
 
         return cls(
             passage=passage,

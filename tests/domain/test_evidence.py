@@ -9,6 +9,7 @@ from econ_paper_cli.domain import (
     DomainError,
     EvidenceValidationError,
     Passage,
+    PassageValidationError,
     RetrievalEvidence,
 )
 
@@ -52,6 +53,26 @@ def test_evidence_round_trips_canonical_mapping() -> None:
     assert evidence.to_mapping() == data
 
 
+def test_evidence_normalizes_integer_score_to_float() -> None:
+    """Test that integer score input is normalized to float for direct and mapping construction."""
+    passage = Passage.from_mapping(valid_passage_mapping())
+
+    # Direct construction with integer score
+    evidence_direct = RetrievalEvidence(
+        passage=passage,
+        score=14,
+        rank=1,
+        retrieval_method="bm25",
+    )
+    assert isinstance(evidence_direct.score, float)
+    assert evidence_direct.score == 14.0
+
+    # from_mapping construction with integer score
+    evidence_mapping = RetrievalEvidence.from_mapping(valid_evidence_mapping(score=14))
+    assert isinstance(evidence_mapping.score, float)
+    assert evidence_mapping.score == 14.0
+
+
 def test_evidence_supports_optional_retrieval_method_none() -> None:
     """Test that retrieval_method can be None."""
     data = valid_evidence_mapping(retrieval_method=None)
@@ -91,10 +112,31 @@ def test_evidence_accepts_passage_instance_or_mapping() -> None:
 
 
 @pytest.mark.parametrize("invalid_passage", ["not-a-passage", 123, None])
-def test_evidence_rejects_invalid_passage(invalid_passage: object) -> None:
-    """Test passage field validation."""
+def test_evidence_rejects_invalid_passage_type(invalid_passage: object) -> None:
+    """Test non-mapping and non-Passage passage field validation."""
     with pytest.raises(EvidenceValidationError, match="passage"):
         RetrievalEvidence.from_mapping(valid_evidence_mapping(passage=invalid_passage))
+
+
+def test_evidence_propagates_passage_validation_error_unwrapped() -> None:
+    """Verify that Passage.from_mapping errors inside RetrievalEvidence are not wrapped."""
+    invalid_passage_data = valid_passage_mapping(page_start=0)
+    invalid_evidence_data = valid_evidence_mapping(passage=invalid_passage_data)
+
+    # Should raise PassageValidationError directly (not wrapped into EvidenceValidationError)
+    with pytest.raises(PassageValidationError):
+        RetrievalEvidence.from_mapping(invalid_evidence_data)
+
+
+def test_domain_error_catches_nested_passage_validation_error() -> None:
+    """Verify that DomainError catches PassageValidationError during RetrievalEvidence parsing."""
+    invalid_passage_data = valid_passage_mapping(page_start=0)
+    invalid_evidence_data = valid_evidence_mapping(passage=invalid_passage_data)
+
+    with pytest.raises(DomainError) as exc_info:
+        RetrievalEvidence.from_mapping(invalid_evidence_data)
+
+    assert isinstance(exc_info.value, PassageValidationError)
 
 
 @pytest.mark.parametrize(

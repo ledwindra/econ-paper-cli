@@ -4,6 +4,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
+from urllib.parse import urlparse
 
 from econ_paper_cli.domain.errors import PaperValidationError
 
@@ -44,7 +45,7 @@ class Paper:
         _validate_optional_text("abstract", self.abstract)
         _validate_nonempty_text("source_name", self.source_name)
         _validate_nonempty_text("source_identifier", self.source_identifier)
-        _validate_optional_text("source_url", self.source_url)
+        _validate_source_url(self.source_url)
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, object]) -> "Paper":
@@ -117,6 +118,22 @@ def _validate_optional_text(field: str, value: object) -> None:
     if value is not None:
         if not isinstance(value, str) or not value.strip():
             raise PaperValidationError(f"{field} must be a non-empty string or None.")
+
+
+def _validate_source_url(value: object) -> None:
+    if value is not None:
+        if not isinstance(value, str) or not value.strip():
+            raise PaperValidationError("source_url must be a non-empty string or None.")
+        try:
+            parsed = urlparse(value.strip())
+        except Exception as error:
+            raise PaperValidationError(
+                f"source_url must be a valid absolute HTTP or HTTPS URL: {error}."
+            ) from error
+        if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
+            raise PaperValidationError(
+                "source_url must be a valid absolute HTTP or HTTPS URL."
+            )
 
 
 def _validate_authors(value: object) -> None:
