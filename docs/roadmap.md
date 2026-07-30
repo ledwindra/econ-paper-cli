@@ -39,10 +39,11 @@ Completed:
 - In-memory corpus statistics for BM25 query-time retrieval
 - Normalized lexical duplicate suppression
 - Adapter contract and unit tests
+- Representative synthetic economics retrieval benchmark
+- Binary passage-level relevance judgments and deterministic retrieval quality metrics
+- Corpus-fingerprint-pinned CI regression gates for the untuned BM25 baseline
 
 Not yet implemented:
-- Representative retrieval evaluation
-- Retrieval quality metrics and relevance judgments
 - Adapter comparison or final adapter selection
 - Persisted retrieval index or index artifact
 - CLI integration

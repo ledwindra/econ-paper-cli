@@ -1,0 +1,272 @@
+{
+  "benchmark_id": "synthetic-economics-retrieval-v1",
+  "corpus_fingerprint": "sha256:3af9525b39cbd83576b1563f8ae0cc399ce886d57172485defe0a83ba5cefb48",
+  "corpus_id": "synthetic-economics-v1",
+  "k_values": [
+    1,
+    3,
+    5
+  ],
+  "license": "CC0-1.0",
+  "queries": [
+    {
+      "query": "How does choosing local leaders at the ballot box affect investment in transportation infrastructure?",
+      "query_id": "elections-topic",
+      "question_type": "topic",
+      "rationale": "The introduction states the paper's question about elected local leadership and road allocation.",
+      "relevant_passage_ids": [
+        "synthetic-elections-roads-2024:sec1:p3:pos0"
+      ]
+    },
+    {
+      "query": "What identification strategy is used to estimate the effect of elected mayors on municipal capital spending?",
+      "query_id": "elections-method",
+      "question_type": "method",
+      "rationale": "The empirical-strategy passage describes the staggered reform and fixed-effects specification.",
+      "relevant_passage_ids": [
+        "synthetic-elections-roads-2024:sec3:p11:pos1"
+      ]
+    },
+    {
+      "query": "How much does electoral accountability change road investment?",
+      "query_id": "elections-finding",
+      "question_type": "finding",
+      "rationale": "The results passage reports the estimated percentage change in road spending.",
+      "relevant_passage_ids": [
+        "synthetic-elections-roads-2024:sec5:p24:pos2"
+      ]
+    },
+    {
+      "query": "What evidence is missing about whether politically timed road projects remain in good condition?",
+      "query_id": "elections-limitation",
+      "question_type": "limitation",
+      "rationale": "The results passage states the inability to measure long-run post-paving maintenance quality.",
+      "relevant_passage_ids": [
+        "synthetic-elections-roads-2024:sec5:p24:pos2"
+      ]
+    },
+    {
+      "query": "Do new rapid bus connections get capitalized into nearby commercial property prices?",
+      "query_id": "brt-topic",
+      "question_type": "topic",
+      "rationale": "The introduction frames the study around transit accessibility and commercial land values.",
+      "relevant_passage_ids": [
+        "synthetic-brt-landvalues-2023:sec1:p102:pos0"
+      ]
+    },
+    {
+      "query": "How are parcels near and just outside transit station catchment areas compared to identify land-value effects?",
+      "query_id": "brt-method",
+      "question_type": "method",
+      "rationale": "The spatial-design passage explains the boundary comparison around station catchments.",
+      "relevant_passage_ids": [
+        "synthetic-brt-landvalues-2023:sec3:p115:pos1"
+      ]
+    },
+    {
+      "query": "What is the estimated property-value premium close to a rapid transit stop?",
+      "query_id": "brt-finding",
+      "question_type": "finding",
+      "rationale": "The findings passage reports the estimated land-value appreciation near stations.",
+      "relevant_passage_ids": [
+        "synthetic-brt-landvalues-2023:sec4:p128:pos2"
+      ]
+    },
+    {
+      "query": "Which types of commercial zoning capture most of the gains from improved transit access?",
+      "query_id": "brt-heterogeneity",
+      "question_type": "heterogeneity",
+      "rationale": "The findings passage identifies the zoning categories receiving most value gains.",
+      "relevant_passage_ids": [
+        "synthetic-brt-landvalues-2023:sec4:p128:pos2"
+      ]
+    },
+    {
+      "query": "How does unreliable electricity affect productivity and backup generation decisions in factories?",
+      "query_id": "power-topic",
+      "question_type": "topic",
+      "rationale": "The overview frames the productivity and generator-adoption research questions.",
+      "relevant_passage_ids": [
+        "synthetic-power-productivity-2022:sec1:p45:pos0"
+      ]
+    },
+    {
+      "query": "What instrument addresses endogenous exposure to electricity interruptions?",
+      "query_id": "power-method",
+      "question_type": "method",
+      "rationale": "The identification passage specifies the instrument for outage exposure.",
+      "relevant_passage_ids": [
+        "synthetic-power-productivity-2022:sec3:p52:pos1"
+      ]
+    },
+    {
+      "query": "What is the productivity effect of a ten percent rise in power-cut duration?",
+      "query_id": "power-finding",
+      "question_type": "finding",
+      "rationale": "The results passage reports the effect size for increased outage duration.",
+      "relevant_passage_ids": [
+        "synthetic-power-productivity-2022:sec5:p68:pos2"
+      ]
+    },
+    {
+      "query": "Why are smaller firms harmed more by electricity interruptions than large plants?",
+      "query_id": "power-heterogeneity",
+      "question_type": "heterogeneity",
+      "rationale": "The results passage contrasts generator mitigation and credit constraints by firm size.",
+      "relevant_passage_ids": [
+        "synthetic-power-productivity-2022:sec5:p68:pos2"
+      ]
+    },
+    {
+      "query": "Can coastal protection change where households choose to live and increase exposure to disasters?",
+      "query_id": "flood-topic",
+      "question_type": "topic",
+      "rationale": "The introduction states the migration and moral-hazard research question.",
+      "relevant_passage_ids": [
+        "synthetic-flood-migration-2024:sec1:p2:pos0"
+      ]
+    },
+    {
+      "query": "What event-study comparison identifies the migration response to new coastal defenses?",
+      "query_id": "flood-method",
+      "question_type": "method",
+      "rationale": "The econometric passage defines the protected-versus-unprotected block comparison.",
+      "relevant_passage_ids": [
+        "synthetic-flood-migration-2024:sec3:p9:pos1"
+      ]
+    },
+    {
+      "query": "How does completing a seawall affect household departures from flood-prone neighborhoods?",
+      "query_id": "flood-finding",
+      "question_type": "finding",
+      "rationale": "The effects passage reports the change in net out-migration after completion.",
+      "relevant_passage_ids": [
+        "synthetic-flood-migration-2024:sec4:p18:pos2"
+      ]
+    },
+    {
+      "query": "What compositional change follows coastal protection, and why might it increase climate risk?",
+      "query_id": "flood-mechanism",
+      "question_type": "mechanism",
+      "rationale": "The discussion passage links higher-income in-migration to increased exposed assets.",
+      "relevant_passage_ids": [
+        "synthetic-flood-migration-2024:sec4:p18:pos2"
+      ]
+    },
+    {
+      "query": "Do affordable-unit mandates reduce residential construction or raise market rents?",
+      "query_id": "housing-topic",
+      "question_type": "topic",
+      "rationale": "The introduction frames the housing-supply and rent research question.",
+      "relevant_passage_ids": [
+        "synthetic-housing-regulation-2023:sec1:p301:pos0"
+      ]
+    },
+    {
+      "query": "How is a no-policy counterfactual built for cities adopting below-market unit requirements?",
+      "query_id": "housing-method",
+      "question_type": "method",
+      "rationale": "The methodology passage explains construction of the synthetic control comparison.",
+      "relevant_passage_ids": [
+        "synthetic-housing-regulation-2023:sec2:p308:pos1"
+      ]
+    },
+    {
+      "query": "What happens to apartment permits after inclusionary requirements are imposed?",
+      "query_id": "housing-finding",
+      "question_type": "finding",
+      "rationale": "The results passage reports the estimated reduction in multi-family permits.",
+      "relevant_passage_ids": [
+        "synthetic-housing-regulation-2023:sec4:p320:pos2"
+      ]
+    },
+    {
+      "query": "Which unobserved landlord incentives make the estimated rental response incomplete?",
+      "query_id": "housing-limitation",
+      "question_type": "limitation",
+      "rationale": "The results passage notes that landlord shadow concessions are unobserved.",
+      "relevant_passage_ids": [
+        "synthetic-housing-regulation-2023:sec4:p320:pos2"
+      ]
+    },
+    {
+      "query": "What question does the elected-mayor study ask, how does it identify causality, and what does it conclude about infrastructure spending?",
+      "query_id": "elections-synthesis",
+      "question_type": "synthesis",
+      "rationale": "Answering the composite question requires the introduction, empirical strategy, and results passages.",
+      "relevant_passage_ids": [
+        "synthetic-elections-roads-2024:sec1:p3:pos0",
+        "synthetic-elections-roads-2024:sec3:p11:pos1",
+        "synthetic-elections-roads-2024:sec5:p24:pos2"
+      ]
+    },
+    {
+      "query": "How does the rapid-bus study estimate effects on commercial property markets, and what does it find near stations?",
+      "query_id": "brt-synthesis",
+      "question_type": "synthesis",
+      "rationale": "Answering the composite question requires the topic, spatial design, and findings passages.",
+      "relevant_passage_ids": [
+        "synthetic-brt-landvalues-2023:sec1:p102:pos0",
+        "synthetic-brt-landvalues-2023:sec3:p115:pos1",
+        "synthetic-brt-landvalues-2023:sec4:p128:pos2"
+      ]
+    },
+    {
+      "query": "How does the factory electricity study identify the productivity cost of unreliable power, and which firms bear the largest losses?",
+      "query_id": "power-synthesis",
+      "question_type": "synthesis",
+      "rationale": "Answering the composite question requires the overview, identification, and results passages.",
+      "relevant_passage_ids": [
+        "synthetic-power-productivity-2022:sec1:p45:pos0",
+        "synthetic-power-productivity-2022:sec3:p52:pos1",
+        "synthetic-power-productivity-2022:sec5:p68:pos2"
+      ]
+    },
+    {
+      "query": "How does the coastal-defense study estimate migration effects, and what demographic and risk changes follow construction?",
+      "query_id": "flood-synthesis",
+      "question_type": "synthesis",
+      "rationale": "Answering the composite question requires the introduction, event-study design, and effects passages.",
+      "relevant_passage_ids": [
+        "synthetic-flood-migration-2024:sec1:p2:pos0",
+        "synthetic-flood-migration-2024:sec3:p9:pos1",
+        "synthetic-flood-migration-2024:sec4:p18:pos2"
+      ]
+    },
+    {
+      "query": "How does the affordable-housing mandate study construct its comparison, and what happens to construction and rents?",
+      "query_id": "housing-synthesis",
+      "question_type": "synthesis",
+      "rationale": "Answering the composite question requires the introduction, synthetic-control method, and results passages.",
+      "relevant_passage_ids": [
+        "synthetic-housing-regulation-2023:sec1:p301:pos0",
+        "synthetic-housing-regulation-2023:sec2:p308:pos1",
+        "synthetic-housing-regulation-2023:sec4:p320:pos2"
+      ]
+    }
+  ],
+  "schema_version": 1,
+  "source": "Maintainer-authored synthetic relevance judgments for synthetic-economics-v1",
+  "thresholds": [
+    {
+      "k": 1,
+      "metric": "hit_rate",
+      "minimum": 0.6
+    },
+    {
+      "k": 3,
+      "metric": "hit_rate",
+      "minimum": 0.9
+    },
+    {
+      "k": 5,
+      "metric": "recall",
+      "minimum": 0.9
+    },
+    {
+      "k": 5,
+      "metric": "mrr",
+      "minimum": 0.75
+    }
+  ]
+}

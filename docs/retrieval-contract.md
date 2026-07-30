@@ -70,6 +70,24 @@ For the same:
 
 a conforming `Retriever` must return identical result identities, ordering, ranks, scores, and `retrieval_method` values.
 
+## Backend-independent evaluation
+
+`econ_paper_cli.evaluation.retrieval` evaluates any conforming `Retriever`
+against a validated `RetrievalBenchmark`. The evaluator uses only
+`RetrievalRequest`, returned `RetrievalEvidence`, `validate_retrieval_results`,
+and stable passage identities; it does not depend on BM25 scores or internals.
+
+The first frozen benchmark contains 25 synthetic economics questions with
+binary relevance judgments and calculates Hit Rate, macro Recall, and MRR at
+`k=1,3,5`. Before evaluation, it verifies the exact canonical passage identity
+and text fingerprint of the corpus. Full fixture provenance, formulas,
+thresholds, baseline results, and limitations are documented in
+[`docs/retrieval-evaluation.md`](retrieval-evaluation.md).
+
+Passing this benchmark is a regression signal for its small synthetic corpus.
+It is not evidence that an adapter is optimal, and Issue 8 does not select a
+default retrieval backend.
+
 ## Exception Hierarchy
 
 All protocol validation errors inherit from `RetrievalContractError`, preserving compatibility with standard Python `ValueError`:
