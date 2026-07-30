@@ -7,6 +7,8 @@ from enum import Enum
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TypeVar, cast
 
+from econ_paper_cli.domain.errors import DomainError
+
 _ARTIFACT_ID_PATTERN = re.compile(r"[a-z0-9]+(?:[._-][a-z0-9]+)*")
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 _WINDOWS_FORBIDDEN_CHARACTERS = frozenset('<>:"|?*')
@@ -52,7 +54,7 @@ class RedistributionStatus(str, Enum):
 _EnumT = TypeVar("_EnumT", ArtifactKind, RedistributionStatus)
 
 
-class ArtifactManifestError(ValueError):
+class ArtifactManifestError(DomainError):
     """Raised when artifact manifest data violates the schema."""
 
 

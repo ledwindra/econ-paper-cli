@@ -45,7 +45,9 @@ class Paper:
         _validate_optional_text("abstract", self.abstract)
         _validate_nonempty_text("source_name", self.source_name)
         _validate_nonempty_text("source_identifier", self.source_identifier)
-        _validate_source_url(self.source_url)
+        normalized_url = _validate_source_url(self.source_url)
+        if normalized_url != self.source_url:
+            object.__setattr__(self, "source_url", normalized_url)
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, object]) -> "Paper":
@@ -120,20 +122,40 @@ def _validate_optional_text(field: str, value: object) -> None:
             raise PaperValidationError(f"{field} must be a non-empty string or None.")
 
 
-def _validate_source_url(value: object) -> None:
-    if value is not None:
-        if not isinstance(value, str) or not value.strip():
-            raise PaperValidationError("source_url must be a non-empty string or None.")
-        try:
-            parsed = urlparse(value.strip())
-        except Exception as error:
-            raise PaperValidationError(
-                f"source_url must be a valid absolute HTTP or HTTPS URL: {error}."
-            ) from error
-        if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
-            raise PaperValidationError(
-                "source_url must be a valid absolute HTTP or HTTPS URL."
-            )
+def _validate_source_url(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise PaperValidationError("source_url must be a string or None.")
+
+    stripped = value.strip()
+    if not stripped:
+        raise PaperValidationError("source_url must be a non-empty string or None.")
+
+    if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in stripped):
+        raise PaperValidationError(
+            "source_url cannot contain embedded whitespace or control characters."
+        )
+
+    try:
+        parsed = urlparse(stripped)
+        _ = parsed.port
+    except ValueError as error:
+        raise PaperValidationError(
+            f"source_url contains a malformed port: {error}."
+        ) from error
+    except Exception as error:
+        raise PaperValidationError(
+            f"source_url must be a valid absolute HTTP or HTTPS URL: {error}."
+        ) from error
+
+    if parsed.scheme.lower() not in ("http", "https"):
+        raise PaperValidationError("source_url scheme must be 'http' or 'https'.")
+
+    if not parsed.hostname:
+        raise PaperValidationError("source_url must contain a valid hostname.")
+
+    return stripped
 
 
 def _validate_authors(value: object) -> None:

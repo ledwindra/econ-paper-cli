@@ -115,12 +115,23 @@ def test_paper_optional_text_fields_reject_empty_sentinels(
         "http://example.org/paper",
         "https://doi.org/10.1162/003355303322552801",
         "HTTP://EXAMPLE.COM/DOC",
+        "http://localhost:8080/path?query=1#hash",
     ],
 )
 def test_paper_source_url_accepts_valid_http_urls(valid_url: str) -> None:
     """Test Option B: source_url accepts valid absolute HTTP(S) URLs."""
     paper = Paper.from_mapping(valid_paper_mapping(source_url=valid_url))
     assert paper.source_url == valid_url
+
+
+def test_paper_source_url_normalizes_leading_trailing_whitespace() -> None:
+    """Test Option B: source_url normalizes leading and trailing whitespace consistently."""
+    paper = Paper.from_mapping(
+        valid_paper_mapping(
+            source_url="   https://doi.org/10.1162/003355303322552801   "
+        )
+    )
+    assert paper.source_url == "https://doi.org/10.1162/003355303322552801"
 
 
 @pytest.mark.parametrize(
@@ -131,12 +142,17 @@ def test_paper_source_url_accepts_valid_http_urls(valid_url: str) -> None:
         "not-a-url",
         "http://",
         "https://",
+        "http://:8080",
+        "http://example.org:abc/paper",
+        "http://example.org/path with space",
+        "http://example.org/path\nline",
+        "http://example.org/path\x07bell",
         "mailto:test@example.org",
         "/relative/path/url",
     ],
 )
 def test_paper_source_url_rejects_invalid_urls(invalid_url: str) -> None:
-    """Test Option B: source_url rejects non-HTTP(S) or invalid URLs."""
+    """Test Option B: source_url rejects non-HTTP(S), hostname-less, malformed-port, or whitespace URLs."""
     with pytest.raises(PaperValidationError, match="source_url"):
         Paper.from_mapping(valid_paper_mapping(source_url=invalid_url))
 
