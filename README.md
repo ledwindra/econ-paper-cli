@@ -184,7 +184,7 @@ pure domain contract for validating artifact metadata, filesystem adapters
 for loading local manifests and verifying file checksums, pure domain
 contracts for papers, passages, retrieval evidence, citations, and corpora,
 and a synthetic CC0 fixture corpus with a local corpus loader adapter.
-Downloads, corpus ingestion, retrieval, local inference, and conversational
+PDF/document ingestion, passage segmentation, retrieval, local inference, and conversational
 execution are not implemented.
 
 The immediate priorities are:

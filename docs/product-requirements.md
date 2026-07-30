@@ -42,9 +42,11 @@ status must never be interpreted as authorization to download or redistribute.
 
 ## Privacy and offline operation
 
-- Retrieval, generation, indexing, and corpus inspection run locally.
+- Retrieval, generation, indexing, and corpus inspection must run locally in the default workflow.
 - No user queries, documents, or search history may be uploaded to external services by default.
-- Internet connectivity is required only during initial setup or manual artifact updates.
+- Default operation must remain offline after the required artifacts are installed.
+- Network access may occur only through explicit setup, manual update, or other separately approved opt-in adapters.
+- Network access must not be triggered implicitly during retrieval, generation, corpus inspection, or ordinary CLI use.
 
 ## Evidence and grounding
 
@@ -54,7 +56,7 @@ status must never be interpreted as authorization to download or redistribute.
 
 ## Deferred capabilities
 
-Model, corpus, index, artifact, and citation format decisions require explicit design and maintainer approval before implementation. The following remain out of scope for default execution:
+New or changed model, corpus, index, artifact, and citation-format decisions require explicit design and maintainer approval before implementation. The following remain out of scope for default execution:
 
 - Paid cloud inference APIs (e.g. OpenAI, Anthropic)
 - Mandatory Docker or GPU requirements
