@@ -53,6 +53,32 @@ class ManifestValidationError(ManifestLoadError):
         self.error = error
 
 
+class FilesystemPermissionError(FilesystemAdapterError):
+    """Base exception for filesystem permission errors."""
+
+    def __init__(self, path: Path, error: PermissionError) -> None:
+        super().__init__(f"Permission denied accessing '{path}': {error}.")
+        self.path = path
+        self.error = error
+
+
+class FilesystemReadError(FilesystemAdapterError):
+    """Base exception for filesystem read OS errors."""
+
+    def __init__(self, path: Path, error: OSError) -> None:
+        super().__init__(f"Read error accessing '{path}': {error}.")
+        self.path = path
+        self.error = error
+
+
+class ManifestPermissionError(ManifestLoadError, FilesystemPermissionError):
+    """Raised when reading a manifest fails due to permission denied."""
+
+
+class ManifestReadError(ManifestLoadError, FilesystemReadError):
+    """Raised when reading a manifest fails due to an OS error."""
+
+
 class VerificationError(FilesystemAdapterError):
     """Base exception for artifact file verification errors."""
 
@@ -99,22 +125,23 @@ class ChecksumMismatchError(VerificationError):
         self.actual = actual
 
 
-class FilesystemPermissionError(FilesystemAdapterError):
-    """Raised when a filesystem operation fails due to insufficient permissions."""
+class InvalidChunkSizeError(VerificationError, ValueError):
+    """Raised when chunk_size is not a positive integer."""
 
-    def __init__(self, path: Path, error: PermissionError) -> None:
-        super().__init__(f"Permission denied accessing '{path}': {error}.")
-        self.path = path
-        self.error = error
+    def __init__(self, chunk_size: object) -> None:
+        super().__init__(
+            f"chunk_size must be a positive integer; got {chunk_size!r} "
+            f"({type(chunk_size).__name__})."
+        )
+        self.chunk_size = chunk_size
 
 
-class FilesystemReadError(FilesystemAdapterError):
-    """Raised when a filesystem read operation fails with an OS error."""
+class VerificationPermissionError(VerificationError, FilesystemPermissionError):
+    """Raised when verifying an artifact fails due to permission denied."""
 
-    def __init__(self, path: Path, error: OSError) -> None:
-        super().__init__(f"Read error accessing '{path}': {error}.")
-        self.path = path
-        self.error = error
+
+class VerificationReadError(VerificationError, FilesystemReadError):
+    """Raised when verifying an artifact fails due to an OS error."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +152,27 @@ class VerificationResult:
     file_path: Path
     size_bytes: int
     sha256: str
+
+
+def _validate_chunk_size(chunk_size: object) -> int:
+    """Validate that chunk_size is a positive integer.
+
+    Args:
+        chunk_size: The value to validate.
+
+    Returns:
+        The validated chunk_size as an integer.
+
+    Raises:
+        InvalidChunkSizeError: If chunk_size is a bool, <= 0, or not an integer.
+    """
+    if (
+        isinstance(chunk_size, bool)
+        or not isinstance(chunk_size, int)
+        or chunk_size <= 0
+    ):
+        raise InvalidChunkSizeError(chunk_size)
+    return chunk_size
 
 
 def load_manifest_from_file(path: Path) -> ArtifactManifest:
@@ -141,8 +189,8 @@ def load_manifest_from_file(path: Path) -> ArtifactManifest:
         ManifestEncodingError: If the file is not valid UTF-8.
         ManifestInvalidJsonError: If JSON parsing fails or the root is not an object.
         ManifestValidationError: If domain validation fails.
-        FilesystemPermissionError: If read permission is denied.
-        FilesystemReadError: If other OS errors occur during reading.
+        ManifestPermissionError: If read permission is denied.
+        ManifestReadError: If other OS errors occur during reading.
     """
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -152,9 +200,9 @@ def load_manifest_from_file(path: Path) -> ArtifactManifest:
     except UnicodeDecodeError as error:
         raise ManifestEncodingError(path, error) from error
     except PermissionError as error:
-        raise FilesystemPermissionError(path, error) from error
+        raise ManifestPermissionError(path, error) from error
     except OSError as error:
-        raise FilesystemReadError(path, error) from error
+        raise ManifestReadError(path, error) from error
 
     try:
         data = json.loads(content)
@@ -184,30 +232,34 @@ def verify_local_file(
         path: Path to the local artifact file.
         expected_size_bytes: The expected size of the file in bytes.
         expected_sha256: The expected SHA-256 hex digest of the file.
-        chunk_size: Chunk size in bytes for reading the file.
+        chunk_size: Chunk size in bytes for reading the file. Must be a positive int.
 
     Returns:
         A tuple of (actual_size_bytes, actual_sha256_hex).
 
     Raises:
+        InvalidChunkSizeError: If chunk_size is not a positive integer.
         ArtifactFileNotFoundError: If the file does not exist.
         ArtifactNotARegularFileError: If the path is not a regular file.
         SizeMismatchError: If the actual file size differs from expected size.
         ChecksumMismatchError: If the actual SHA-256 digest differs from expected.
-        FilesystemPermissionError: If read permission is denied.
-        FilesystemReadError: If other OS errors occur during verification.
+        VerificationPermissionError: If read permission is denied.
+        VerificationReadError: If other OS errors occur during verification.
     """
+    validated_chunk_size = _validate_chunk_size(chunk_size)
+
     try:
-        # Check existence and type using lstat/stat to handle permissions safely
         if not path.exists():
             raise ArtifactFileNotFoundError(path)
         if not path.is_file():
             raise ArtifactNotARegularFileError(path)
         actual_size = path.stat().st_size
+    except (ArtifactFileNotFoundError, ArtifactNotARegularFileError):
+        raise
     except PermissionError as error:
-        raise FilesystemPermissionError(path, error) from error
+        raise VerificationPermissionError(path, error) from error
     except OSError as error:
-        raise FilesystemReadError(path, error) from error
+        raise VerificationReadError(path, error) from error
 
     if actual_size != expected_size_bytes:
         raise SizeMismatchError(path, expected_size_bytes, actual_size)
@@ -216,14 +268,14 @@ def verify_local_file(
     try:
         with open(path, "rb") as f:
             while True:
-                chunk = f.read(chunk_size)
+                chunk = f.read(validated_chunk_size)
                 if not chunk:
                     break
                 hasher.update(chunk)
     except PermissionError as error:
-        raise FilesystemPermissionError(path, error) from error
+        raise VerificationPermissionError(path, error) from error
     except OSError as error:
-        raise FilesystemReadError(path, error) from error
+        raise VerificationReadError(path, error) from error
 
     actual_sha256 = hasher.hexdigest()
     if actual_sha256 != expected_sha256:
@@ -242,26 +294,28 @@ def verify_artifact(
     Args:
         manifest: The ArtifactManifest domain object.
         base_dir: Base directory to resolve the manifest's local_path against.
-        chunk_size: Chunk size in bytes for reading the file.
+        chunk_size: Chunk size in bytes for reading the file. Must be a positive int.
 
     Returns:
         A VerificationResult containing successful verification details.
 
     Raises:
+        InvalidChunkSizeError: If chunk_size is not a positive integer.
         ArtifactFileNotFoundError: If the file does not exist.
         ArtifactNotARegularFileError: If the path is not a regular file.
         SizeMismatchError: If the actual file size differs from expected size.
         ChecksumMismatchError: If the actual SHA-256 digest differs from expected.
-        FilesystemPermissionError: If read permission is denied.
-        FilesystemReadError: If other OS errors occur during verification.
+        VerificationPermissionError: If read permission is denied.
+        VerificationReadError: If other OS errors occur during verification.
     """
+    validated_chunk_size = _validate_chunk_size(chunk_size)
     artifact_path = base_dir / manifest.local_path
 
     actual_size, actual_sha256 = verify_local_file(
         path=artifact_path,
         expected_size_bytes=manifest.expected_size_bytes,
         expected_sha256=manifest.sha256,
-        chunk_size=chunk_size,
+        chunk_size=validated_chunk_size,
     )
 
     return VerificationResult(

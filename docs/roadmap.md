@@ -14,7 +14,7 @@ features are available.
 
 - Define manifests, checksum syntax, local paths, and actionable validation
   errors (schema-version-1 domain contract implemented)
-- Add filesystem loading and checksum calculation behind adapters
+- Add filesystem loading, size checking, and checksum calculation behind adapters (implemented)
 - Keep downloads absent until sources, licenses, sizes, and update policies are
   approved
 
