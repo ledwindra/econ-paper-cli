@@ -29,7 +29,7 @@ features are available.
 ## 4. Evidence and retrieval contracts
 
 Completed:
-- `Paper`, `Passage`, `RetrievalEvidence`, `Citation`, and `Corpus` domain contracts
+- `Paper`, `Passage`, `RetrievalEvidence`, and `Citation` domain contracts
 - Synthetic CC0 corpus suitable for deterministic retrieval evaluation
 
 Not yet implemented:
