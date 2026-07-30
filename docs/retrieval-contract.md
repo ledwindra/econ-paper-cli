@@ -27,9 +27,9 @@ Retrievers are configured with their target corpus or index during construction.
 An immutable dataclass (`econ_paper_cli.protocols.retrieval.RetrievalRequest`) representing a search query:
 
 - `query` (`str`): Non-empty search string. Leading and trailing whitespace are stripped consistently upon construction. Internal whitespace, newlines, and punctuation are preserved.
-- `top_k` (`int`): Maximum number of evidence passages to return (default: `10`). Must be an integer `>= 1`. Boolean values, floats, and strings are rejected.
+- `top_k` (`int`): Maximum number of evidence passages to return. Direct Python construction `RetrievalRequest(query="...")` defaults `top_k` to `10`. Must be an integer `>= 1`. Boolean values, floats, and strings are rejected.
 
-Supports deterministic mapping conversion via `from_mapping` and `to_mapping`.
+Mapping conversion via `RetrievalRequest.from_mapping` requires **both** `query` and `top_k` as exact required fields. Mappings omitting `top_k` (or `query`) or providing unknown fields are rejected with `RetrievalRequestValidationError`. Canonical serialization (`to_mapping()`) always emits both `query` and `top_k`.
 
 ### 2. `Retriever` Protocol
 
@@ -43,7 +43,7 @@ class Retriever(Protocol):
     ) -> tuple[RetrievalEvidence, ...]: ...
 ```
 
-> **Note on `@runtime_checkable`:** `@runtime_checkable` performs structural attribute checks (verifying that an object exposes a callable `retrieve` attribute). It does not perform full runtime type or signature validation.
+> **Note on `@runtime_checkable`:** Runtime protocol checking verifies structural presence of the required `retrieve` attribute but does not validate the full method signature, argument types, return type, or retrieval semantics. Application correctness must not rely on `isinstance(obj, Retriever)`.
 
 ### 3. Result Validation (`validate_retrieval_results`)
 
