@@ -1,0 +1,211 @@
+{
+  "corpus_id": "synthetic-economics-v1",
+  "description": "CC0-1.0 synthetic economics literature fixture corpus for Econ Paper CLI.",
+  "papers": [
+    {
+      "abstract": "We examine the introduction of direct mayoral elections across 140 fictional municipalities in Valdonia between 2012 and 2020. Using a difference-in-differences design with municipal fixed effects, we find that direct electoral accountability increases local road construction spending by 18.4% relative to administrative appointment regimes. However, investment is heavily skewed toward visible voter-centric feeder roads prior to election cycles rather than long-term industrial trunk roads.",
+      "authors": [
+        "Elena Rostova",
+        "Marcus Vance"
+      ],
+      "paper_id": "synthetic-elections-roads-2024",
+      "source_identifier": "synthetic-fixture-paper-001",
+      "source_name": "Econ Paper CLI Synthetic Fixture Series",
+      "source_url": "https://example.invalid/synthetic-fixture-paper-001",
+      "title": "Direct Municipal Elections and Local Road Infrastructure: Evidence from Fictional District Reforms in Valdonia",
+      "year": 2024
+    },
+    {
+      "abstract": "We investigate how the deployment of a dedicated 28-kilometer Bus Rapid Transit (BRT) line in the fictional metropolitan region of Oakhaven reshaped urban land valuation. Utilizing synthetic parcel-level tax assessment records and boundary discontinuity estimation across 800 commercial plots, we estimate a 12.3% surge in land value within 400 meters of BRT stations. The price premium declines rapidly beyond 800 meters, driven by reduced commuter transit times and localized zoning density bonuses.",
+      "authors": [
+        "Julian Sterling",
+        "Amara Okafor",
+        "David K. Lindqvist"
+      ],
+      "paper_id": "synthetic-brt-landvalues-2023",
+      "source_identifier": "synthetic-fixture-paper-002",
+      "source_name": "Econ Paper CLI Synthetic Fixture Series",
+      "source_url": "https://example.invalid/synthetic-fixture-paper-002",
+      "title": "Transit Capital and Commercial Land Values: Evaluating the MetroLine Bus Rapid Transit Extension in Oakhaven",
+      "year": 2023
+    },
+    {
+      "abstract": "Unreliable electrical infrastructure poses a major hurdle to industrial growth in developing economies. We construct a synthetic panel dataset of 450 textile and metal fabrication firms in Solaria from 2015 to 2021 to measure the productivity costs of unannounced power outages. Instrumental variable estimates leveraging feeder-line lightning strikes reveal that a 10% increase in monthly outage hours reduces manufacturing value added by 4.1%. Small enterprises suffer disproportionately due to the high capital costs of self-generation equipment.",
+      "authors": [
+        "Siddharth Nair",
+        "Claire T. Dubois"
+      ],
+      "paper_id": "synthetic-power-productivity-2022",
+      "source_identifier": "synthetic-fixture-paper-003",
+      "source_name": "Econ Paper CLI Synthetic Fixture Series",
+      "source_url": "https://example.invalid/synthetic-fixture-paper-003",
+      "title": "Grid Outages, Diesel Generator Adoption, and Manufacturing Output: Synthetic Evidence from Solaria",
+      "year": 2022
+    },
+    {
+      "abstract": "Climate adaptation infrastructure can alter coastal demographic structure by reducing perceived flood risk. Examining the construction of five major concrete seawalls in New Haven Bay between 2010 and 2022, we analyze household migration patterns using synthetic municipal utility records. Event-study estimates demonstrate that seawall completion reduces net out-migration from 100-year floodplains by 22.5%, while attracting higher-income households. This moral hazard effect increases total assets exposed to extreme storm events.",
+      "authors": [
+        "Hannah M. Lindemann",
+        "Tariq Al-Mansoor",
+        "Sven Björnsson"
+      ],
+      "paper_id": "synthetic-flood-migration-2024",
+      "source_identifier": "synthetic-fixture-paper-004",
+      "source_name": "Econ Paper CLI Synthetic Fixture Series",
+      "source_url": "https://example.invalid/synthetic-fixture-paper-004",
+      "title": "Sea Walls and Population Dynamics: Coastal Seawall Construction and Household Resettlement in New Haven Bay",
+      "year": 2024
+    },
+    {
+      "abstract": "Municipal inclusionary housing mandates aim to expand affordable unit stock, but may act as a tax on residential construction. Using a synthetic control method across 60 municipalities in the fictional province of Westland, we evaluate mandatory inclusionary zoning laws introduced between 2014 and 2021. We find that inclusionary mandates led to a 14.6% reduction in total multi-family building permits issued over a five-year horizon. Consequently, market-rate rental prices in adopting cities rose by 5.2% faster than in synthetic control cities.",
+      "authors": [
+        "Carlos Mendoza-Ruiz",
+        "Beatrice Thorne"
+      ],
+      "paper_id": "synthetic-housing-regulation-2023",
+      "source_identifier": "synthetic-fixture-paper-005",
+      "source_name": "Econ Paper CLI Synthetic Fixture Series",
+      "source_url": "https://example.invalid/synthetic-fixture-paper-005",
+      "title": "Inclusionary Zoning Mandates, Housing Supply, and Rental Rate Dynamics: Synthetic Panel Evidence from Westland",
+      "year": 2023
+    }
+  ],
+  "passages": [
+    {
+      "ordinal_position": 0,
+      "page_end": 4,
+      "page_start": 3,
+      "paper_id": "synthetic-elections-roads-2024",
+      "passage_id": "synthetic-elections-roads-2024:sec1:p3:pos0",
+      "section_heading": "I. Introduction and Motivation",
+      "text": "Direct democratic elections in local municipal jurisdictions may enhance responsiveness to voter demands for basic infrastructure services. In developing regional economies, local road connectivity represents a highly visible public good. This paper examines whether transitioning from appointed district governors to direct mayoral voting shifts public expenditure allocations toward rural feeder road construction."
+    },
+    {
+      "ordinal_position": 1,
+      "page_end": 12,
+      "page_start": 11,
+      "paper_id": "synthetic-elections-roads-2024",
+      "passage_id": "synthetic-elections-roads-2024:sec3:p11:pos1",
+      "section_heading": "III. Empirical Strategy",
+      "text": "To estimate the causal impact of direct municipal voting on infrastructure allocations, we exploit the staggered rollout of Valdonia Law 404 across 140 fictional sub-districts from 2012 to 2020. We estimate a two-way fixed effects specification where the outcome is log public expenditure on paved asphalt roads per capita. The treatment indicator equals one in years following a district's first direct mayoral election. Standard errors are clustered at the municipal district level."
+    },
+    {
+      "ordinal_position": 2,
+      "page_end": 25,
+      "page_start": 24,
+      "paper_id": "synthetic-elections-roads-2024",
+      "passage_id": "synthetic-elections-roads-2024:sec5:p24:pos2",
+      "section_heading": "V. Results and Limitations",
+      "text": "Municipalities under direct electoral regimes increased per capita road construction spending by 18.4% (p < 0.01) relative to appointed regimes. However, investment cycles exhibit opportunistic timing: 62% of new asphalt paving contracts were executed in the six months immediately preceding municipal elections. A key limitation of our analysis is the inability to measure post-paving maintenance quality over multi-decade horizons."
+    },
+    {
+      "ordinal_position": 0,
+      "page_end": 103,
+      "page_start": 102,
+      "paper_id": "synthetic-brt-landvalues-2023",
+      "passage_id": "synthetic-brt-landvalues-2023:sec1:p102:pos0",
+      "section_heading": "1. Introduction",
+      "text": "Bus Rapid Transit (BRT) systems offer a cost-effective alternative to heavy rail for enhancing urban mobility in growing cities. This study evaluates the capitalization of transit accessibility into commercial land values following the opening of Oakhaven's 28-kilometer MetroLine BRT corridor. We analyze whether commercial properties experience localized price premiums due to reduced worker commute times."
+    },
+    {
+      "ordinal_position": 1,
+      "page_end": 116,
+      "page_start": 115,
+      "paper_id": "synthetic-brt-landvalues-2023",
+      "passage_id": "synthetic-brt-landvalues-2023:sec3:p115:pos1",
+      "section_heading": "3. Spatial Boundary Design",
+      "text": "Our econometric approach combines a spatial regression discontinuity design with panel fixed effects across 800 commercial land parcels assessed between 2017 and 2022. We compare parcels situated just inside the 400-meter station walking catchment boundary to adjacent plots located slightly beyond 400 meters. The estimating equation controls for baseline slope, distance to central business district, parcel area, and neighborhood fixed effects."
+    },
+    {
+      "ordinal_position": 2,
+      "page_end": 129,
+      "page_start": 128,
+      "paper_id": "synthetic-brt-landvalues-2023",
+      "passage_id": "synthetic-brt-landvalues-2023:sec4:p128:pos2",
+      "section_heading": "4. Empirical Findings and Limitations",
+      "text": "Commercial land parcels situated within 400 meters of a newly opened MetroLine BRT station experienced an average price appreciation of 12.3% (beta = 0.123, p < 0.01) relative to control plots located 1,200 to 1,600 meters away. Heterogeneity analysis reveals that commercial plots zoned for mixed-use retail and high-density office space captured 70% of the aggregate value gains. A major limitation of our spatial boundary design is the potential for localized business displacement along adjacent non-served transit corridors."
+    },
+    {
+      "ordinal_position": 0,
+      "page_end": 46,
+      "page_start": 45,
+      "paper_id": "synthetic-power-productivity-2022",
+      "passage_id": "synthetic-power-productivity-2022:sec1:p45:pos0",
+      "section_heading": "I. Overview",
+      "text": "Electricity outages force industrial firms to choose between halting production lines or investing in costly auxiliary diesel generators. This paper examines whether power grid unreliability degrades total factor productivity among manufacturing firms in Solaria. We test whether generator capital adoption mitigates output losses or instead misallocates financial capital away from core technology upgrades."
+    },
+    {
+      "ordinal_position": 1,
+      "page_end": 53,
+      "page_start": 52,
+      "paper_id": "synthetic-power-productivity-2022",
+      "passage_id": "synthetic-power-productivity-2022:sec3:p52:pos1",
+      "section_heading": "III. Identification Framework",
+      "text": "To address the endogeneity of grid reliability, we instrument for firm-level outage exposure using exogenous feeder-line lightning strike frequencies recorded by meteorological stations across Solaria's industrial zones. The first-stage F-statistic is 28.4. Our second-stage regression estimates log total factor productivity (TFP) as a function of instrumented outage hours, firm capital stock, workforce size, and industry-by-year fixed effects."
+    },
+    {
+      "ordinal_position": 2,
+      "page_end": 69,
+      "page_start": 68,
+      "paper_id": "synthetic-power-productivity-2022",
+      "passage_id": "synthetic-power-productivity-2022:sec5:p68:pos2",
+      "section_heading": "V. Estimation Results",
+      "text": "A 10% increase in monthly grid outage duration decreases firm total factor productivity by 4.1% (p < 0.01). While large plants mitigate 75% of output losses by operating high-capacity backup generators, small enterprises suffer severe productivity drops due to credit constraints preventing generator acquisition. A key data limitation is that we do not measure secondary environmental health costs from localized diesel exhaust emissions."
+    },
+    {
+      "ordinal_position": 0,
+      "page_end": 3,
+      "page_start": 2,
+      "paper_id": "synthetic-flood-migration-2024",
+      "passage_id": "synthetic-flood-migration-2024:sec1:p2:pos0",
+      "section_heading": "1. Introduction",
+      "text": "Coastal flood control infrastructure is frequently built to protect existing urban populations from rising sea levels and storm surges. However, public investment in protective seawalls may also induce unintended moral hazard by encouraging additional residential settlement in ecologically vulnerable coastal zones. This study investigates the impact of new seawall construction on household migration dynamics in New Haven Bay."
+    },
+    {
+      "ordinal_position": 1,
+      "page_end": 10,
+      "page_start": 9,
+      "paper_id": "synthetic-flood-migration-2024",
+      "passage_id": "synthetic-flood-migration-2024:sec3:p9:pos1",
+      "section_heading": "3. Data and Econometric Specification",
+      "text": "We employ an event-study regression specification comparing coastal census blocks that received completed seawall protection between 2010 and 2022 to contiguous unprotected coastal blocks. The dependent variable is the annual net household migration rate per 1,000 residents. All regressions include census-block fixed effects, year fixed effects, and time-varying controls for local property tax rates and municipal amenity expenditures."
+    },
+    {
+      "ordinal_position": 2,
+      "page_end": 19,
+      "page_start": 18,
+      "paper_id": "synthetic-flood-migration-2024",
+      "passage_id": "synthetic-flood-migration-2024:sec4:p18:pos2",
+      "section_heading": "4. Demographic Effects and Discussion",
+      "text": "Seawall completion leads to an immediate 22.5% decrease (p < 0.01) in net household out-migration from designated 100-year floodplains over a four-year post-completion period. Ingressing households exhibit 31% higher median household incomes than departing residents. These results indicate that structural flood protection induces coastal gentrification while inflating aggregate asset exposure to catastrophic sea surge events."
+    },
+    {
+      "ordinal_position": 0,
+      "page_end": 302,
+      "page_start": 301,
+      "paper_id": "synthetic-housing-regulation-2023",
+      "passage_id": "synthetic-housing-regulation-2023:sec1:p301:pos0",
+      "section_heading": "Section 1. Introduction",
+      "text": "Mandatory inclusionary zoning policies require residential developers to reserve a fixed percentage of new housing units at below-market rental rates. Proponents argue these mandates integrate communities without direct public subsidy, while critics contend they impose a regulatory tax on new construction. This paper evaluates the market-wide impact of 15% inclusionary zoning mandates on housing supply and market-rate rents in Westland."
+    },
+    {
+      "ordinal_position": 1,
+      "page_end": 309,
+      "page_start": 308,
+      "paper_id": "synthetic-housing-regulation-2023",
+      "passage_id": "synthetic-housing-regulation-2023:sec2:p308:pos1",
+      "section_heading": "Section 2. Synthetic Control Methodology",
+      "text": "We construct a synthetic control counterfactual for each of the 12 Westland municipalities that enacted mandatory inclusionary zoning between 2014 and 2021. The pool of donor municipalities consists of 48 non-adopting regional cities matching adopting jurisdictions on pre-policy building permit volumes, median rent growth, population density, and municipal income growth."
+    },
+    {
+      "ordinal_position": 2,
+      "page_end": 321,
+      "page_start": 320,
+      "paper_id": "synthetic-housing-regulation-2023",
+      "passage_id": "synthetic-housing-regulation-2023:sec4:p320:pos2",
+      "section_heading": "Section 4. Main Results and Conclusion",
+      "text": "Our synthetic control estimates indicate that mandatory inclusionary zoning reduced new multi-family housing unit permits by 14.6% (stat = -2.31, p = 0.02) over the five years following policy implementation. As a consequence of constricted market-rate housing supply, average market-rate rents in adopting Westland municipalities increased by 5.2% relative to the synthetic control counterfactual. A primary limitation is our inability to observe shadow concessions offered by landlords during initial lease-up phases."
+    }
+  ],
+  "schema_version": 1
+}
