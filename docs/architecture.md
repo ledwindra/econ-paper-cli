@@ -48,9 +48,16 @@ Issue 5 introduces the pure immutable `Corpus` domain object (`econ_paper_cli.do
 
 Issue 6 defines the backend-independent retrieval boundary in `econ_paper_cli.protocols.retrieval`. It introduces the immutable `RetrievalRequest` domain object, the replaceable `Retriever` protocol, and pure result contract validation via `validate_retrieval_results` (enforcing contiguous 1-based ranks, non-increasing score order, ascending `passage_id` tie-breaking, uniform non-empty `retrieval_method` labels, and exact duplicate passage rejection). Near-duplicate passage suppression is deferred to adapter evaluation. For full specification details, see [`docs/retrieval-contract.md`](retrieval-contract.md).
 
-Issue 7 implements the first concrete `Retriever` adapter: `econ_paper_cli.adapters.bm25.BM25Retriever`. It is a pure-Python, standard-library-only BM25 baseline constructed over an in-memory `Corpus`. It computes corpus-wide term statistics once during initialization and indexes `Passage.text` only. It employs the `bm25-v1` tokenizer (`char.isalnum()` character scan with NFKC normalization and casefolding), positive IDF, score-descending sorting with `passage_id` ascending tie-breaking, and normalized lexical duplicate suppression. Returned tuples pass `validate_retrieval_results` with `retrieval_method="bm25-v1"`. Query-time retrieval performs zero filesystem or network I/O. Persisted index artifacts, CLI integration, PDF parsing, Markdown conversion, and local model inference remain unimplemented. `BM25Retriever` has not yet undergone representative quality evaluation or been selected as the default retrieval backend.
+Issue 7 implements the first concrete `Retriever` adapter: `econ_paper_cli.adapters.bm25.BM25Retriever`. It is a pure-Python, standard-library-only BM25 baseline constructed over an in-memory `Corpus`. It computes corpus-wide term statistics once during initialization and indexes `Passage.text` only. It employs the `bm25-v1` tokenizer (`char.isalnum()` character scan with NFKC normalization and casefolding), positive IDF, score-descending sorting with `passage_id` ascending tie-breaking, and normalized lexical duplicate suppression. Returned tuples pass `validate_retrieval_results` with `retrieval_method="bm25-v1"`. Query-time retrieval performs zero filesystem or network I/O. Persisted index artifacts, CLI integration, PDF parsing, Markdown conversion, and local model inference remain unimplemented. `BM25Retriever` is not selected as the default retrieval backend.
+
+Issue 8 adds `econ_paper_cli.evaluation.retrieval`, a pure evaluation boundary
+over the existing `Retriever` protocol. A frozen CC0 benchmark supplies 25
+synthetic economics queries, binary passage-level relevance judgments, ranked
+metrics at `k=1,3,5`, and conservative CI regression gates. The benchmark is
+pinned to canonical retrieval-relevant corpus content with a SHA-256 fingerprint
+validated before retrieval. The untuned `BM25Retriever` is measured by this
+benchmark but is not selected as the permanent default or claimed to outperform
+another adapter. See [`docs/retrieval-evaluation.md`](retrieval-evaluation.md).
 
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.
-
-
