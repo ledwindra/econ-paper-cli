@@ -11,8 +11,10 @@ import pytest
 from econ_paper_cli.adapters import BM25Retriever, load_corpus_from_file
 from econ_paper_cli.evaluation import (
     RetrievalBenchmark,
+    corpus_retrieval_fingerprint,
     evaluate_retriever,
     find_threshold_failures,
+    stable_retrieval_result_digest,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -29,6 +31,12 @@ BENCHMARK_PATH = (
 APPROVED_QUERY_JUDGMENTS_SHA256 = (
     "1f7f4f9b7b51b9fdc26602c57096f9c05ce676925392aca726b3a6df5d549138"
 )
+APPROVED_CORPUS_FINGERPRINT = (
+    "sha256:3af9525b39cbd83576b1563f8ae0cc399ce886d57172485defe0a83ba5cefb48"
+)
+APPROVED_BM25_RESULT_DIGEST = (
+    "sha256:13766bd01249f0c595f8b39ad6617fa78eade2bbb1710042a8ba407cc236e0ee"
+)
 
 
 def load_benchmark() -> RetrievalBenchmark:
@@ -38,6 +46,7 @@ def load_benchmark() -> RetrievalBenchmark:
 
 def test_benchmark_fixture_contains_approved_design() -> None:
     benchmark = load_benchmark()
+    corpus = load_corpus_from_file(CORPUS_PATH)
     approved_projection = [
         {
             "query_id": case.query_id,
@@ -55,6 +64,8 @@ def test_benchmark_fixture_contains_approved_design() -> None:
     ).encode("utf-8")
 
     assert benchmark.corpus_id == "synthetic-economics-v1"
+    assert benchmark.corpus_fingerprint == APPROVED_CORPUS_FINGERPRINT
+    assert corpus_retrieval_fingerprint(corpus) == APPROVED_CORPUS_FINGERPRINT
     assert benchmark.k_values == (1, 3, 5)
     assert len(benchmark.queries) == 25
     assert hashlib.sha256(serialized_projection).hexdigest() == (
@@ -96,4 +107,5 @@ def test_untuned_bm25_meets_frozen_benchmark_regression_gates() -> None:
     assert first.metric("mrr", 1) == pytest.approx(0.68)
     assert first.metric("mrr", 3) == pytest.approx(0.8066666666666666)
     assert first.metric("mrr", 5) == pytest.approx(0.8066666666666666)
+    assert stable_retrieval_result_digest(first) == APPROVED_BM25_RESULT_DIGEST
     assert find_threshold_failures(first, benchmark.thresholds) == ()

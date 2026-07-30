@@ -42,9 +42,12 @@ Completed:
 - Representative synthetic economics retrieval benchmark
 - Binary passage-level relevance judgments and deterministic retrieval quality metrics
 - Corpus-fingerprint-pinned CI regression gates for the untuned BM25 baseline
+- Evidence-based selection of BM25 as the initial, replaceable retrieval backend
+- Backend-independent offline resource-observation helper and script
+- Stable cross-platform ranked-result digest excluding raw floating-point scores
 
 Not yet implemented:
-- Adapter comparison or final adapter selection
+- Additional retrieval-adapter implementation or broader comparison benchmark
 - Persisted retrieval index or index artifact
 - CLI integration
 

@@ -10,8 +10,11 @@ on the backend-independent `Retriever` protocol.
 The benchmark is not an estimate of real-world retrieval quality, does not show
 that BM25 is superior to another adapter, and does not select a permanent default
 retriever. The corpus contains only five synthetic papers and fifteen passages.
-Future adapters may be run against the same frozen benchmark before any separate
-adapter-selection decision.
+Future adapters may be run against the same frozen benchmark. Issue 9 separately
+selects BM25 as the initial, replaceable backend based on both this frozen
+quality evidence and its operational simplicity; it does not claim BM25 is
+permanently optimal. See
+[`docs/retrieval-selection.md`](retrieval-selection.md).
 
 ## Fixture and relevance judgments
 
@@ -103,6 +106,12 @@ for elections and BRT each retrieve two of three relevant passages; the missing
 passages are respectively the elections introduction and BRT findings passage.
 These misses are retained as benchmark headroom and must not be removed by
 rewriting queries or tuning BM25 within Issue 8.
+
+Issue 9 adds a cross-platform ranked-result digest over query IDs, passage IDs,
+ranks, and `retrieval_method`. It excludes raw floating-point scores while
+scores remain finite, validated, and locally repeatable. The approved BM25
+digest and the separate non-gating resource procedure are documented in
+[`docs/retrieval-selection.md`](retrieval-selection.md).
 
 ## Execution and effects
 
