@@ -9,10 +9,19 @@ from econ_paper_cli.domain import (
     ArtifactKind,
     ArtifactManifest,
     ArtifactManifestError,
+    DomainError,
     RedistributionStatus,
 )
 
 SHA256 = "0" * 64
+
+
+def test_artifact_manifest_error_inherits_from_domain_error() -> None:
+    """Verify that ArtifactManifestError inherits from DomainError."""
+    assert issubclass(ArtifactManifestError, DomainError)
+    err = ArtifactManifestError("schema violation")
+    assert isinstance(err, DomainError)
+    assert isinstance(err, ValueError)
 
 
 def valid_mapping(**overrides: object) -> dict[str, object]:
