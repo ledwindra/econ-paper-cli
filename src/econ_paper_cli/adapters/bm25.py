@@ -166,12 +166,12 @@ class BM25Retriever:
                     denom = tf + self._k1 * (
                         1.0 - self._b + self._b * (entry.doc_len / self._avgdl)
                     )
-                    score_t = idf * (tf * (self._k1 + 1.0)) / denom
+                    score_t = idf * (tf / denom) * (self._k1 + 1.0)
                     contributions.append(score_t)
 
             if contributions:
                 total_score = math.fsum(contributions)
-                if total_score > 0.0:
+                if math.isfinite(total_score) and total_score > 0.0:
                     candidates.append((total_score, entry))
 
         if not candidates:

@@ -14,7 +14,11 @@ from econ_paper_cli.adapters import (
 )
 from econ_paper_cli.adapters.bm25 import _tokenize
 from econ_paper_cli.domain import Corpus, Paper, Passage
-from econ_paper_cli.protocols import RetrievalRequest, Retriever
+from econ_paper_cli.protocols import (
+    RetrievalRequest,
+    Retriever,
+    validate_retrieval_results,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_JSON = (
@@ -101,6 +105,23 @@ def test_bm25_constructor_valid_defaults_and_custom_parameters() -> None:
 
     custom_adapter = BM25Retriever(corpus, k1=2.0, b=0.5)
     assert isinstance(custom_adapter, Retriever)
+
+
+def test_bm25_default_parameters_match_explicit_defaults() -> None:
+    """Test that BM25Retriever(corpus) produces identical results to BM25Retriever(corpus, k1=1.5, b=0.75)."""
+    p1 = make_passage("p1", "road infrastructure spending", ordinal=0)
+    p2 = make_passage("p2", "local road connectivity", ordinal=1)
+    corpus = make_corpus([p1, p2])
+
+    retriever_default = BM25Retriever(corpus)
+    retriever_explicit = BM25Retriever(corpus, k1=1.5, b=0.75)
+
+    req = RetrievalRequest(query="road", top_k=5)
+    res_default = retriever_default.retrieve(req)
+    res_explicit = retriever_explicit.retrieve(req)
+
+    assert res_default == res_explicit
+    assert [r.score for r in res_default] == [r.score for r in res_explicit]
 
 
 def test_bm25_constructor_rejects_non_corpus_input() -> None:
@@ -268,11 +289,10 @@ def test_bm25_scoring_hand_checkable_values() -> None:
     # df(road) = 2.
     # idf(road) = ln(1 + (2 - 2 + 0.5) / (2 + 0.5)) = ln(1 + 0.5 / 2.5) = ln(1.2) = 0.1823215567939546
     # Query: "road"
-    # P1 score: idf(road) * [ 2 * (1.5 + 1) / (2 + 1.5 * (1 - 0.75 + 0.75 * 3 / 2.5)) ]
-    # len_norm_P1 = 1 - 0.75 + 0.75 * 1.2 = 0.25 + 0.9 = 1.15
+    # P1 score: idf(road) * [ (2 / 3.725) * (1.5 + 1) ]
+    # len_norm_P1 = 1 - 0.75 + 0.75 * 3 / 2.5 = 0.25 + 0.9 = 1.15
     # denom_P1 = 2 + 1.5 * 1.15 = 2 + 1.725 = 3.725
-    # P1_num = 2 * 2.5 = 5.0
-    # P1_score = ln(1.2) * (5.0 / 3.725) = 0.1823215567939546 * 1.3422818791946309 = 0.2447269136193796
+    # P1_score = ln(1.2) * (2 / 3.725) * 2.5 = 0.1823215567939546 * 1.3422818791946309 = 0.2447269136193796
     p1 = make_passage("p1", "road road spending", ordinal=0)
     p2 = make_passage("p2", "road infrastructure", ordinal=1)
     corpus = make_corpus([p1, p2])
@@ -281,7 +301,7 @@ def test_bm25_scoring_hand_checkable_values() -> None:
     req = RetrievalRequest(query="road", top_k=5)
     results = retriever.retrieve(req)
 
-    expected_p1_score = math.log(1.2) * (5.0 / 3.725)
+    expected_p1_score = math.log(1.2) * (2.0 / 3.725) * 2.5
     assert results[0].passage.passage_id == "p1"
     assert results[0].score == pytest.approx(expected_p1_score, abs=1e-6)
 
@@ -340,28 +360,85 @@ def test_bm25_scoring_document_length_effect() -> None:
     assert results[0].score > results[1].score
 
 
-@pytest.mark.parametrize(
-    "k1,b,desc",
-    [
-        (0.5, 0.75, "lower k1 saturation"),
-        (3.0, 0.75, "higher k1 saturation"),
-        (1.5, 0.0, "zero length penalty b=0"),
-        (1.5, 1.0, "full length penalty b=1"),
-    ],
-)
-def test_bm25_scoring_custom_k1_and_b_parameters(
-    k1: float, b: float, desc: str
-) -> None:
-    """Test that custom k1 and b parameters produce valid positive scores and rankings."""
-    p1 = make_passage("p1", "road road infrastructure", ordinal=0)
-    p2 = make_passage("p2", "road spending", ordinal=1)
+def test_bm25_scoring_custom_k1_saturation_effect() -> None:
+    """Test that changing k1 alters term-frequency saturation as expected."""
+    # P1 has TF=1 for "road", P2 has TF=5 for "road". Both have length 10.
+    p1 = make_passage(
+        "p1",
+        "road filler1 filler2 filler3 filler4 filler5 filler6 filler7 filler8 filler9",
+        ordinal=0,
+    )
+    p2 = make_passage(
+        "p2",
+        "road road road road road filler1 filler2 filler3 filler4 filler5",
+        ordinal=1,
+    )
     corpus = make_corpus([p1, p2])
 
-    retriever = BM25Retriever(corpus, k1=k1, b=b)
+    # Low k1 (0.1): saturation occurs quickly; ratio S(P2)/S(P1) is closer to 1
+    retriever_low_k1 = BM25Retriever(corpus, k1=0.1, b=0.75)
+    res_low = retriever_low_k1.retrieve(RetrievalRequest(query="road", top_k=5))
+    score_p1_low = [r.score for r in res_low if r.passage.passage_id == "p1"][0]
+    score_p2_low = [r.score for r in res_low if r.passage.passage_id == "p2"][0]
+    ratio_low = score_p2_low / score_p1_low
+
+    # High k1 (10.0): saturation occurs slowly; ratio S(P2)/S(P1) is significantly higher
+    retriever_high_k1 = BM25Retriever(corpus, k1=10.0, b=0.75)
+    res_high = retriever_high_k1.retrieve(RetrievalRequest(query="road", top_k=5))
+    score_p1_high = [r.score for r in res_high if r.passage.passage_id == "p1"][0]
+    score_p2_high = [r.score for r in res_high if r.passage.passage_id == "p2"][0]
+    ratio_high = score_p2_high / score_p1_high
+
+    assert ratio_high > ratio_low
+
+
+def test_bm25_scoring_custom_b_length_penalty_effect() -> None:
+    """Test that b=0.0 disables length penalty while b=1.0 applies full length penalty."""
+    # P1 is short (len=2), P2 is long (len=10). Both have TF=1 for "road".
+    p1 = make_passage("p1", "road text", ordinal=0)
+    p2 = make_passage(
+        "p2",
+        "road text filler1 filler2 filler3 filler4 filler5 filler6 filler7 filler8",
+        ordinal=1,
+    )
+    corpus = make_corpus([p1, p2])
+
+    # b=0.0: zero length penalty; S(P1) == S(P2)
+    retriever_b0 = BM25Retriever(corpus, k1=1.5, b=0.0)
+    res_b0 = retriever_b0.retrieve(RetrievalRequest(query="road", top_k=5))
+    assert res_b0[0].score == pytest.approx(res_b0[1].score)
+
+    # b=1.0: full length penalty; S(P1) > S(P2)
+    retriever_b1 = BM25Retriever(corpus, k1=1.5, b=1.0)
+    res_b1 = retriever_b1.retrieve(RetrievalRequest(query="road", top_k=5))
+    assert res_b1[0].passage.passage_id == "p1"
+    assert res_b1[0].score > res_b1[1].score
+
+
+def test_bm25_enforces_finite_positive_scores() -> None:
+    """Test that BM25Retriever returns only finite, strictly positive scores."""
+    p1 = make_passage("p1", "road infrastructure spending", ordinal=0)
+    p2 = make_passage("p2", "local road connectivity", ordinal=1)
+    corpus = make_corpus([p1, p2])
+
+    retriever = BM25Retriever(corpus)
     results = retriever.retrieve(RetrievalRequest(query="road", top_k=5))
 
-    assert len(results) == 2
-    assert all(r.score > 0.0 for r in results)
+    assert len(results) > 0
+    assert all(math.isfinite(r.score) and r.score > 0.0 for r in results)
+
+
+def test_bm25_extreme_finite_configuration_does_not_overflow() -> None:
+    """Test that extreme finite k1 value does not produce non-finite scores."""
+    p1 = make_passage("p1", "road infrastructure spending", ordinal=0)
+    corpus = make_corpus([p1])
+
+    retriever = BM25Retriever(corpus, k1=1e6, b=0.5)
+    results = retriever.retrieve(RetrievalRequest(query="road", top_k=5))
+
+    assert len(results) == 1
+    assert math.isfinite(results[0].score)
+    assert results[0].score > 0.0
 
 
 def test_bm25_ranking_score_descending_order_and_tie_breaking() -> None:
@@ -484,7 +561,7 @@ def test_bm25_determinism_and_corpus_order_independence() -> None:
 
 
 def test_bm25_results_pass_validate_retrieval_results() -> None:
-    """Test that returned result tuple passes contract validation."""
+    """Test that returned result tuple explicitly passes validate_retrieval_results."""
     p1 = make_passage("p1", "road spending")
     corpus = make_corpus([p1])
     retriever = BM25Retriever(corpus)
@@ -492,6 +569,8 @@ def test_bm25_results_pass_validate_retrieval_results() -> None:
     req = RetrievalRequest(query="road", top_k=5)
     results = retriever.retrieve(req)
 
+    validated = validate_retrieval_results(req, results)
+    assert validated is results
     assert isinstance(results, tuple)
     assert len(results) == 1
     assert results[0].retrieval_method == "bm25-v1"
