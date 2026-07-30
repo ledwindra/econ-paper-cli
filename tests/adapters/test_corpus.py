@@ -2,18 +2,31 @@
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from econ_paper_cli.adapters import (
+    CorpusDomainValidationError,
+    CorpusEncodingError,
     CorpusFileNotFoundError,
     CorpusInvalidJsonError,
-    CorpusValidationError,
+    CorpusLoadError,
+    CorpusNotARegularFileError,
+    CorpusPermissionError,
+    CorpusReadError,
     load_corpus_from_file,
     load_manifest_from_file,
     verify_artifact,
 )
-from econ_paper_cli.domain import Paper, Passage
+from econ_paper_cli.domain import (
+    Corpus,
+    CorpusValidationError,
+    Paper,
+    PaperValidationError,
+    Passage,
+    PassageValidationError,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "corpus"
@@ -33,15 +46,19 @@ def test_synthetic_corpus_manifest_verification() -> None:
 
 def test_synthetic_corpus_loader_loads_committed_fixture() -> None:
     """Verify that load_corpus_from_file loads all 5 papers and 15 passages accurately."""
-    papers, passages = load_corpus_from_file(FIXTURE_JSON)
+    corpus = load_corpus_from_file(FIXTURE_JSON)
 
-    assert len(papers) == 5
-    assert len(passages) == 15
+    assert isinstance(corpus, Corpus)
+    assert corpus.schema_version == 1
+    assert corpus.corpus_id == "synthetic-economics-v1"
 
-    assert all(isinstance(paper, Paper) for paper in papers)
-    assert all(isinstance(passage, Passage) for passage in passages)
+    assert len(corpus.papers) == 5
+    assert len(corpus.passages) == 15
 
-    paper_ids = [paper.paper_id for paper in papers]
+    assert all(isinstance(paper, Paper) for paper in corpus.papers)
+    assert all(isinstance(passage, Passage) for passage in corpus.passages)
+
+    paper_ids = [paper.paper_id for paper in corpus.papers]
     expected_ids = [
         "synthetic-elections-roads-2024",
         "synthetic-brt-landvalues-2023",
@@ -51,9 +68,13 @@ def test_synthetic_corpus_loader_loads_committed_fixture() -> None:
     ]
     assert paper_ids == expected_ids
 
-    # Each paper has exactly 3 passages
-    for paper in papers:
-        paper_passages = [p for p in passages if p.paper_id == paper.paper_id]
+    # Assert source_name and source_url conventions
+    for paper in corpus.papers:
+        assert paper.source_name == "Econ Paper CLI Synthetic Fixture Series"
+        assert paper.source_url is not None
+        assert paper.source_url.startswith("https://example.invalid/")
+
+        paper_passages = [p for p in corpus.passages if p.paper_id == paper.paper_id]
         assert len(paper_passages) == 3
 
 
@@ -62,6 +83,21 @@ def test_corpus_loader_raises_file_not_found(tmp_path: Path) -> None:
     non_existent = tmp_path / "missing-corpus.json"
     with pytest.raises(CorpusFileNotFoundError):
         load_corpus_from_file(non_existent)
+
+
+def test_corpus_loader_raises_not_a_regular_file(tmp_path: Path) -> None:
+    """Test that CorpusNotARegularFileError is raised when path is a directory."""
+    with pytest.raises(CorpusNotARegularFileError):
+        load_corpus_from_file(tmp_path)
+
+
+def test_corpus_loader_raises_encoding_error(tmp_path: Path) -> None:
+    """Test that CorpusEncodingError is raised for non-UTF-8 files."""
+    bad_encoding_file = tmp_path / "bad_encoding.json"
+    bad_encoding_file.write_bytes(b"\x80\x81\x82")
+
+    with pytest.raises(CorpusEncodingError):
+        load_corpus_from_file(bad_encoding_file)
 
 
 def test_corpus_loader_raises_invalid_json(tmp_path: Path) -> None:
@@ -73,22 +109,46 @@ def test_corpus_loader_raises_invalid_json(tmp_path: Path) -> None:
         load_corpus_from_file(bad_json)
 
 
-def test_corpus_loader_raises_validation_error_on_missing_keys(tmp_path: Path) -> None:
-    """Test that CorpusValidationError is raised if 'papers' or 'passages' key is missing."""
-    incomplete = tmp_path / "incomplete.json"
-    incomplete.write_text('{"papers": []}', encoding="utf-8")
+def test_corpus_loader_raises_invalid_json_root_not_mapping(tmp_path: Path) -> None:
+    """Test that CorpusInvalidJsonError is raised when JSON root is not an object."""
+    array_json = tmp_path / "array.json"
+    array_json.write_text("[1, 2, 3]", encoding="utf-8")
 
-    with pytest.raises(CorpusValidationError, match="passages"):
-        load_corpus_from_file(incomplete)
+    with pytest.raises(CorpusInvalidJsonError, match="Root|mapping"):
+        load_corpus_from_file(array_json)
 
 
-def test_corpus_loader_raises_validation_error_on_invalid_paper(tmp_path: Path) -> None:
-    """Test that invalid paper metadata raises CorpusValidationError."""
+def test_corpus_loader_raises_permission_error(tmp_path: Path) -> None:
+    """Test that CorpusPermissionError is raised when permission is denied."""
+    restricted_file = tmp_path / "restricted.json"
+    restricted_file.write_text("{}", encoding="utf-8")
+
+    with patch.object(Path, "read_text", side_effect=PermissionError("Denied")):
+        with pytest.raises(CorpusPermissionError):
+            load_corpus_from_file(restricted_file)
+
+
+def test_corpus_loader_raises_general_read_error(tmp_path: Path) -> None:
+    """Test that CorpusReadError is raised when a general OSError occurs."""
+    read_err_file = tmp_path / "read_err.json"
+    read_err_file.write_text("{}", encoding="utf-8")
+
+    with patch.object(Path, "read_text", side_effect=OSError("Drive fail")):
+        with pytest.raises(CorpusReadError):
+            load_corpus_from_file(read_err_file)
+
+
+def test_corpus_loader_preserves_underlying_paper_validation_error(
+    tmp_path: Path,
+) -> None:
+    """Test that PaperValidationError is preserved inside CorpusDomainValidationError."""
     bad_paper_file = tmp_path / "bad_paper.json"
     data = {
+        "schema_version": 1,
+        "corpus_id": "corpus-1",
         "papers": [
             {
-                "paper_id": "invalid ID",  # Fails paper_id grammar validation
+                "paper_id": "invalid ID",
                 "title": "Title",
                 "authors": ["Author"],
                 "year": 2024,
@@ -102,40 +162,17 @@ def test_corpus_loader_raises_validation_error_on_invalid_paper(tmp_path: Path) 
     }
     bad_paper_file.write_text(json.dumps(data), encoding="utf-8")
 
-    with pytest.raises(CorpusValidationError, match="invalid"):
+    with pytest.raises(CorpusDomainValidationError) as exc_info:
         load_corpus_from_file(bad_paper_file)
 
+    assert isinstance(exc_info.value.error, PaperValidationError)
 
-def test_corpus_loader_raises_validation_error_on_duplicate_paper_id(
+
+def test_corpus_loader_preserves_underlying_passage_validation_error(
     tmp_path: Path,
 ) -> None:
-    """Test that duplicate paper_ids raise CorpusValidationError."""
-    dup_file = tmp_path / "duplicate_paper.json"
-    paper_mapping = {
-        "paper_id": "paper-1",
-        "title": "Title",
-        "authors": ["Author"],
-        "year": 2024,
-        "abstract": None,
-        "source_name": "Series",
-        "source_identifier": "id-1",
-        "source_url": None,
-    }
-    data = {
-        "papers": [paper_mapping, paper_mapping],
-        "passages": [],
-    }
-    dup_file.write_text(json.dumps(data), encoding="utf-8")
-
-    with pytest.raises(CorpusValidationError, match="Duplicate paper_id"):
-        load_corpus_from_file(dup_file)
-
-
-def test_corpus_loader_raises_validation_error_on_orphan_passage(
-    tmp_path: Path,
-) -> None:
-    """Test that a passage referencing a non-existent paper_id raises CorpusValidationError."""
-    orphan_file = tmp_path / "orphan_passage.json"
+    """Test that PassageValidationError is preserved inside CorpusDomainValidationError."""
+    bad_passage_file = tmp_path / "bad_passage.json"
     paper_mapping = {
         "paper_id": "paper-1",
         "title": "Title",
@@ -147,19 +184,59 @@ def test_corpus_loader_raises_validation_error_on_orphan_passage(
         "source_url": None,
     }
     passage_mapping = {
-        "passage_id": "p1:sec1:pos0",
-        "paper_id": "paper-non-existent",  # References missing paper
-        "text": "Text content...",
+        "passage_id": "p1",
+        "paper_id": "paper-1",
+        "text": "Text",
         "section_heading": None,
-        "page_start": None,
-        "page_end": None,
+        "page_start": 0,  # Invalid 0 page_start
+        "page_end": 1,
         "ordinal_position": 0,
     }
     data = {
+        "schema_version": 1,
+        "corpus_id": "corpus-1",
         "papers": [paper_mapping],
         "passages": [passage_mapping],
     }
-    orphan_file.write_text(json.dumps(data), encoding="utf-8")
+    bad_passage_file.write_text(json.dumps(data), encoding="utf-8")
 
-    with pytest.raises(CorpusValidationError, match="unknown paper_id"):
-        load_corpus_from_file(orphan_file)
+    with pytest.raises(CorpusDomainValidationError) as exc_info:
+        load_corpus_from_file(bad_passage_file)
+
+    assert isinstance(exc_info.value.error, PassageValidationError)
+
+
+def test_corpus_loader_preserves_underlying_corpus_validation_error(
+    tmp_path: Path,
+) -> None:
+    """Test that CorpusValidationError is preserved inside CorpusDomainValidationError."""
+    dup_file = tmp_path / "dup.json"
+    paper_mapping = {
+        "paper_id": "paper-1",
+        "title": "Title",
+        "authors": ["Author"],
+        "year": 2024,
+        "abstract": None,
+        "source_name": "Series",
+        "source_identifier": "id-1",
+        "source_url": None,
+    }
+    data = {
+        "schema_version": 1,
+        "corpus_id": "corpus-1",
+        "papers": [paper_mapping, paper_mapping],  # Duplicate paper_id
+        "passages": [],
+    }
+    dup_file.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(CorpusDomainValidationError) as exc_info:
+        load_corpus_from_file(dup_file)
+
+    assert isinstance(exc_info.value.error, CorpusValidationError)
+
+
+def test_corpus_load_error_catch_all_behavior(tmp_path: Path) -> None:
+    """Test that CorpusLoadError catches all adapter exceptions."""
+    missing_file = tmp_path / "missing.json"
+    with pytest.raises(CorpusLoadError):
+        load_corpus_from_file(missing_file)

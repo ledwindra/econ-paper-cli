@@ -1,12 +1,14 @@
 """Adapters for interacting with external systems and the filesystem."""
 
 from econ_paper_cli.adapters.corpus import (
+    CorpusDomainValidationError,
     CorpusEncodingError,
     CorpusFileNotFoundError,
     CorpusInvalidJsonError,
     CorpusLoadError,
+    CorpusNotARegularFileError,
     CorpusPermissionError,
-    CorpusValidationError,
+    CorpusReadError,
     load_corpus_from_file,
 )
 from econ_paper_cli.adapters.filesystem import (
@@ -38,12 +40,14 @@ __all__ = [
     "ArtifactFileNotFoundError",
     "ArtifactNotARegularFileError",
     "ChecksumMismatchError",
+    "CorpusDomainValidationError",
     "CorpusEncodingError",
     "CorpusFileNotFoundError",
     "CorpusInvalidJsonError",
     "CorpusLoadError",
+    "CorpusNotARegularFileError",
     "CorpusPermissionError",
-    "CorpusValidationError",
+    "CorpusReadError",
     "FilesystemAdapterError",
     "FilesystemPermissionError",
     "FilesystemReadError",
