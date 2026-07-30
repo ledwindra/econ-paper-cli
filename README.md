@@ -186,18 +186,19 @@ contracts for papers, passages, retrieval evidence, citations, and corpora,
 a synthetic CC0 fixture corpus with a local corpus loader adapter, a
 backend-independent retrieval protocol (`Retriever`, `RetrievalRequest`,
 `validate_retrieval_results`), and a pure-Python BM25 baseline adapter
-(`BM25Retriever`). The BM25 retriever operates on validated `Corpus` passages in
-memory, is not connected to the CLI, and has not yet been evaluated or selected as
-the default backend. PDF/document ingestion, passage segmentation, local inference,
-and conversational execution are not implemented.
+(`BM25Retriever`) selected as the initial replaceable retrieval backend. It also
+defines a backend-independent generation protocol with structured requests,
+responses, citations, and explicit abstention validation. No concrete model
+adapter is implemented or connected to retrieval or the CLI. PDF/document
+ingestion, passage segmentation, local inference, and conversational execution
+remain unimplemented.
 
 The immediate priorities are:
 
-1. evaluate the BM25 baseline on representative synthetic economics queries;
-2. decide whether to retain, tune, or replace it based on evaluation;
-3. define and implement the approved local generation boundary/adapter;
-4. implement grounded synthesis and evidence validation;
-5. validate end-to-end MVP installation and runtime behavior across Windows, macOS, and Linux.
+1. evaluate and approve a concrete local generation adapter separately;
+2. implement grounded-generation quality evaluation;
+3. connect approved retrieval and generation adapters through application services;
+4. validate end-to-end MVP installation and runtime behavior across Windows, macOS, and Linux.
 
 ## Contributing
 

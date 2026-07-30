@@ -70,5 +70,16 @@ non-gating observations. No second adapter, production dependency, model
 artifact, persisted index, CLI wiring, or generation integration is added. See
 [`docs/retrieval-selection.md`](retrieval-selection.md).
 
+Issue 10 defines the backend-independent local-generation boundary in
+`econ_paper_cli.protocols.generation`. Immutable request and response objects
+carry the user's question, ranked retrieval evidence, answer text, structured
+citations, generation-method identity, answer-level finding kinds, and explicit
+abstention state. `validate_generation_response` verifies rank-derived citation
+identity, supplied-evidence membership, canonical citation ordering, and
+abstention consistency. These structural checks do not prove factual grounding
+or sentence-level citation support. No model adapter, runtime dependency,
+artifact, retrieval orchestration, CLI integration, or PDF ingestion is added.
+See [`docs/generation-contract.md`](generation-contract.md).
+
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.
