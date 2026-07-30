@@ -51,6 +51,14 @@ serialized form.
 Validation raises `ArtifactManifestError` with the affected field and expected
 format. The manifest is immutable after construction.
 
+## Filesystem adapters
+
+`econ_paper_cli.adapters.filesystem` contains adapters to load and verify local artifact manifests and files:
+
+- `load_manifest_from_file(path: Path) -> ArtifactManifest`: Loads and validates a manifest from a local JSON file. Raises `ManifestLoadError` subclasses on failure.
+- `verify_artifact(manifest: ArtifactManifest, base_dir: Path) -> VerificationResult`: Resolves the relative path in the manifest against the `base_dir` and verifies the size and checksum of the file. Raises `VerificationError` subclasses on mismatch or access errors.
+- `verify_local_file(path: Path, expected_size_bytes: int, expected_sha256: str) -> tuple[int, str]`: Computes a file's size and SHA-256 in chunks to check for validity.
+
 ## Safety boundary
 
 A syntactically valid manifest is not proof that its source, license, checksum,
@@ -64,5 +72,5 @@ or redistribution claim is correct. In particular:
 - `local_path` is a logical relative destination, not evidence that a file
   exists.
 
-Future filesystem and network adapters must verify these claims and preserve
-the repository's licensing and privacy guardrails before performing effects.
+Filesystem adapters verify these claims locally. Network adapters and other integrations must preserve the repository's licensing and privacy guardrails before performing effects.
+
