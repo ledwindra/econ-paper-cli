@@ -40,6 +40,7 @@ from econ_paper_cli.adapters.filesystem import (
     verify_local_file,
 )
 from econ_paper_cli.adapters.llama_cpp import (
+    OUTPUT_GRAMMAR_SHA256,
     LlamaCppAdapterError,
     LlamaCppCancelledError,
     LlamaCppConfig,
@@ -84,6 +85,7 @@ __all__ = [
     "LlamaCppProcessError",
     "LlamaCppReadinessError",
     "LlamaCppTimeoutError",
+    "OUTPUT_GRAMMAR_SHA256",
     "ManifestEncodingError",
     "ManifestFileNotFoundError",
     "ManifestInvalidJsonError",

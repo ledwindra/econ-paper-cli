@@ -229,21 +229,24 @@ relevance judgments, and regression gates remain unchanged.
 
 Issue 12 implements `econ_paper_cli.adapters.llama_cpp.LlamaCppGenerator`, a
 concrete adapter for the existing backend-independent generation protocol. The
-adapter invokes an explicit local `llama-cli` path with `shell=False`, an
+adapter invokes an explicit local `llama-completion` path with `shell=False`, an
 explicit verified GGUF path, offline mode, a permission-restricted temporary
-prompt file, and the packaged `generation-v1` prompt and JSON schema. The
+prompt file, the packaged `generation-v1` prompt, and a fingerprinted GBNF
+constraint deterministically derived from the authoritative JSON schema. The
 model returns only answer text, citation IDs, abstention state, and answer-level
 finding kinds. The adapter resolves citation IDs into authoritative `Citation`
 objects, supplies its path-independent generation-method identity, constructs
 `GenerationResponse`, and calls `validate_generation_response`.
 
 Questions and evidence are not command-line arguments. Temporary prompt and
-schema files are cleaned on normal and exceptional paths. Stdout and stderr are
-captured through separately bounded pipes; exceeding either live bound
-terminates the process group. Normal errors omit captured content, and
-timeouts, cancellation, runtime exits, artifact failures, and invalid model
-output remain exceptions rather than abstentions. The adapter does not download
-artifacts, use hosted inference, or connect to retrieval or the CLI.
+grammar files are cleaned on normal and exceptional paths. Runtime logs are
+redirected away from captured output. Stdout and stderr are captured through
+separately bounded pipes; exceeding either live bound terminates the process
+group. The adapter removes only the pinned runtime's exact completion footer
+before strict single-object JSON parsing. Normal errors omit captured content,
+and timeouts, cancellation, runtime exits, artifact failures, and invalid model
+output remain exceptions rather than abstentions. The adapter does not
+download artifacts, use hosted inference, or connect to retrieval or the CLI.
 
 `econ_paper_cli.evaluation.generation` adds a separate, fingerprinted CC0
 synthetic benchmark and structural evaluation boundary. Semantic grounding,
@@ -253,6 +256,13 @@ Issue 8 retrieval benchmark remains unchanged. Exact runtime and candidate
 artifact metadata, benchmark design, review procedure, and the Issue 13
 decision gate are documented in
 [`docs/local-generation-evaluation.md`](local-generation-evaluation.md).
+
+Issue 13 found that both eligible Qwen candidates failed their first mechanical
+run under the common configuration. The evaluator preserved sanitized failures
+and marked the remaining scheduled runs `not_run`; no semantic scoring was
+applicable. No default generation adapter configuration is approved. The
+backend-independent generation boundary and replaceable adapter architecture
+remain unchanged.
 
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.

@@ -7,6 +7,7 @@ import pytest
 from scripts import evaluate_generation
 
 from econ_paper_cli.adapters import (
+    OUTPUT_GRAMMAR_SHA256,
     LlamaCppOutputError,
     LlamaCppOutputLimitError,
     LlamaCppProcessError,
@@ -62,7 +63,7 @@ class SuccessfulGenerator:
 
 
 def make_args(tmp_path: Path) -> argparse.Namespace:
-    executable = tmp_path / "llama-cli"
+    executable = tmp_path / "llama-completion"
     executable.write_bytes(b"synthetic runtime")
     model = tmp_path / "model.gguf"
     model.write_bytes(b"synthetic model")
@@ -160,6 +161,12 @@ def test_blinded_packet_contains_frozen_evidence_and_scoring_policy(
 
     assert report["evaluation_status"] == "completed"
     assert report["schema_version"] == 2
+    assert report["output_constraint"] == {
+        "authoritative_schema": "generation-v1.schema.json",
+        "runtime_grammar": "generation-v1.gbnf",
+        "runtime_grammar_sha256": OUTPUT_GRAMMAR_SHA256,
+        "derivation": "llama.cpp b10199 json_schema_to_grammar.py",
+    }
     assert review["schema_version"] == 2
     assert SuccessfulGenerator.calls == 36
     runs = review["runs"]

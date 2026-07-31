@@ -24,7 +24,7 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-"econ_paper_cli.adapters" = ["resources/*.json", "resources/*.txt"]
+"econ_paper_cli.adapters" = ["resources/*.gbnf", "resources/*.json", "resources/*.txt"]
 
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers"]

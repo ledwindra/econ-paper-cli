@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from econ_paper_cli.adapters import (
+    OUTPUT_GRAMMAR_SHA256,
     LlamaCppAdapterError,
     LlamaCppCancelledError,
     LlamaCppConfig,
@@ -193,6 +194,12 @@ def run(args: argparse.Namespace) -> tuple[dict[str, object], dict[str, object]]
         "model_sha256": config.model_sha256,
         "generation_method": generator.generation_method,
         "prompt_version": "generation-v1",
+        "output_constraint": {
+            "authoritative_schema": "generation-v1.schema.json",
+            "runtime_grammar": "generation-v1.gbnf",
+            "runtime_grammar_sha256": OUTPUT_GRAMMAR_SHA256,
+            "derivation": "llama.cpp b10199 json_schema_to_grammar.py",
+        },
         "inference_configuration": {
             "context_size": config.context_size,
             "max_output_tokens": config.max_output_tokens,
@@ -212,17 +219,17 @@ def run(args: argparse.Namespace) -> tuple[dict[str, object], dict[str, object]]
         "readiness_failure": readiness_failure,
         "initialization_time_seconds": None,
         "initialization_time_status": (
-            "unavailable: one-shot llama-cli initialization is included in "
+            "unavailable: one-shot llama-completion initialization is included in "
             "each total-latency observation"
         ),
         "time_to_first_token_seconds": None,
         "time_to_first_token_status": (
-            "unavailable: the pinned no-log subprocess path does not expose "
+            "unavailable: the pinned bounded subprocess path does not expose "
             "a reliable first-token timestamp"
         ),
         "output_throughput_tokens_per_second": None,
         "output_throughput_status": (
-            "unavailable: runtime timing logs are disabled to protect prompt data"
+            "unavailable: runtime logs are redirected away from captured output"
         ),
         "peak_process_rss_bytes": None,
         "peak_process_rss_status": "unavailable in the portable Issue 12 runner",

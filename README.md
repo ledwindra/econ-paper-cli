@@ -99,11 +99,12 @@ Inside the chat:
 
 ## Local inference adapter
 
-The repository implements a configurable `llama-cli` subprocess adapter for
-the existing backend-independent `Generator` protocol. It uses explicit local
-paths, offline mode, a versioned evidence-only prompt, constrained JSON output,
-authoritative citation resolution, and final response validation. It does not
-download a runtime or model and is not yet connected to the CLI.
+The repository implements a configurable `llama-completion` subprocess adapter
+for the existing backend-independent `Generator` protocol. It uses explicit
+local paths, offline mode, a versioned evidence-only prompt, a fingerprinted
+GBNF constraint derived from the authoritative JSON schema, authoritative
+citation resolution, and final response validation. It does not download a
+runtime or model and is not yet connected to the CLI.
 
 `llama.cpp` b10199 is pinned for adapter compatibility testing and the initial
 Issue 13 comparison, not as a permanent product runtime. Three model artifacts
@@ -115,10 +116,11 @@ are approved for evaluation only:
 - official Qwen2.5 1.5B Instruct Q4_K_M.
 
 No first-party Qwen3 0.6B Q4 GGUF was identified, correcting the earlier
-provisional wording. No default model has been approved. See
+provisional wording. Issue 13 found that neither eligible Qwen candidate passed
+its first mechanical evaluation run, so no default model has been approved. See
 [`docs/local-generation-evaluation.md`](docs/local-generation-evaluation.md)
 for exact revisions, checksums, licenses, adapter behavior, and the Issue 13
-evaluation gate.
+deferral evidence.
 
 ## Corpus policy
 
@@ -244,18 +246,18 @@ backend-independent retrieval protocol (`Retriever`, `RetrievalRequest`,
 (`BM25Retriever`) selected as the initial replaceable retrieval backend. It also
 defines a backend-independent generation protocol with structured requests,
 responses, citations, and explicit abstention validation; a concrete,
-configurable local `llama-cli` adapter; and a fingerprinted CC0 synthetic
-generation benchmark with opt-in evaluation tooling. No default model is
-approved, and generation is not connected to retrieval or the CLI.
+configurable local `llama-completion` adapter; and a fingerprinted CC0 synthetic
+generation benchmark with opt-in evaluation tooling. Issue 13 explicitly
+deferred the default after both eligible candidates failed the first mechanical
+run, and generation is not connected to retrieval or the CLI.
 PDF/document ingestion, passage segmentation, Markdown generation, SQLite
 storage, and conversational execution remain unimplemented.
 
 The immediate priorities are:
 
-1. run real-model evaluation and decide or defer the default in Issue 13;
-2. add the database-independent storage foundation and SQLite adapter;
-3. implement automatic local PDF ingestion; and
-4. connect the approved library, retrieval, and generation components through
+1. add the database-independent storage foundation and SQLite adapter;
+2. implement automatic local PDF ingestion; and
+3. connect the approved library, retrieval, and generation components through
    end-to-end application services.
 
 ## Contributing

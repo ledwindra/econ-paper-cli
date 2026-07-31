@@ -92,11 +92,11 @@ class RecordingRunner:
         self.commands: list[tuple[str, ...]] = []
         self.environments: list[dict[str, str]] = []
         self.prompt_text: str | None = None
-        self.schema_text: str | None = None
+        self.grammar_text: str | None = None
         self.prompt_mode: int | None = None
-        self.schema_mode: int | None = None
+        self.grammar_mode: int | None = None
         self.prompt_path: Path | None = None
-        self.schema_path: Path | None = None
+        self.grammar_path: Path | None = None
 
     def run(
         self,
@@ -114,13 +114,13 @@ class RecordingRunner:
             return ProcessResult(0, self.version_output, "")
 
         prompt_path = Path(recorded[recorded.index("--file") + 1])
-        schema_path = Path(recorded[recorded.index("--json-schema-file") + 1])
+        grammar_path = Path(recorded[recorded.index("--grammar-file") + 1])
         self.prompt_path = prompt_path
-        self.schema_path = schema_path
+        self.grammar_path = grammar_path
         self.prompt_text = prompt_path.read_text(encoding="utf-8")
-        self.schema_text = schema_path.read_text(encoding="utf-8")
+        self.grammar_text = grammar_path.read_text(encoding="utf-8")
         self.prompt_mode = prompt_path.stat().st_mode & 0o777
-        self.schema_mode = schema_path.stat().st_mode & 0o777
+        self.grammar_mode = grammar_path.stat().st_mode & 0o777
         return ProcessResult(self.generation_returncode, self.output, "private stderr")
 
 
@@ -129,7 +129,7 @@ class RaisingRunner:
         self.error = error
         self.commands: list[tuple[str, ...]] = []
         self.prompt_path: Path | None = None
-        self.schema_path: Path | None = None
+        self.grammar_path: Path | None = None
 
     def run(
         self,
@@ -144,7 +144,7 @@ class RaisingRunner:
         self.commands.append(recorded)
         if "--file" in recorded:
             self.prompt_path = Path(recorded[recorded.index("--file") + 1])
-            self.schema_path = Path(recorded[recorded.index("--json-schema-file") + 1])
+            self.grammar_path = Path(recorded[recorded.index("--grammar-file") + 1])
         if "--version" in recorded:
             return ProcessResult(0, "llama.cpp build 10199", "")
         raise self.error
@@ -207,10 +207,14 @@ def test_command_keeps_private_text_out_of_arguments_and_forces_offline_mode(
     assert question not in joined
     assert evidence not in joined
     assert "--file" in command
-    assert "--json-schema-file" in command
+    assert "--grammar-file" in command
+    assert "--json-schema-file" not in command
     assert "--offline" in command
     assert "--no-display-prompt" in command
-    assert "--log-disable" in command
+    assert "--log-file" in command
+    assert command[command.index("--log-file") + 1] == os.devnull
+    assert "--log-disable" not in command
+    assert "--single-turn" not in command
     assert "--reasoning" in command
     assert command[command.index("--reasoning") + 1] == "off"
     assert "--no-context-shift" in command
@@ -227,7 +231,7 @@ def test_command_keeps_private_text_out_of_arguments_and_forces_offline_mode(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits are not portable")
-def test_prompt_and_schema_are_private_and_cleaned_after_success(
+def test_prompt_and_grammar_are_private_and_cleaned_after_success(
     tmp_path: Path,
 ) -> None:
     runner = RecordingRunner()
@@ -236,11 +240,11 @@ def test_prompt_and_schema_are_private_and_cleaned_after_success(
     generator.generate(make_request())
 
     assert runner.prompt_mode == 0o600
-    assert runner.schema_mode == 0o600
+    assert runner.grammar_mode == 0o600
     assert runner.prompt_path is not None
-    assert runner.schema_path is not None
+    assert runner.grammar_path is not None
     assert not runner.prompt_path.exists()
-    assert not runner.schema_path.exists()
+    assert not runner.grammar_path.exists()
 
 
 def test_temporary_files_are_cleaned_when_process_raises(tmp_path: Path) -> None:
@@ -251,9 +255,9 @@ def test_temporary_files_are_cleaned_when_process_raises(tmp_path: Path) -> None
         generator.generate(make_request())
 
     assert runner.prompt_path is not None
-    assert runner.schema_path is not None
+    assert runner.grammar_path is not None
     assert not runner.prompt_path.exists()
-    assert not runner.schema_path.exists()
+    assert not runner.grammar_path.exists()
 
 
 def test_temporary_files_are_cleaned_when_output_limit_is_exceeded(
@@ -268,9 +272,9 @@ def test_temporary_files_are_cleaned_when_output_limit_is_exceeded(
         generator.generate(make_request())
 
     assert runner.prompt_path is not None
-    assert runner.schema_path is not None
+    assert runner.grammar_path is not None
     assert not runner.prompt_path.exists()
-    assert not runner.schema_path.exists()
+    assert not runner.grammar_path.exists()
 
 
 def test_rendered_prompt_is_deterministic_and_marks_evidence_untrusted() -> None:
@@ -287,15 +291,38 @@ def test_rendered_prompt_is_deterministic_and_marks_evidence_untrusted() -> None
     assert "paper title" in first
 
 
-def test_generation_method_does_not_contain_machine_paths(tmp_path: Path) -> None:
+def test_generation_method_includes_grammar_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config = make_config(tmp_path)
     generator = LlamaCppGenerator(config, process_runner=RecordingRunner())
 
     method = generator.generation_method
+    monkeypatch.setattr(llama_cpp_module, "OUTPUT_GRAMMAR_SHA256", "0" * 64)
 
     assert str(tmp_path) not in method
     assert config.model_sha256 in method
     assert "generation-v1" in method
+    assert generator.generation_method != method
+
+
+def test_packaged_grammar_matches_frozen_fingerprint() -> None:
+    grammar = (
+        Path(llama_cpp_module.__file__).with_name("resources") / "generation-v1.gbnf"
+    ).read_bytes()
+
+    assert hashlib.sha256(grammar).hexdigest() == llama_cpp_module.OUTPUT_GRAMMAR_SHA256
+
+
+def test_exact_llama_completion_footer_is_removed_before_parsing(
+    tmp_path: Path,
+) -> None:
+    runner = RecordingRunner(successful_output() + "\n> EOF by user\n\n\n")
+    generator = LlamaCppGenerator(make_config(tmp_path), process_runner=runner)
+
+    response = generator.generate(make_request())
+
+    assert response.answer_text == "The synthetic estimate was 4 units."
 
 
 def test_readiness_rejects_missing_executable(tmp_path: Path) -> None:

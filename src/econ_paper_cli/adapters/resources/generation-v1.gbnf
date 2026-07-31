@@ -1,0 +1,17 @@
+abstained-kv ::= "\"abstained\"" space ":" space boolean
+abstention-reason ::= abstention-reason-0 | abstention-reason-1
+abstention-reason-0 ::= ("\"insufficient_evidence\"" | "null")
+abstention-reason-1 ::= ("\"insufficient_evidence\"" | "null")
+abstention-reason-kv ::= "\"abstention_reason\"" space ":" space abstention-reason
+answer-text ::= "\"" char+ "\""
+answer-text-kv ::= "\"answer_text\"" space ":" space answer-text
+boolean ::= ("true" | "false")
+char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+citation-ids ::= "[" space (citation-ids-item ("," space citation-ids-item)*)? space "]"
+citation-ids-item ::= "\"" ("e" [1-9] [0-9]*) "\""
+citation-ids-kv ::= "\"citation_ids\"" space ":" space citation-ids
+finding-kinds ::= "[" space (finding-kinds-item ("," space finding-kinds-item)*)? space "]"
+finding-kinds-item ::= ("\"descriptive\"" | "\"causal\"")
+finding-kinds-kv ::= "\"finding_kinds\"" space ":" space finding-kinds
+root ::= "{" space answer-text-kv "," space citation-ids-kv "," space abstained-kv "," space abstention-reason-kv "," space finding-kinds-kv space "}"
+space ::= | " " | "\n"{1,2} [ \t]{0,20}

@@ -6,7 +6,7 @@ The generation contract defines the narrow, backend-independent boundary by
 which application services can invoke a local language-model adapter. The
 contract does not select a model, runtime, prompt, artifact, or CLI workflow.
 Issue 12 implements one concrete adapter behind this unchanged boundary, while
-Issue 13 remains responsible for real-model evaluation and default selection.
+Issue 13 evaluated the eligible candidates and deferred default selection.
 
 ```text
 Application Services -> Generator Protocol -> Replaceable Local Adapter
@@ -178,10 +178,11 @@ evaluation details are in
 
 ## Deferred work
 
-Issue 13 must run the approved candidates and either select an initial
-replaceable default or explicitly defer that decision. Model download,
-retrieval orchestration, CLI integration, conversational state, PDF ingestion,
-OCR, conversion, storage, segmentation, and indexing remain unimplemented.
+Issue 13 evaluated the two eligible candidates and explicitly deferred the
+initial replaceable default because neither passed the first mechanical run.
+Model download, retrieval orchestration, CLI integration, conversational state,
+PDF ingestion, OCR, conversion, storage, segmentation, and indexing remain
+unimplemented.
 
 The repository-root `papers/` directory is private future ingestion input. It
 is ignored by Git and is not a public corpus, test fixture, package resource, or
