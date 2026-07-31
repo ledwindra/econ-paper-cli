@@ -23,8 +23,14 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"econ_paper_cli.adapters" = ["resources/*.json", "resources/*.txt"]
+
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers"]
+markers = [
+    "model: opt-in test requiring a manually installed local runtime and model",
+]
 testpaths = ["tests"]
 
 [tool.ruff]

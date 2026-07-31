@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "artifact_id": "smollm2-1.7b-instruct-q4-k-m",
+  "kind": "model",
+  "version": "gguf-6a7e79393ef2957e087f11fce1e50476799e313c",
+  "source": "https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF/resolve/6a7e79393ef2957e087f11fce1e50476799e313c/smollm2-1.7b-instruct-q4_k_m.gguf",
+  "license": "Apache-2.0 (artifact repository label; conversion provenance requires maintainer review)",
+  "redistribution_status": "unknown",
+  "expected_size_bytes": 1055609536,
+  "sha256": "decd2598bc2c8ed08c19adc3c8fdd461ee19ed5708679d1c54ef54a5a30d4f33",
+  "update_policy": "Pinned Issue 13 evaluation candidate; upgrades require new provenance, checksum, compatibility testing, and semantic evaluation.",
+  "contains_copyrighted_full_text": false,
+  "local_path": "models/smollm2-1.7b-instruct-q4_k_m.gguf"
+}

@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "answer_text",
+    "citation_ids",
+    "abstained",
+    "abstention_reason",
+    "finding_kinds"
+  ],
+  "properties": {
+    "answer_text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "citation_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^e[1-9][0-9]*$"
+      },
+      "uniqueItems": true
+    },
+    "abstained": {
+      "type": "boolean"
+    },
+    "abstention_reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "insufficient_evidence",
+        null
+      ]
+    },
+    "finding_kinds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "descriptive",
+          "causal"
+        ]
+      },
+      "uniqueItems": true
+    }
+  }
+}

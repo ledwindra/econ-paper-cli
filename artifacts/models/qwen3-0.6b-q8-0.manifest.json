@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "artifact_id": "qwen3-0.6b-q8-0",
+  "kind": "model",
+  "version": "gguf-1eaf4d9657fe65ad10a51eab76a8db5b363bddaa",
+  "source": "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/1eaf4d9657fe65ad10a51eab76a8db5b363bddaa/Qwen3-0.6B-Q8_0.gguf",
+  "license": "Apache-2.0",
+  "redistribution_status": "permitted",
+  "expected_size_bytes": 639446688,
+  "sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+  "update_policy": "Pinned Issue 13 evaluation candidate; upgrades require new provenance, checksum, compatibility testing, and semantic evaluation.",
+  "contains_copyrighted_full_text": false,
+  "local_path": "models/Qwen3-0.6B-Q8_0.gguf"
+}

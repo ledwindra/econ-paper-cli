@@ -1,5 +1,15 @@
 """Backend-independent deterministic evaluation utilities."""
 
+from econ_paper_cli.evaluation.generation import (
+    SEMANTIC_SCORE_DIMENSIONS,
+    GenerationBenchmark,
+    GenerationBenchmarkCase,
+    GenerationEvaluationError,
+    GenerationMechanicalResult,
+    evaluate_generation_response,
+    generation_benchmark_fingerprint,
+    load_generation_benchmark,
+)
 from econ_paper_cli.evaluation.resources import (
     MachineProfile,
     ResourceMeasurementError,
@@ -24,6 +34,11 @@ from econ_paper_cli.evaluation.retrieval import (
 )
 
 __all__ = [
+    "SEMANTIC_SCORE_DIMENSIONS",
+    "GenerationBenchmark",
+    "GenerationBenchmarkCase",
+    "GenerationEvaluationError",
+    "GenerationMechanicalResult",
     "MachineProfile",
     "QueryEvaluation",
     "ResourceMeasurementError",
@@ -38,8 +53,11 @@ __all__ = [
     "build_synthetic_scaling_corpus",
     "corpus_retrieval_fingerprint",
     "detect_machine_profile",
+    "evaluate_generation_response",
     "evaluate_retriever",
     "find_threshold_failures",
+    "generation_benchmark_fingerprint",
+    "load_generation_benchmark",
     "measure_retriever_resources",
     "stable_retrieval_result_digest",
 ]
