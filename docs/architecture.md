@@ -237,12 +237,13 @@ finding kinds. The adapter resolves citation IDs into authoritative `Citation`
 objects, supplies its path-independent generation-method identity, constructs
 `GenerationResponse`, and calls `validate_generation_response`.
 
-Questions and evidence are not command-line arguments. Temporary prompt,
-schema, and capture files are cleaned on normal and exceptional paths. Output
-capture is bounded, normal errors omit captured content, and timeouts,
-cancellation, runtime exits, artifact failures, and invalid model output remain
-exceptions rather than abstentions. The adapter does not download artifacts,
-use hosted inference, or connect to retrieval or the CLI.
+Questions and evidence are not command-line arguments. Temporary prompt and
+schema files are cleaned on normal and exceptional paths. Stdout and stderr are
+captured through separately bounded pipes; exceeding either live bound
+terminates the process group. Normal errors omit captured content, and
+timeouts, cancellation, runtime exits, artifact failures, and invalid model
+output remain exceptions rather than abstentions. The adapter does not download
+artifacts, use hosted inference, or connect to retrieval or the CLI.
 
 `econ_paper_cli.evaluation.generation` adds a separate, fingerprinted CC0
 synthetic benchmark and structural evaluation boundary. Semantic grounding,
