@@ -51,7 +51,30 @@ Not yet implemented:
 - Persisted retrieval index or index artifact
 - CLI integration
 
-## 5. Local inference and synthesis
+## 5. Hybrid local-library requirements and architecture (Issue 11 documented)
+
+Approved design:
+
+- Automatic ordinary-user ingestion from a selected PDF or directory
+- Original PDFs as authoritative source inputs that ingestion never modifies
+  or deletes
+- Inspectable generated Markdown as a derived representation
+- Standard-library SQLite as the future structured operational store behind a
+  replaceable storage protocol
+- Rebuildable retrieval indexes separate from authoritative and structured data
+- Checksum-aware deduplication, deterministic re-ingestion, schema migrations,
+  and transactional database writes
+- Configurable library location, private user data, and offline ingestion
+- Separate recovery treatment for source-derived records and unique user state
+
+Not implemented:
+
+- Storage protocol, SQLite schema, migrations, or database files
+- PDF discovery, extraction, OCR, conversion, segmentation, or ingestion
+- Markdown export or retrieval-index persistence
+- Ingestion CLI syntax
+
+## 6. Local inference and synthesis (Issue 12 next)
 
 Completed:
 - Replaceable backend-independent generation protocol
@@ -66,8 +89,31 @@ Not yet implemented:
 - Claim-level citation association or inline rendering
 - Approve a default model separately before adding download behavior
 
-## 6. End-to-end MVP
+## 7. Local library storage foundation
+
+- Define the narrow, database-independent storage or repository protocol
+- Design and implement the SQLite schema using standard-library `sqlite3`
+- Add schema versions, forward migrations, transactional writes, and
+  actionable recovery behavior
+- Configure a portable library location outside the source repository
+- Preserve stable compatibility with existing paper and passage identities
+- Keep source-derived records distinct from unique user state
+
+## 8. Automatic PDF ingestion
+
+- Discover selected PDFs and directories without assuming `/papers/`
+- Compute checksums and implement deterministic duplicate and re-ingestion
+  behavior
+- Extract text and available metadata locally
+- Add supported OCR, extraction-quality reporting, and actionable failures
+- Generate inspectable Markdown and stable passages with complete provenance
+- Populate SQLite through the storage protocol and refresh rebuildable
+  retrieval state
+- Verify offline, restart-safe, and cross-platform behavior
+
+## 9. End-to-end MVP orchestration
 
 - Connect setup, status, update, chat, follow-up, and evidence inspection
+- Connect the approved library, ingestion, retrieval, and generation adapters
 - Verify offline operation, privacy, restart safety, and cross-platform behavior
 - Document artifact licenses and release procedures

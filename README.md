@@ -73,8 +73,17 @@ access the network, retrieve papers, or run a language model.
 
 ```bash
 econpapers setup
+econpapers ingest /path/to/papers
 econpapers chat
 ```
+
+The `ingest` example illustrates the intended ordinary-user workflow. Its
+command name, syntax, and flags are not yet approved or implemented. The user
+should eventually be able to select a legally obtained PDF or directory and
+have the application derive checksums, metadata, Markdown, passages,
+provenance, database records, and retrieval state locally. Manual conversion,
+manifest creation, segmentation, identifier assignment, and database insertion
+should not be necessary.
 
 Inside the chat:
 
@@ -115,6 +124,41 @@ The project may distribute:
 - code that helps users build a local corpus from authorized sources.
 
 The project must not bundle converted full-text papers unless redistribution permission is established.
+
+## Planned local paper library
+
+The approved future library uses four local layers:
+
+| Layer | Purpose |
+| --- | --- |
+| Original PDFs | Authoritative user-provided source documents |
+| Generated Markdown | Inspectable derived representation |
+| SQLite | Structured catalog, retrieval-ready passages, provenance, checksums, ingestion state, and other application state |
+| Retrieval index | Rebuildable search accelerator |
+
+Ingestion must never modify or delete a user's source PDFs. Whether the
+application later manages private PDF copies or registers files in place
+remains undecided. Recovery of derived records therefore depends on the
+authoritative PDFs remaining accessible, unless a later managed-copy policy
+preserves them.
+
+Generated Markdown, source-derived SQLite records, passage text, provenance,
+and retrieval indexes should be rebuildable from accessible PDFs plus versioned
+conversion logic and configuration. Future annotations, metadata corrections,
+preferences, chat history, or similar unique user state may need separate
+backup or export behavior and is not assumed to be reconstructible.
+
+The library location will be configurable and usable outside this repository.
+The ignored repository-root `/papers/` directory is only a convenience
+location, not a hard-coded application path. PDFs, converted copyrighted text,
+Markdown, databases, and indexes remain private user data and must not be
+committed or redistributed.
+
+Ordinary ingestion will run locally without network access. Future metadata
+enrichment would require separate approval and explicit opt-in. The MVP will
+use Python's standard-library `sqlite3` behind a replaceable storage boundary;
+it will not require PostgreSQL, a database server, Docker, a cloud database, or
+a vector database.
 
 ## Repository direction
 
@@ -190,15 +234,16 @@ backend-independent retrieval protocol (`Retriever`, `RetrievalRequest`,
 defines a backend-independent generation protocol with structured requests,
 responses, citations, and explicit abstention validation. No concrete model
 adapter is implemented or connected to retrieval or the CLI. PDF/document
-ingestion, passage segmentation, local inference, and conversational execution
-remain unimplemented.
+ingestion, passage segmentation, Markdown generation, SQLite storage, local
+inference, and conversational execution remain unimplemented.
 
 The immediate priorities are:
 
-1. evaluate and approve a concrete local generation adapter separately;
-2. implement grounded-generation quality evaluation;
-3. connect approved retrieval and generation adapters through application services;
-4. validate end-to-end MVP installation and runtime behavior across Windows, macOS, and Linux.
+1. implement and evaluate a concrete local-generation adapter in Issue 12;
+2. add the database-independent storage foundation and SQLite adapter;
+3. implement automatic local PDF ingestion; and
+4. connect the approved library, retrieval, and generation components through
+   end-to-end application services.
 
 ## Contributing
 
