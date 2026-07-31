@@ -1,10 +1,10 @@
 """Model-free tests for the opt-in generation evaluation script."""
 
 import argparse
+import importlib.util
 from pathlib import Path
 
 import pytest
-from scripts import evaluate_generation
 
 from econ_paper_cli.adapters import (
     OUTPUT_GRAMMAR_SHA256,
@@ -20,6 +20,17 @@ from econ_paper_cli.protocols import (
     GenerationRequest,
     GenerationResponse,
 )
+
+_SCRIPT_PATH = (
+    Path(__file__).resolve().parents[2] / "scripts" / "evaluate_generation.py"
+)
+_SCRIPT_SPEC = importlib.util.spec_from_file_location(
+    "evaluate_generation_script", _SCRIPT_PATH
+)
+if _SCRIPT_SPEC is None or _SCRIPT_SPEC.loader is None:
+    raise RuntimeError("Unable to load the generation evaluation script for testing.")
+evaluate_generation = importlib.util.module_from_spec(_SCRIPT_SPEC)
+_SCRIPT_SPEC.loader.exec_module(evaluate_generation)
 
 
 class SuccessfulGenerator:
