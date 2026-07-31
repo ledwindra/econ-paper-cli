@@ -55,10 +55,13 @@ insufficient-evidence abstentions.
 ### Privacy boundary
 
 Questions and evidence are written to a new temporary directory and files
-created with mode `0600` where POSIX permissions apply. Prompt, schema, stdout,
-and stderr files are cleaned by context managers after success or failure,
-including timeout and cancellation paths. Normal exception messages never
-include captured model output.
+created with mode `0600` where POSIX permissions apply. Prompt and schema files
+are cleaned by context managers after success or failure, including output
+overflow, timeout, and cancellation paths. Stdout and stderr use separately
+bounded pipes rather than capture files. A reader signals the supervising loop
+as soon as either stream exceeds its bound; the runner then terminates the
+process group and closes both pipes. Normal exception messages never include
+captured model output.
 
 The adapter removes common Hugging Face token and repository variables from the
 child environment and sets `LLAMA_ARG_OFFLINE=1`. Tests verify command

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -25,6 +26,7 @@ from econ_paper_cli.adapters import (
     SubprocessRunner,
     render_generation_prompt,
 )
+from econ_paper_cli.adapters import llama_cpp as llama_cpp_module
 from econ_paper_cli.domain import Passage, RetrievalEvidence
 from econ_paper_cli.protocols import (
     FindingKind,
@@ -246,6 +248,23 @@ def test_temporary_files_are_cleaned_when_process_raises(tmp_path: Path) -> None
     generator = LlamaCppGenerator(make_config(tmp_path), process_runner=runner)
 
     with pytest.raises(LlamaCppCancelledError, match="cancelled"):
+        generator.generate(make_request())
+
+    assert runner.prompt_path is not None
+    assert runner.schema_path is not None
+    assert not runner.prompt_path.exists()
+    assert not runner.schema_path.exists()
+
+
+def test_temporary_files_are_cleaned_when_output_limit_is_exceeded(
+    tmp_path: Path,
+) -> None:
+    runner = RaisingRunner(
+        LlamaCppOutputLimitError("Local generation output exceeded the capture limit.")
+    )
+    generator = LlamaCppGenerator(make_config(tmp_path), process_runner=runner)
+
+    with pytest.raises(LlamaCppOutputLimitError, match="capture limit"):
         generator.generate(make_request())
 
     assert runner.prompt_path is not None
@@ -505,3 +524,63 @@ def test_subprocess_runner_rejects_output_above_capture_bound() -> None:
             cancellation_requested=None,
             environment=os.environ,
         )
+
+
+@pytest.mark.parametrize("stream_name", ("stdout", "stderr"))
+def test_subprocess_runner_terminates_live_process_and_closes_pipes_on_overflow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stream_name: str,
+) -> None:
+    runner = SubprocessRunner()
+    marker = tmp_path / f"{stream_name}-natural-completion"
+    processes: list[subprocess.Popen[bytes]] = []
+    terminated_process_ids: list[int] = []
+    terminate_process = llama_cpp_module._terminate_process
+
+    def record_process(
+        command: Sequence[str], *, environment: Mapping[str, str]
+    ) -> subprocess.Popen[bytes]:
+        process = SubprocessRunner._start_process(
+            command,
+            environment=environment,
+        )
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(runner, "_start_process", record_process)
+
+    def record_termination(process: subprocess.Popen[bytes]) -> None:
+        terminated_process_ids.append(process.pid)
+        terminate_process(process)
+
+    monkeypatch.setattr(llama_cpp_module, "_terminate_process", record_termination)
+    write_output = (
+        f"sys.{stream_name}.buffer.write(b'x' * 4096);sys.{stream_name}.flush();"
+    )
+    script = (
+        "import pathlib,sys,time;"
+        f"{write_output}"
+        "time.sleep(5);"
+        f"pathlib.Path({str(marker)!r}).write_text('finished')"
+    )
+
+    with pytest.raises(LlamaCppOutputLimitError, match="capture limit"):
+        runner.run(
+            (sys.executable, "-c", script),
+            timeout_seconds=3,
+            max_output_bytes=128,
+            cancellation_requested=None,
+            environment=os.environ,
+        )
+
+    assert len(processes) == 1
+    process = processes[0]
+    assert terminated_process_ids == [process.pid]
+    assert process.poll() is not None
+    assert process.returncode != 0
+    assert process.stdout is not None
+    assert process.stderr is not None
+    assert process.stdout.closed
+    assert process.stderr.closed
+    assert not marker.exists()

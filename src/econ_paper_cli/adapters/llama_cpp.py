@@ -9,11 +9,12 @@ import re
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, cast
+from typing import BinaryIO, Protocol, cast
 
 from econ_paper_cli.adapters.filesystem import VerificationError, verify_local_file
 from econ_paper_cli.domain import Citation
@@ -187,50 +188,65 @@ class SubprocessRunner:
         if not command:
             raise LlamaCppProcessError("Native process command must not be empty.")
 
-        with tempfile.TemporaryDirectory(prefix="econpapers-process-") as directory:
-            capture_directory = Path(directory)
-            stdout_path = capture_directory / "stdout"
-            stderr_path = capture_directory / "stderr"
-            stdout_file = _open_private_binary_file(stdout_path)
-            stderr_file = _open_private_binary_file(stderr_path)
-            try:
-                process = self._start_process(
-                    command,
-                    stdout_file=stdout_file,
-                    stderr_file=stderr_file,
-                    environment=environment,
-                )
-                self._wait_for_process(
-                    process,
-                    timeout_seconds=timeout_seconds,
-                    cancellation_requested=cancellation_requested,
-                )
-            finally:
-                stdout_file.close()
-                stderr_file.close()
-
-            stdout = _read_bounded_utf8(stdout_path, max_output_bytes=max_output_bytes)
-            stderr = _read_bounded_utf8(stderr_path, max_output_bytes=max_output_bytes)
-            return ProcessResult(
-                returncode=cast(int, process.returncode),
-                stdout=stdout,
-                stderr=stderr,
+        process = self._start_process(command, environment=environment)
+        if process.stdout is None or process.stderr is None:
+            _terminate_process(process)
+            raise LlamaCppProcessError(
+                "Local generation runtime did not expose output pipes."
             )
+
+        limit_exceeded = threading.Event()
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+        capture_threads = (
+            _start_bounded_pipe_capture(
+                process.stdout,
+                chunks=stdout_chunks,
+                max_output_bytes=max_output_bytes,
+                limit_exceeded=limit_exceeded,
+            ),
+            _start_bounded_pipe_capture(
+                process.stderr,
+                chunks=stderr_chunks,
+                max_output_bytes=max_output_bytes,
+                limit_exceeded=limit_exceeded,
+            ),
+        )
+        try:
+            self._wait_for_process(
+                process,
+                timeout_seconds=timeout_seconds,
+                cancellation_requested=cancellation_requested,
+                output_limit_exceeded=limit_exceeded,
+            )
+        finally:
+            if process.poll() is None:
+                _terminate_process(process)
+            for thread in capture_threads:
+                thread.join()
+
+        if limit_exceeded.is_set():
+            raise LlamaCppOutputLimitError(
+                "Local generation output exceeded the configured capture limit."
+            )
+        return ProcessResult(
+            returncode=cast(int, process.returncode),
+            stdout=_decode_utf8(b"".join(stdout_chunks)),
+            stderr=_decode_utf8(b"".join(stderr_chunks)),
+        )
 
     @staticmethod
     def _start_process(
         command: Sequence[str],
         *,
-        stdout_file: object,
-        stderr_file: object,
         environment: Mapping[str, str],
     ) -> subprocess.Popen[bytes]:
         kwargs: dict[str, object] = {
             "args": tuple(command),
             "shell": False,
             "stdin": subprocess.DEVNULL,
-            "stdout": stdout_file,
-            "stderr": stderr_file,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
             "env": dict(environment),
         }
         if os.name == "nt":
@@ -250,9 +266,17 @@ class SubprocessRunner:
         *,
         timeout_seconds: float,
         cancellation_requested: CancellationCheck | None,
+        output_limit_exceeded: threading.Event,
     ) -> None:
         deadline = time.monotonic() + timeout_seconds
-        while process.poll() is None:
+        while True:
+            if output_limit_exceeded.is_set():
+                _terminate_process(process)
+                raise LlamaCppOutputLimitError(
+                    "Local generation output exceeded the configured capture limit."
+                )
+            if process.poll() is not None:
+                return
             if cancellation_requested is not None and cancellation_requested():
                 _terminate_process(process)
                 raise LlamaCppCancelledError(
@@ -575,19 +599,37 @@ def _write_private_text_file(path: Path, content: str) -> None:
         raise
 
 
-def _open_private_binary_file(path: Path) -> object:
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    return os.fdopen(descriptor, "wb")
+def _start_bounded_pipe_capture(
+    pipe: BinaryIO,
+    *,
+    chunks: list[bytes],
+    max_output_bytes: int,
+    limit_exceeded: threading.Event,
+) -> threading.Thread:
+    def capture() -> None:
+        total_bytes = 0
+        try:
+            while True:
+                remaining_with_sentinel = max_output_bytes - total_bytes + 1
+                chunk = pipe.read(min(65_536, remaining_with_sentinel))
+                if not chunk:
+                    return
+                total_bytes += len(chunk)
+                if total_bytes > max_output_bytes:
+                    limit_exceeded.set()
+                    return
+                chunks.append(chunk)
+        finally:
+            pipe.close()
+
+    thread = threading.Thread(target=capture, daemon=True)
+    thread.start()
+    return thread
 
 
-def _read_bounded_utf8(path: Path, *, max_output_bytes: int) -> str:
-    size = path.stat().st_size
-    if size > max_output_bytes:
-        raise LlamaCppOutputLimitError(
-            "Local generation output exceeded the configured capture limit."
-        )
+def _decode_utf8(output: bytes) -> str:
     try:
-        return path.read_text(encoding="utf-8")
+        return output.decode("utf-8")
     except UnicodeDecodeError as error:
         raise LlamaCppProcessError(
             "Local generation runtime returned output that was not valid UTF-8."
