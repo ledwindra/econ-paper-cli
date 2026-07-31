@@ -81,8 +81,10 @@ Completed:
 - Immutable JSON-compatible generation request and response contracts
 - Structural citation membership and canonical-order validation
 - Explicit insufficient-evidence abstention contract
-- Configurable local `llama-cli` subprocess adapter with explicit model paths
-- Versioned evidence-only prompt and constrained JSON schema
+- Configurable local `llama-completion` subprocess adapter with explicit model
+  paths
+- Versioned evidence-only prompt, authoritative JSON schema, and fingerprinted
+  derived GBNF constraint
 - Adapter-side authoritative citation resolution and response validation
 - Model-free fake-process, privacy, failure, and cross-platform tests
 - Fingerprinted twelve-case CC0 synthetic generation benchmark
@@ -95,17 +97,20 @@ Not yet implemented:
 - Claim-level citation association or inline rendering
 - Artifact download or update behavior
 
-## 7. Real-model evaluation and default decision (Issue 13 next)
+## 7. Real-model evaluation and default decision (Issue 13)
 
-- Evaluate SmolLM2 1.7B Instruct Q4_K_M, official Qwen3 0.6B Q8_0,
-  and official Qwen2.5 1.5B Instruct Q4_K_M using the Issue 12 framework
-- Establish the missing immutable source-model revision for the SmolLM2
-  conversion before evaluating it, or produce an approved controlled conversion
-- Run repeated, equivalent configurations with blinded human semantic review
-- Record observational resource measurements on accurately described machines
-- Apply the documented critical-case vetoes without weakening them
-- Select an initial replaceable default only if a candidate qualifies;
-  otherwise explicitly defer the default
+Completed:
+
+- Excluded SmolLM2 because its immutable source-model revision and conversion
+  provenance remain incomplete
+- Verified and executed the two eligible official Qwen artifacts with the
+  pinned runtime and common pre-registered configuration
+- Preserved each first-run mechanical failure and marked the remaining 35
+  scheduled runs `not_run`
+- Recorded the limited observational resource measurements available from the
+  portable runner
+- Explicitly deferred the initial default because neither candidate passed the
+  mechanical gate; no semantic scoring was applicable
 
 ## 8. Local library storage foundation
 

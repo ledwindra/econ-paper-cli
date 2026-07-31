@@ -12,9 +12,10 @@ current CLI does not ingest PDFs, create Markdown, use SQLite, or build a
 production retrieval index.
 
 Issue 12 implements a configurable local `llama.cpp` subprocess adapter and a
-model-independent synthetic generation benchmark. It does not connect
-generation to the CLI, download artifacts, or approve a default model. Real
-model evaluation and the initial default-model decision remain Issue 13.
+model-independent synthetic generation benchmark. Issue 13 evaluated the two
+eligible candidates, but neither passed the first mechanical run; the initial
+default model is therefore explicitly deferred. Generation remains
+disconnected from the CLI, and the application does not download artifacts.
 
 ## Mission
 

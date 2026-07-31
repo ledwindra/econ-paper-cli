@@ -26,6 +26,9 @@ from econ_paper_cli.protocols import (
 )
 
 PROMPT_VERSION = "generation-v1"
+OUTPUT_GRAMMAR_SHA256 = (
+    "9250e1c3b625890912906f610d87c52f4595b9bbf69233744652ca1e35e556ff"
+)
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 _MODEL_ID_PATTERN = re.compile(r"[a-z0-9]+(?:[._-][a-z0-9]+)*")
 _MODEL_OUTPUT_FIELDS = frozenset(
@@ -39,7 +42,8 @@ _MODEL_OUTPUT_FIELDS = frozenset(
 )
 _RESOURCE_DIRECTORY = Path(__file__).with_name("resources")
 _PROMPT_TEMPLATE_PATH = _RESOURCE_DIRECTORY / f"{PROMPT_VERSION}.txt"
-_OUTPUT_SCHEMA_PATH = _RESOURCE_DIRECTORY / f"{PROMPT_VERSION}.schema.json"
+_OUTPUT_GRAMMAR_PATH = _RESOURCE_DIRECTORY / f"{PROMPT_VERSION}.gbnf"
+_COMPLETION_FOOTER = "\n> EOF by user"
 
 CancellationCheck = Callable[[], bool]
 
@@ -291,7 +295,7 @@ class SubprocessRunner:
 
 
 class LlamaCppGenerator:
-    """Concrete, replaceable ``Generator`` backed by a local ``llama-cli``."""
+    """Concrete, replaceable ``Generator`` backed by ``llama-completion``."""
 
     def __init__(
         self,
@@ -316,6 +320,7 @@ class LlamaCppGenerator:
             "context_size": self._config.context_size,
             "max_output_tokens": self._config.max_output_tokens,
             "model_sha256": self._config.model_sha256,
+            "output_grammar_sha256": OUTPUT_GRAMMAR_SHA256,
             "prompt_version": PROMPT_VERSION,
             "reasoning": "off",
             "seed": self._config.seed,
@@ -382,16 +387,20 @@ class LlamaCppGenerator:
             self.check_readiness()
 
         prompt = render_generation_prompt(request)
-        schema = _load_resource_text(_OUTPUT_SCHEMA_PATH, "output schema")
+        grammar = _load_resource_text(_OUTPUT_GRAMMAR_PATH, "output grammar")
+        if hashlib.sha256(grammar.encode("utf-8")).hexdigest() != OUTPUT_GRAMMAR_SHA256:
+            raise LlamaCppConfigurationError(
+                "Packaged output grammar does not match its expected fingerprint."
+            )
         with tempfile.TemporaryDirectory(prefix="econpapers-generation-") as directory:
             temporary_directory = Path(directory)
             prompt_path = temporary_directory / "prompt.txt"
-            schema_path = temporary_directory / "schema.json"
+            grammar_path = temporary_directory / "grammar.gbnf"
             _write_private_text_file(prompt_path, prompt)
-            _write_private_text_file(schema_path, schema)
+            _write_private_text_file(grammar_path, grammar)
             command = self._generation_command(
                 prompt_path=prompt_path,
-                schema_path=schema_path,
+                grammar_path=grammar_path,
             )
             result = self._run_process(command)
 
@@ -408,7 +417,7 @@ class LlamaCppGenerator:
             ) from error
 
     def _generation_command(
-        self, *, prompt_path: Path, schema_path: Path
+        self, *, prompt_path: Path, grammar_path: Path
     ) -> tuple[str, ...]:
         command = [
             str(self._config.executable_path),
@@ -416,15 +425,14 @@ class LlamaCppGenerator:
             str(self._config.model_path),
             "--file",
             str(prompt_path),
-            "--json-schema-file",
-            str(schema_path),
+            "--grammar-file",
+            str(grammar_path),
             "--offline",
             "--no-display-prompt",
-            "--log-disable",
-            "--no-show-timings",
+            "--log-file",
+            os.devnull,
             "--color",
             "off",
-            "--single-turn",
             "--simple-io",
             "--jinja",
             "--reasoning",
@@ -464,7 +472,7 @@ class LlamaCppGenerator:
     def _parse_response(
         self, request: GenerationRequest, raw_output: str
     ) -> GenerationResponse:
-        data = _parse_single_json_object(raw_output)
+        data = _parse_single_json_object(_strip_completion_footer(raw_output))
         provided = set(data)
         missing = sorted(_MODEL_OUTPUT_FIELDS - provided)
         unknown = sorted(provided - _MODEL_OUTPUT_FIELDS)
@@ -561,6 +569,13 @@ def _parse_single_json_object(raw_output: str) -> dict[str, object]:
     if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
         raise LlamaCppOutputError("Local model output must be one JSON object.")
     return cast(dict[str, object], value)
+
+
+def _strip_completion_footer(raw_output: str) -> str:
+    stripped = raw_output.rstrip()
+    if stripped.endswith(_COMPLETION_FOOTER):
+        return stripped[: -len(_COMPLETION_FOOTER)].rstrip()
+    return raw_output
 
 
 def _offline_environment() -> dict[str, str]:
