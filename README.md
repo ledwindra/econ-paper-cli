@@ -97,17 +97,28 @@ Inside the chat:
 > :quit
 ```
 
-## Planned local inference stack
+## Local inference adapter
 
-The current baseline is:
+The repository implements a configurable `llama-cli` subprocess adapter for
+the existing backend-independent `Generator` protocol. It uses explicit local
+paths, offline mode, a versioned evidence-only prompt, constrained JSON output,
+authoritative citation resolution, and final response validation. It does not
+download a runtime or model and is not yet connected to the CLI.
 
-- `llama.cpp`-compatible runtime;
-- quantized GGUF instruction model;
-- CPU-only support;
-- SmolLM2 1.7B Q4 as the initial default candidate;
-- Qwen3 0.6B Q4 as a smaller fallback candidate.
+`llama.cpp` b10199 is pinned for adapter compatibility testing and the initial
+Issue 13 comparison, not as a permanent product runtime. Three model artifacts
+are approved for evaluation only:
 
-These model choices are provisional. Exact artifacts, licenses, checksums, memory requirements, and prompt compatibility must be verified before release.
+- SmolLM2 1.7B Instruct Q4_K_M, conditional on completing its immutable
+  source-revision and conversion-provenance record;
+- official Qwen3 0.6B Q8_0; and
+- official Qwen2.5 1.5B Instruct Q4_K_M.
+
+No first-party Qwen3 0.6B Q4 GGUF was identified, correcting the earlier
+provisional wording. No default model has been approved. See
+[`docs/local-generation-evaluation.md`](docs/local-generation-evaluation.md)
+for exact revisions, checksums, licenses, adapter behavior, and the Issue 13
+evaluation gate.
 
 ## Corpus policy
 
@@ -232,14 +243,16 @@ backend-independent retrieval protocol (`Retriever`, `RetrievalRequest`,
 `validate_retrieval_results`), and a pure-Python BM25 baseline adapter
 (`BM25Retriever`) selected as the initial replaceable retrieval backend. It also
 defines a backend-independent generation protocol with structured requests,
-responses, citations, and explicit abstention validation. No concrete model
-adapter is implemented or connected to retrieval or the CLI. PDF/document
-ingestion, passage segmentation, Markdown generation, SQLite storage, local
-inference, and conversational execution remain unimplemented.
+responses, citations, and explicit abstention validation; a concrete,
+configurable local `llama-cli` adapter; and a fingerprinted CC0 synthetic
+generation benchmark with opt-in evaluation tooling. No default model is
+approved, and generation is not connected to retrieval or the CLI.
+PDF/document ingestion, passage segmentation, Markdown generation, SQLite
+storage, and conversational execution remain unimplemented.
 
 The immediate priorities are:
 
-1. implement and evaluate a concrete local-generation adapter in Issue 12;
+1. run real-model evaluation and decide or defer the default in Issue 13;
 2. add the database-independent storage foundation and SQLite adapter;
 3. implement automatic local PDF ingestion; and
 4. connect the approved library, retrieval, and generation components through

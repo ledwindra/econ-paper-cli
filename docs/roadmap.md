@@ -74,22 +74,40 @@ Not implemented:
 - Markdown export or retrieval-index persistence
 - Ingestion CLI syntax
 
-## 6. Local inference and synthesis (Issue 12 next)
+## 6. Local inference adapter and evaluation framework (Issue 12)
 
 Completed:
 - Replaceable backend-independent generation protocol
 - Immutable JSON-compatible generation request and response contracts
 - Structural citation membership and canonical-order validation
 - Explicit insufficient-evidence abstention contract
+- Configurable local `llama-cli` subprocess adapter with explicit model paths
+- Versioned evidence-only prompt and constrained JSON schema
+- Adapter-side authoritative citation resolution and response validation
+- Model-free fake-process, privacy, failure, and cross-platform tests
+- Fingerprinted twelve-case CC0 synthetic generation benchmark
+- Blinded semantic-review rubric and opt-in real-model evaluation tooling
+- Exact metadata for three Issue 13 evaluation candidates
 
 Not yet implemented:
-- Concrete local model adapter or default model selection
-- Semantic grounded-generation evaluation for factual support, causal
-  characterization, uncertainty, disagreement, and evidence sufficiency
+- Real-model semantic and resource evaluation
+- Initial default-model selection
 - Claim-level citation association or inline rendering
-- Approve a default model separately before adding download behavior
+- Artifact download or update behavior
 
-## 7. Local library storage foundation
+## 7. Real-model evaluation and default decision (Issue 13 next)
+
+- Evaluate SmolLM2 1.7B Instruct Q4_K_M, official Qwen3 0.6B Q8_0,
+  and official Qwen2.5 1.5B Instruct Q4_K_M using the Issue 12 framework
+- Establish the missing immutable source-model revision for the SmolLM2
+  conversion before evaluating it, or produce an approved controlled conversion
+- Run repeated, equivalent configurations with blinded human semantic review
+- Record observational resource measurements on accurately described machines
+- Apply the documented critical-case vetoes without weakening them
+- Select an initial replaceable default only if a candidate qualifies;
+  otherwise explicitly defer the default
+
+## 8. Local library storage foundation
 
 - Define the narrow, database-independent storage or repository protocol
 - Design and implement the SQLite schema using standard-library `sqlite3`
@@ -99,7 +117,7 @@ Not yet implemented:
 - Preserve stable compatibility with existing paper and passage identities
 - Keep source-derived records distinct from unique user state
 
-## 8. Automatic PDF ingestion
+## 9. Automatic PDF ingestion
 
 - Discover selected PDFs and directories without assuming `/papers/`
 - Compute checksums and implement deterministic duplicate and re-ingestion
@@ -111,7 +129,7 @@ Not yet implemented:
   retrieval state
 - Verify offline, restart-safe, and cross-platform behavior
 
-## 9. End-to-end MVP orchestration
+## 10. End-to-end MVP orchestration
 
 - Connect setup, status, update, chat, follow-up, and evidence inspection
 - Connect the approved library, ingestion, retrieval, and generation adapters

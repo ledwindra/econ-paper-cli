@@ -227,5 +227,31 @@ retrieval, generation, BM25, artifact, corpus, or evaluation contracts created
 by Issues 1 through 10. The frozen Issue 8 benchmark, fixture fingerprint,
 relevance judgments, and regression gates remain unchanged.
 
+Issue 12 implements `econ_paper_cli.adapters.llama_cpp.LlamaCppGenerator`, a
+concrete adapter for the existing backend-independent generation protocol. The
+adapter invokes an explicit local `llama-cli` path with `shell=False`, an
+explicit verified GGUF path, offline mode, a permission-restricted temporary
+prompt file, and the packaged `generation-v1` prompt and JSON schema. The
+model returns only answer text, citation IDs, abstention state, and answer-level
+finding kinds. The adapter resolves citation IDs into authoritative `Citation`
+objects, supplies its path-independent generation-method identity, constructs
+`GenerationResponse`, and calls `validate_generation_response`.
+
+Questions and evidence are not command-line arguments. Temporary prompt,
+schema, and capture files are cleaned on normal and exceptional paths. Output
+capture is bounded, normal errors omit captured content, and timeouts,
+cancellation, runtime exits, artifact failures, and invalid model output remain
+exceptions rather than abstentions. The adapter does not download artifacts,
+use hosted inference, or connect to retrieval or the CLI.
+
+`econ_paper_cli.evaluation.generation` adds a separate, fingerprinted CC0
+synthetic benchmark and structural evaluation boundary. Semantic grounding,
+causal characterization, uncertainty, disagreement, and substantive
+claim-to-response-citation support require blinded human review. The frozen
+Issue 8 retrieval benchmark remains unchanged. Exact runtime and candidate
+artifact metadata, benchmark design, review procedure, and the Issue 13
+decision gate are documented in
+[`docs/local-generation-evaluation.md`](local-generation-evaluation.md).
+
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.

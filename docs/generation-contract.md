@@ -3,12 +3,13 @@
 ## Purpose and boundary
 
 The generation contract defines the narrow, backend-independent boundary by
-which future application services can invoke a local language-model adapter.
-It does not select or implement a model, runtime, prompt, artifact, or CLI
-workflow.
+which application services can invoke a local language-model adapter. The
+contract does not select a model, runtime, prompt, artifact, or CLI workflow.
+Issue 12 implements one concrete adapter behind this unchanged boundary, while
+Issue 13 remains responsible for real-model evaluation and default selection.
 
 ```text
-Application Services -> Generator Protocol -> Future Local Adapter
+Application Services -> Generator Protocol -> Replaceable Local Adapter
                             |
                      GenerationRequest
                             |
@@ -122,9 +123,10 @@ do not establish factual correctness, claim-to-citation support, evidence
 sufficiency, causal validity, or faithful treatment of uncertainty,
 limitations, and disagreement.
 
-Future model adapters must receive instructions for those semantic duties, and
-future generation evaluation must measure them with representative synthetic
-cases. Structurally valid output can still be substantively wrong.
+Model adapters must receive instructions for those semantic duties, and
+generation evaluation must measure them with representative synthetic cases.
+Issue 12 adds that model-independent benchmark and a human-review procedure;
+structurally valid output can still be substantively wrong.
 
 ## Protocol
 
@@ -155,12 +157,31 @@ Errors identify the malformed field, evidence position, citation ID, expected
 paper or passage identity, rank-order violation, or inconsistent abstention
 state.
 
+## Concrete Issue 12 adapter
+
+`LlamaCppGenerator` preserves this contract exactly. Its model-facing schema
+contains only `answer_text`, `citation_ids`, `abstained`,
+`abstention_reason`, and answer-level `finding_kinds`. The adapter resolves
+rank-derived citation IDs to existing authoritative `Citation` objects,
+supplies `generation_method`, creates `GenerationResponse`, and invokes
+`validate_generation_response()`.
+
+This does not create claim-level citation associations. Human semantic review
+may judge whether each substantive claim is supported by at least one returned
+response-level citation, but the contract does not mechanically associate
+citations with sentences.
+
+The adapter uses explicit local executable and model paths and performs no
+downloads. Runtime, prompt, schema, privacy, failure, benchmark, artifact, and
+evaluation details are in
+[`docs/local-generation-evaluation.md`](local-generation-evaluation.md).
+
 ## Deferred work
 
-Issue 10 does not add a concrete generator, model selection, inference
-dependency, model artifact, download, prompt tuning, generation-quality claim,
+Issue 13 must run the approved candidates and either select an initial
+replaceable default or explicitly defer that decision. Model download,
 retrieval orchestration, CLI integration, conversational state, PDF ingestion,
-OCR, conversion, storage, segmentation, or indexing.
+OCR, conversion, storage, segmentation, and indexing remain unimplemented.
 
 The repository-root `papers/` directory is private future ingestion input. It
 is ignored by Git and is not a public corpus, test fixture, package resource, or

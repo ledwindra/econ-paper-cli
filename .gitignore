@@ -23,3 +23,9 @@ dist/
 
 # Private local paper input
 /papers/
+
+# Local model runtimes, weights, and empirical outputs
+/models/
+/runtimes/
+/generation-results/
+*.gguf
