@@ -205,6 +205,87 @@ Per-case scores, triggered vetoes, and reviewer notes must be preserved.
 If no candidate qualifies, Issue 13 must defer the default rather than weaken
 the gates.
 
+## Issue 13 pre-registered decision rule
+
+This rule is frozen before downloading or executing a candidate. SmolLM2 is
+excluded because its immutable source-model revision and conversion provenance
+remain incomplete. The controlled comparison covers the two eligible
+first-party artifacts: Qwen3 0.6B Q8_0 and Qwen2.5 1.5B Instruct Q4_K_M.
+
+Each candidate receives three runs of every benchmark case using two threads,
+a 4,096-token context, a 512-token output limit, seed 42, temperature 0.2,
+top-k 20, top-p 0.9, reasoning disabled, and the common 300-second timeout.
+The prompt, schema, benchmark, evidence order, runtime, and other generation
+settings remain unchanged.
+
+A candidate qualifies only when:
+
+- all 36 scheduled runs complete and produce contract-valid responses;
+- no run has malformed output, an unknown citation, a timeout, a nonzero
+  process exit, an output overflow, or another operational failure;
+- the required-abstention case abstains in all three runs;
+- the other eleven answerable cases do not fully abstain;
+- the partial-support case answers the supported attendance part and explicitly
+  withholds an unsupported test-score conclusion in every run;
+- no semantic dimension receives a score of 0;
+- its mean across all semantic scores is at least 1.80 out of 2;
+- each semantic-dimension mean is at least 1.75 out of 2;
+- each case mean across its three runs and five dimensions is at least 1.60 out
+  of 2;
+- every designated critical case passes every run without a veto;
+- at least two of three runs for each case have the same abstention state,
+  citation-ID tuple, and finding-kind tuple;
+- critical-case behavior is consistent across all three runs; and
+- the largest difference between repeated five-dimension score totals for one
+  case is no more than two points out of ten.
+
+### Semantic-dimension applicability
+
+Every succeeded run receives an integer score of 0, 1, or 2 for all five
+dimensions. `N/A` is not used. A null score means only that review has not yet
+occurred. When a dimension has no positive substantive claim to assess, the
+reviewer assigns:
+
+- 2 when the response correctly avoids unsupported content in that dimension;
+- 1 for a non-material ambiguity; or
+- 0 for an unsupported or materially misleading assertion.
+
+For the required-abstention case, claim support, citation support, causal
+characterization, and uncertainty or disagreement each receive 2 only when the
+response makes no substantive claim, returns no citation, adds no causal
+characterization, and invents no certainty or disagreement. Abstention or
+partial-answer appropriateness receives 2 only for a correct explicit
+abstention. Failure to abstain receives 0 and triggers the
+`required_abstention_failure` veto.
+
+Failed and not-run entries are not semantically scored. Their null score fields
+are excluded from mean calculations because the candidate has already failed
+the mechanical gate.
+
+### Failures, retries, and tie breaking
+
+The evaluator stops a candidate after its first run failure, preserves the
+failure in the technical report, marks every remaining scheduled run
+`not_run`, writes both report files, and returns a failing exit status. Failure
+records contain only a sanitized category, exception type, and a numeric exit
+status when applicable; they never contain captured model output.
+
+There are no selective retries. A documented external interruption permits one
+clean restart of the entire candidate. A shared evaluator or runtime defect
+stops the whole comparison and requires investigation followed by a clean
+rerun of every affected candidate after an approved correction. A
+candidate-specific failure does not prevent the other candidate from being
+evaluated.
+
+If multiple candidates qualify, compare, in order: highest minimum
+semantic-dimension mean, highest overall semantic mean, highest minimum
+per-case mean, highest structural-consistency rate, smaller verified model
+file, and lower median total latency. An unresolved tie requires an explicit
+maintainer decision or deferral. The default is also deferred if no candidate
+qualifies, fewer than two candidates can be compared fairly, review is
+incomplete or compromised, artifacts cannot be verified, the common
+configuration cannot run, or a tooling defect remains unresolved.
+
 ## Opt-in evaluation
 
 Ordinary `pytest` uses an injected fake process and never requires a model,
@@ -238,9 +319,18 @@ cannot measure them reliably. These resource observations are not correctness
 gates.
 
 The separate review file omits model/runtime identity, randomizes cases with a
-recorded seed, and contains blank scores, vetoes, notes, reviewer count, and
-procedure fields. The person coordinating Issue 13 must keep the mapping from
-candidate code to artifact away from reviewers until scoring is complete.
+recorded seed, includes each frozen evidence passage with its `e1`, `e2`, and
+later citation-ID mapping, and contains blank scores, vetoes, notes, reviewer
+count, and procedure fields. The person coordinating Issue 13 must keep the
+mapping from candidate code to artifact away from reviewers until scoring is
+complete.
+
+Each technical run has a `succeeded`, `failed`, or `not_run` status. On the
+first candidate run failure, the report records the sanitized failure and
+retains the complete scheduled-run ledger rather than discarding partial
+evidence. Review entries for failed and not-run attempts preserve their
+operational status but are not semantically scored. These additions define
+technical-report and blinded-review schema version 2.
 
 No hardware requirement may be derived from this synthetic benchmark or one
 development machine. Any later user guidance must name the measured hardware,
