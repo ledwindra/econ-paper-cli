@@ -142,14 +142,22 @@ def detect_pdf_sections(
         warnings_list,
     )
 
+    valid_intro = selected_intro
+    if (
+        selected_abstract is not None
+        and selected_intro is not None
+        and selected_intro.line_index <= selected_abstract.line_index
+    ):
+        valid_intro = None
+
     # Determine Abstract section boundaries
     if selected_abstract is not None:
-        if selected_intro is not None:
+        if valid_intro is not None:
             abstract_section = _build_section(
                 kind=PDFSectionKind.ABSTRACT,
                 heading_line=all_lines[selected_abstract.line_index],
                 start_line_index=selected_abstract.line_index + 1,
-                end_line_index=selected_intro.line_index,
+                end_line_index=valid_intro.line_index,
                 all_lines=all_lines,
                 extraction=extraction,
             )
@@ -524,6 +532,8 @@ def _build_section(
         return None
 
     section_text = "".join(text_parts)
+    if not section_text.strip():
+        return None
 
     return PDFSection(
         kind=kind,

@@ -305,13 +305,25 @@ def test_ambiguous_abstract_and_introduction_candidates_emit_warning_and_omit_se
 
 
 def test_empty_section_bodies_emit_empty_body_warnings() -> None:
-    p1 = "Abstract\n1. Introduction\n2. Data\nData text.\n"
+    p1 = "Abstract\n   \n\t  \n1. Introduction\n   \n2. Data\nData text.\n"
     result = detect_pdf_sections(_extraction(p1), settings=DEFAULT_PDF_SECTION_SETTINGS)
 
     codes = [w.code for w in result.warnings]
     assert PDFSectionWarningCode.EMPTY_ABSTRACT_BODY in codes
     assert PDFSectionWarningCode.EMPTY_INTRODUCTION_BODY in codes
     assert len(result.sections) == 0
+
+
+def test_introduction_preceding_abstract_emits_unresolved_abstract_boundary() -> None:
+    p1 = "Department Series\n1. Introduction\nSeries overview text.\n"
+    p2 = "Abstract\nReal abstract content.\n\n2. Data\nData text.\n"
+
+    result = detect_pdf_sections(
+        _extraction(p1, p2), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+
+    codes = [w.code for w in result.warnings]
+    assert PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY in codes
 
 
 def test_empty_pages_and_zero_page_results() -> None:

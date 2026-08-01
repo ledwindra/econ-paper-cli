@@ -376,13 +376,13 @@ class PDFSectionDetectionResult:
                     raise PDFSectionValidationError(
                         f"{warning.code.value} warning must be grounded by at least 1 Abstract candidate."
                     )
-                expected_pages = tuple(
-                    sorted(set(c.page_number for c in abstract_candidates))
-                )
-                if warning.page_numbers != expected_pages:
+                abstract_pages = set(c.page_number for c in abstract_candidates)
+                if not warning.page_numbers or not set(warning.page_numbers).issubset(
+                    abstract_pages
+                ):
                     raise PDFSectionValidationError(
                         f"{warning.code.value} page_numbers ({warning.page_numbers}) "
-                        f"do not match candidate page numbers ({expected_pages})."
+                        f"must be a non-empty subset of candidate page numbers ({tuple(sorted(abstract_pages))})."
                     )
 
             if warning.code is PDFSectionWarningCode.EMPTY_INTRODUCTION_BODY:
@@ -390,13 +390,13 @@ class PDFSectionDetectionResult:
                     raise PDFSectionValidationError(
                         f"{warning.code.value} warning must be grounded by at least 1 Introduction candidate."
                     )
-                expected_pages = tuple(
-                    sorted(set(c.page_number for c in intro_candidates))
-                )
-                if warning.page_numbers != expected_pages:
+                intro_pages = set(c.page_number for c in intro_candidates)
+                if not warning.page_numbers or not set(warning.page_numbers).issubset(
+                    intro_pages
+                ):
                     raise PDFSectionValidationError(
                         f"{warning.code.value} page_numbers ({warning.page_numbers}) "
-                        f"do not match candidate page numbers ({expected_pages})."
+                        f"must be a non-empty subset of candidate page numbers ({tuple(sorted(intro_pages))})."
                     )
 
             if warning.code in {
