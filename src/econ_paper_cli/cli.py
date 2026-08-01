@@ -1,5 +1,4 @@
-"""Command-line interface for the econpapers literature search application."""
-
+import sys
 from argparse import ArgumentParser
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -122,13 +121,19 @@ def build_parser() -> ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the command-line interface and return a process exit code."""
-    parser = build_parser()
-    arguments = parser.parse_args(argv)
-    handler: CommandHandler | None = getattr(arguments, "handler", None)
+    try:
+        parser = build_parser()
+        arguments = parser.parse_args(argv)
+        handler: CommandHandler | None = getattr(arguments, "handler", None)
 
-    if handler is None:
-        parser.print_help()
-        return 0
+        if handler is None:
+            parser.print_help()
+            return 0
 
-    code = handler(arguments)
-    return code if isinstance(code, int) else 0
+        code = handler(arguments)
+        return code if isinstance(code, int) else 0
+    except SystemExit:
+        raise
+    except Exception as err:
+        sys.stderr.write(f"Unexpected internal CLI error: {err}\n")
+        return 3

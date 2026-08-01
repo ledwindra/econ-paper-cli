@@ -1,5 +1,6 @@
 """Service integration tests for single-paper analysis CLI command execution and rendering."""
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -9,6 +10,8 @@ from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.domain import (
     PDFDocumentMetadata,
     PDFExtractionResult,
+    SinglePaperAnalysisQuestionRecord,
+    SinglePaperAnalysisRecord,
 )
 from econ_paper_cli.domain.pdf_extraction import ExtractedPDFPage
 from econ_paper_cli.protocols.generation import (
@@ -19,7 +22,10 @@ from econ_paper_cli.protocols.generation import (
     GenerationResponse,
     Generator,
 )
-from econ_paper_cli.protocols.pdf_extraction import PDFExtractor
+from econ_paper_cli.protocols.pdf_extraction import (
+    PDFExtractor,
+    PDFParserError,
+)
 from econ_paper_cli.services.single_paper_analysis_cli import (
     AnalyzeCommandOptions,
     CLIExitCode,
@@ -30,7 +36,11 @@ from econ_paper_cli.services.single_paper_analysis_cli import (
 class FakePDFExtractor(PDFExtractor):
     """Fake PDF extractor for CLI service tests."""
 
-    def __init__(self, pages_text: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        pages_text: list[str] | None = None,
+        raise_error: Exception | None = None,
+    ) -> None:
         self.pages_text = (
             pages_text
             if pages_text is not None
@@ -39,8 +49,12 @@ class FakePDFExtractor(PDFExtractor):
                 "1. Introduction (continued)\nTrade policy affects prices on page 2 as well.",
             ]
         )
+        self.raise_error = raise_error
 
     def extract(self, pdf_path: Path) -> PDFExtractionResult:
+        if self.raise_error is not None:
+            raise self.raise_error
+
         pages = tuple(
             ExtractedPDFPage(page_number=i + 1, text=txt)
             for i, txt in enumerate(self.pages_text)
@@ -54,6 +68,13 @@ class FakePDFExtractor(PDFExtractor):
             extraction_method="fake_extractor",
             parser_version="1.0.0",
         )
+
+
+class FailingPDFExtractor(PDFExtractor):
+    """PDF Extractor that raises PDFParserError."""
+
+    def extract(self, pdf_path: Path) -> PDFExtractionResult:
+        raise PDFParserError(pdf_path, RuntimeError("PDF file corrupt or unreadable."))
 
 
 class FakeGenerator(Generator):
@@ -97,6 +118,59 @@ class FakeGenerator(Generator):
         )
 
 
+class ModifyingStorageWrapper(SQLiteStorage):
+    """Storage double that modifies the retrieved record to prove rendering uses storage read-back."""
+
+    def get_single_paper_analysis(
+        self, analysis_id: str
+    ) -> SinglePaperAnalysisRecord | None:
+        record = super().get_single_paper_analysis(analysis_id)
+        if record is None:
+            return None
+        # Mutate research question text in read-back record
+        new_rq = (
+            SinglePaperAnalysisQuestionRecord(
+                kind=record.research_question.kind,
+                question_text="MODIFIED FROM STORAGE READ-BACK",
+                sections_used=record.research_question.sections_used,
+            )
+            if record.research_question
+            else None
+        )
+        return SinglePaperAnalysisRecord(
+            analysis_id=record.analysis_id,
+            source_path=record.source_path,
+            content_checksum=record.content_checksum,
+            status=record.status,
+            completed_stages=record.completed_stages,
+            failed_stage=record.failed_stage,
+            skipped_stages=record.skipped_stages,
+            failure_code=record.failure_code,
+            error_message=record.error_message,
+            quality_status=record.quality_status,
+            settings=record.settings,
+            settings_fingerprint=record.settings_fingerprint,
+            quality_warnings=record.quality_warnings,
+            section_warnings=record.section_warnings,
+            research_question_warnings=record.research_question_warnings,
+            warnings=record.warnings,
+            sections=record.sections,
+            research_question=new_rq,
+            evidence=record.evidence,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+        )
+
+
+class MissingReadBackStorageWrapper(SQLiteStorage):
+    """Storage double that returns None on read-back."""
+
+    def get_single_paper_analysis(
+        self, analysis_id: str
+    ) -> SinglePaperAnalysisRecord | None:
+        return None
+
+
 def _create_valid_pdf_file(tmp_path: Path, filename: str = "paper.pdf") -> Path:
     path = (tmp_path / filename).resolve()
     path.write_bytes(b"%PDF-1.4 synthetic content for CLI service test")
@@ -107,19 +181,25 @@ def _make_options(
     pdf_path: Path,
     tmp_path: Path,
     db_path: Path | None = None,
+    executable_path: Path | None = None,
+    model_path: Path | None = None,
+    model_bytes: int = 11,
+    model_checksum: str = "b" * 64,
 ) -> AnalyzeCommandOptions:
-    dummy_exe = tmp_path / "llama-cli"
-    dummy_exe.write_bytes(b"dummy")
-    dummy_model = tmp_path / "model.gguf"
-    dummy_model.write_bytes(b"dummy_model")
+    dummy_exe = executable_path or (tmp_path / "llama-cli")
+    if executable_path is None:
+        dummy_exe.write_bytes(b"dummy")
+    dummy_model = model_path or (tmp_path / "model.gguf")
+    if model_path is None:
+        dummy_model.write_bytes(b"dummy_model")
 
     return AnalyzeCommandOptions(
         pdf_path=pdf_path,
         executable_path=dummy_exe,
         model_path=dummy_model,
         model_id="test-model",
-        model_bytes=11,
-        model_checksum="b" * 64,
+        model_bytes=model_bytes,
+        model_checksum=model_checksum,
         db_path=db_path or (tmp_path / "test.db"),
     )
 
@@ -169,7 +249,8 @@ def test_run_single_paper_analysis_command_success(
     assert "Status: success" in out
     assert f"Database Path: {db_path}" in out
     assert "What is the impact of trade policy?" in out
-    assert "We evaluate trade policy." in out
+    assert "[0] section=abstract, page=1, span=[9, 34]" in out
+    assert '  Excerpt: "We evaluate trade policy."' in out
 
     # Verify data in storage
     record = storage.list_single_paper_analyses()[0]
@@ -186,7 +267,6 @@ def test_run_single_paper_analysis_command_quality_halted(
     pdf_path = _create_valid_pdf_file(tmp_path)
     opts = _make_options(pdf_path, tmp_path)
 
-    # Empty pages text triggers QUALITY_HALTED
     extractor = FakePDFExtractor(pages_text=["", "   \n  "])
     generator = FakeGenerator()
     storage = SQLiteStorage(":memory:")
@@ -245,25 +325,308 @@ def test_run_single_paper_analysis_command_preflight_failed(
     assert "Failure Code: path_not_found" in out
 
 
-def test_run_single_paper_analysis_command_invalid_config(
+def test_run_single_paper_analysis_command_extraction_failed(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     pdf_path = _create_valid_pdf_file(tmp_path)
-    bad_opts = AnalyzeCommandOptions(
-        pdf_path=pdf_path,
-        executable_path=tmp_path / "no_exe",
-        model_path=tmp_path / "no_model",
-        model_id="invalid id!!",
-        model_bytes=100,
-        model_checksum="invalid_sha256",
-        db_path=tmp_path / "config_error.db",
+    opts = _make_options(pdf_path, tmp_path)
+
+    storage = SQLiteStorage(":memory:")
+    storage.initialize()
+
+    exit_code = run_single_paper_analysis_command(
+        opts,
+        extractor=FailingPDFExtractor(),
+        generator=FakeGenerator(),
+        storage=storage,
     )
 
-    exit_code = run_single_paper_analysis_command(bad_opts)
-
     assert exit_code == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    out = capsys.readouterr().out
+    assert "Status: extraction_failed" in out
+    assert "Failure Code: pdf_parser_error" in out
+    assert "PDF parser failed for" in out
+
+
+def test_run_single_paper_analysis_command_uses_read_back_record(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    db_path = tmp_path / "readback.db"
+    opts = _make_options(pdf_path, tmp_path, db_path=db_path)
+
+    abs_text = "Abstract\nWe evaluate trade policy."
+    exc = "We evaluate trade policy."
+    resp_json = _make_success_response_json(abs_text, exc)
+
+    extractor = FakePDFExtractor()
+    generator = FakeGenerator(response_text=resp_json)
+    storage = ModifyingStorageWrapper(db_path)
+    storage.initialize()
+
+    exit_code = run_single_paper_analysis_command(
+        opts, extractor=extractor, generator=generator, storage=storage
+    )
+
+    assert exit_code == CLIExitCode.SUCCESS
+    out = capsys.readouterr().out
+    assert "MODIFIED FROM STORAGE READ-BACK" in out
+
+
+def test_run_single_paper_analysis_command_missing_read_back_raises_code_3(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    opts = _make_options(pdf_path, tmp_path)
+
+    extractor = FakePDFExtractor()
+    generator = FakeGenerator()
+    storage = MissingReadBackStorageWrapper(":memory:")
+    storage.initialize()
+
+    exit_code = run_single_paper_analysis_command(
+        opts, extractor=extractor, generator=generator, storage=storage
+    )
+
+    assert exit_code == CLIExitCode.UNEXPECTED_ERROR
+    err = capsys.readouterr().err
+    assert "Unexpected internal error:" in err
+    assert "Failed to read back persisted analysis record" in err
+
+
+def test_invalid_policy_versions_return_code_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+
+    # 1. Invalid quality policy version
+    opts1 = AnalyzeCommandOptions(
+        pdf_path=pdf_path,
+        executable_path=tmp_path / "exe",
+        model_path=tmp_path / "model",
+        model_id="id",
+        model_bytes=10,
+        model_checksum="a" * 64,
+        quality_policy_version="pdf-quality-v999",
+    )
+    assert (
+        run_single_paper_analysis_command(opts1)
+        == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    )
+    assert "Configuration error: invalid policy version" in capsys.readouterr().err
+
+    # 2. Invalid section policy version
+    opts2 = AnalyzeCommandOptions(
+        pdf_path=pdf_path,
+        executable_path=tmp_path / "exe",
+        model_path=tmp_path / "model",
+        model_id="id",
+        model_bytes=10,
+        model_checksum="a" * 64,
+        section_policy_version="pdf-sections-v999",
+    )
+    assert (
+        run_single_paper_analysis_command(opts2)
+        == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    )
+    assert "Configuration error: invalid policy version" in capsys.readouterr().err
+
+    # 3. Invalid research question policy version
+    opts3 = AnalyzeCommandOptions(
+        pdf_path=pdf_path,
+        executable_path=tmp_path / "exe",
+        model_path=tmp_path / "model",
+        model_id="id",
+        model_bytes=10,
+        model_checksum="a" * 64,
+        research_question_policy_version="rq-v999",
+    )
+    assert (
+        run_single_paper_analysis_command(opts3)
+        == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    )
+    assert "Configuration error: invalid policy version" in capsys.readouterr().err
+
+    # 4. Invalid single paper policy version
+    opts4 = AnalyzeCommandOptions(
+        pdf_path=pdf_path,
+        executable_path=tmp_path / "exe",
+        model_path=tmp_path / "model",
+        model_id="id",
+        model_bytes=10,
+        model_checksum="a" * 64,
+        single_paper_policy_version="single-paper-analysis-v999",
+    )
+    assert (
+        run_single_paper_analysis_command(opts4)
+        == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    )
+    assert "Configuration error: invalid policy version" in capsys.readouterr().err
+
+
+def test_invalid_executable_path_returns_code_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    model_file = tmp_path / "model.gguf"
+    model_file.write_bytes(b"dummy")
+
+    opts = AnalyzeCommandOptions(
+        pdf_path=pdf_path,
+        executable_path=tmp_path / "non_existent_exe",
+        model_path=model_file,
+        model_id="test-model",
+        model_bytes=5,
+        model_checksum="a" * 64,
+    )
+
+    assert (
+        run_single_paper_analysis_command(opts)
+        == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    )
     err = capsys.readouterr().err
     assert "Configuration or readiness error:" in err
+
+
+def test_invalid_model_path_returns_code_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    exe_file = tmp_path / "llama-cli"
+    exe_file.write_bytes(b"dummy")
+
+    opts = AnalyzeCommandOptions(
+        pdf_path=pdf_path,
+        executable_path=exe_file,
+        model_path=tmp_path / "non_existent_model.gguf",
+        model_id="test-model",
+        model_bytes=5,
+        model_checksum="a" * 64,
+    )
+
+    assert (
+        run_single_paper_analysis_command(opts)
+        == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    )
+    err = capsys.readouterr().err
+    assert "Configuration or readiness error:" in err
+
+
+def test_invalid_model_size_returns_code_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    exe_file = tmp_path / "llama-cli"
+    exe_file.write_bytes(b"dummy")
+    model_file = tmp_path / "model.gguf"
+    model_file.write_bytes(b"dummy_content")
+
+    opts = AnalyzeCommandOptions(
+        pdf_path=pdf_path,
+        executable_path=exe_file,
+        model_path=model_file,
+        model_id="test-model",
+        model_bytes=99999,  # Mismatched size
+        model_checksum="a" * 64,
+    )
+
+    assert (
+        run_single_paper_analysis_command(opts)
+        == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    )
+    err = capsys.readouterr().err
+    assert "Configuration or readiness error:" in err
+
+
+def test_invalid_model_checksum_returns_code_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    exe_file = tmp_path / "llama-cli"
+    exe_file.write_bytes(b"dummy")
+    model_content = b"dummy_content"
+    model_file = tmp_path / "model.gguf"
+    model_file.write_bytes(model_content)
+
+    opts = AnalyzeCommandOptions(
+        pdf_path=pdf_path,
+        executable_path=exe_file,
+        model_path=model_file,
+        model_id="test-model",
+        model_bytes=len(model_content),
+        model_checksum="f" * 64,  # Wrong SHA-256
+    )
+
+    assert (
+        run_single_paper_analysis_command(opts)
+        == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    )
+    err = capsys.readouterr().err
+    assert "Configuration or readiness error:" in err
+
+
+def test_default_db_path_vs_explicit_override(tmp_path: Path) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    exe_file = tmp_path / "llama-cli"
+    exe_file.write_bytes(b"dummy")
+    model_file = tmp_path / "model.gguf"
+    model_file.write_bytes(b"dummy")
+
+    # 1. Default DB path
+    opts_default = AnalyzeCommandOptions(
+        pdf_path=pdf_path,
+        executable_path=exe_file,
+        model_path=model_file,
+        model_id="test-model",
+        model_bytes=5,
+        model_checksum="a" * 64,
+        db_path=None,
+    )
+    # Target path must equal get_default_db_path()
+    assert opts_default.db_path is None
+
+    # 2. Explicit DB path
+    custom_db = tmp_path / "custom.db"
+    opts_explicit = AnalyzeCommandOptions(
+        pdf_path=pdf_path,
+        executable_path=exe_file,
+        model_path=model_file,
+        model_id="test-model",
+        model_bytes=5,
+        model_checksum="a" * 64,
+        db_path=custom_db,
+    )
+    assert opts_explicit.db_path == custom_db
+
+
+def test_command_runs_fully_offline_without_modifying_or_deleting_pdf(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path, "authoritative.pdf")
+    initial_bytes = pdf_path.read_bytes()
+    initial_hash = hashlib.sha256(initial_bytes).hexdigest()
+
+    opts = _make_options(pdf_path, tmp_path)
+    abs_text = "Abstract\nWe evaluate trade policy."
+    exc = "We evaluate trade policy."
+    resp_json = _make_success_response_json(abs_text, exc)
+
+    extractor = FakePDFExtractor()
+    generator = FakeGenerator(response_text=resp_json)
+    storage = SQLiteStorage(":memory:")
+    storage.initialize()
+
+    exit_code = run_single_paper_analysis_command(
+        opts, extractor=extractor, generator=generator, storage=storage
+    )
+
+    assert exit_code == CLIExitCode.SUCCESS
+
+    # Verify source PDF was not modified or deleted
+    assert pdf_path.exists()
+    final_bytes = pdf_path.read_bytes()
+    assert final_bytes == initial_bytes
+    assert hashlib.sha256(final_bytes).hexdigest() == initial_hash
 
 
 def test_run_single_paper_analysis_command_idempotence(

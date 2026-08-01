@@ -1,5 +1,6 @@
 """Application service and output rendering for the offline single-paper analysis CLI command."""
 
+import sqlite3
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,11 +18,15 @@ from econ_paper_cli.adapters.storage_paths import get_default_db_path
 from econ_paper_cli.domain import (
     DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     PDFQualitySettings,
+    PDFQualityValidationError,
     PDFSectionSettings,
+    PDFSectionValidationError,
     ResearchQuestionSettings,
+    ResearchQuestionValidationError,
     SinglePaperAnalysisRecord,
     SinglePaperAnalysisSettings,
     SinglePaperAnalysisStatus,
+    SinglePaperAnalysisValidationError,
 )
 from econ_paper_cli.protocols.generation import Generator
 from econ_paper_cli.protocols.pdf_extraction import PDFExtractor
@@ -137,120 +142,133 @@ def run_single_paper_analysis_command(
     storage: StorageBackend | None = None,
 ) -> int:
     """Execute single-paper analysis from CLI options and persist/render the record."""
-    target_db_path = (
-        options.db_path if options.db_path is not None else get_default_db_path()
-    )
-
-    # 1. Initialize storage and apply migrations
-    if storage is None:
-        db_adapter = SQLiteStorage(target_db_path)
+    try:
+        # 1. Build and validate settings
         try:
-            db_adapter.initialize()
-        except Exception as err:
-            sys.stderr.write(f"Database initialization failed: {err}\n")
-            return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
-        storage = db_adapter
-    else:
-        # Injected storage for testing: ensure initialized if it has initialize()
-        if hasattr(storage, "initialize"):
-            storage.initialize()
-
-    # 2. Build configuration & dependencies
-    if generator is None:
-        try:
-            cfg = LlamaCppConfig(
-                executable_path=options.executable_path,
-                model_path=options.model_path,
-                model_id=options.model_id,
-                model_expected_size_bytes=options.model_bytes,
-                model_sha256=options.model_checksum,
-                threads=options.threads,
-                timeout_seconds=options.timeout
-                if options.timeout is not None
-                else 300.0,
+            q_settings = (
+                PDFQualitySettings(policy_version=options.quality_policy_version)
+                if options.quality_policy_version
+                else DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.quality_settings
             )
-            gen = LlamaCppGenerator(cfg)
-            gen.verify_readiness()
-            generator = gen
+            sec_settings = (
+                PDFSectionSettings(policy_version=options.section_policy_version)
+                if options.section_policy_version
+                else DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.section_settings
+            )
+            rq_settings = (
+                ResearchQuestionSettings(
+                    policy_version=options.research_question_policy_version
+                )
+                if options.research_question_policy_version
+                else DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.research_question_settings
+            )
+            single_policy = (
+                options.single_paper_policy_version
+                if options.single_paper_policy_version
+                else DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.policy_version
+            )
+
+            settings = SinglePaperAnalysisSettings(
+                policy_version=single_policy,
+                quality_settings=q_settings,
+                section_settings=sec_settings,
+                research_question_settings=rq_settings,
+            )
         except (
-            LlamaCppConfigurationError,
-            LlamaCppReadinessError,
-            VerificationError,
+            PDFQualityValidationError,
+            PDFSectionValidationError,
+            ResearchQuestionValidationError,
+            SinglePaperAnalysisValidationError,
             ValueError,
-            FileNotFoundError,
         ) as err:
-            sys.stderr.write(f"Configuration or readiness error: {err}\n")
-            return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
-        except Exception as err:
-            sys.stderr.write(f"Unexpected generator error: {err}\n")
+            sys.stderr.write(f"Configuration error: invalid policy version: {err}\n")
             return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
 
-    if extractor is None:
-        extractor = PyPDFExtractor()
-
-    # 3. Construct settings
-    q_settings = (
-        PDFQualitySettings(policy_version=options.quality_policy_version)
-        if options.quality_policy_version
-        else DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.quality_settings
-    )
-    sec_settings = (
-        PDFSectionSettings(policy_version=options.section_policy_version)
-        if options.section_policy_version
-        else DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.section_settings
-    )
-    rq_settings = (
-        ResearchQuestionSettings(
-            policy_version=options.research_question_policy_version
+        target_db_path = (
+            options.db_path if options.db_path is not None else get_default_db_path()
         )
-        if options.research_question_policy_version
-        else DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.research_question_settings
-    )
-    single_policy = (
-        options.single_paper_policy_version
-        if options.single_paper_policy_version
-        else DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.policy_version
-    )
 
-    settings = SinglePaperAnalysisSettings(
-        policy_version=single_policy,
-        quality_settings=q_settings,
-        section_settings=sec_settings,
-        research_question_settings=rq_settings,
-    )
+        # 2. Initialize storage
+        if storage is None:
+            db_adapter = SQLiteStorage(target_db_path)
+            try:
+                db_adapter.initialize()
+            except (sqlite3.Error, OSError) as err:
+                sys.stderr.write(f"Database initialization failed: {err}\n")
+                return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+            storage = db_adapter
+        else:
+            if hasattr(storage, "initialize"):
+                storage.initialize()
 
-    # 4. Run five-stage analysis service
-    result = analyze_single_paper(
-        options.pdf_path,
-        extractor,
-        generator,
-        settings=settings,
-    )
+        # 3. Generator setup & readiness check
+        if generator is None:
+            try:
+                cfg = LlamaCppConfig(
+                    executable_path=options.executable_path,
+                    model_path=options.model_path,
+                    model_id=options.model_id,
+                    model_expected_size_bytes=options.model_bytes,
+                    model_sha256=options.model_checksum,
+                    threads=options.threads,
+                    timeout_seconds=options.timeout
+                    if options.timeout is not None
+                    else 300.0,
+                )
+                gen = LlamaCppGenerator(cfg)
+                gen.check_readiness()
+                generator = gen
+            except (
+                LlamaCppConfigurationError,
+                LlamaCppReadinessError,
+                VerificationError,
+                ValueError,
+                FileNotFoundError,
+            ) as err:
+                sys.stderr.write(f"Configuration or readiness error: {err}\n")
+                return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
 
-    # 5. Persist record to SQLite
-    record = save_single_paper_analysis_result(storage, result, settings=settings)
+        if extractor is None:
+            extractor = PyPDFExtractor()
 
-    # 6. Read back durable record from storage to guarantee rendering from storage
-    durable_record = storage.get_single_paper_analysis(record.analysis_id)
-    if durable_record is None:
-        durable_record = record
+        # 4. Run five-stage analysis service
+        result = analyze_single_paper(
+            options.pdf_path,
+            extractor,
+            generator,
+            settings=settings,
+        )
 
-    # 7. Render output
-    output_str = format_analysis_record_output(durable_record, target_db_path)
-    sys.stdout.write(f"{output_str}\n")
+        # 5. Persist record to SQLite
+        record = save_single_paper_analysis_result(storage, result, settings=settings)
 
-    # 8. Return exit code based on terminal status
-    if durable_record.status is SinglePaperAnalysisStatus.SUCCESS:
-        return CLIExitCode.SUCCESS
-    if durable_record.status in (
-        SinglePaperAnalysisStatus.QUALITY_HALTED,
-        SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED,
-    ):
-        return CLIExitCode.HALTED_OR_UNAVAILABLE
-    if durable_record.status in (
-        SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
-        SinglePaperAnalysisStatus.EXTRACTION_FAILED,
-    ):
-        return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+        # 6. Read back durable record from storage (MUST NOT fall back to transient object)
+        durable_record = storage.get_single_paper_analysis(record.analysis_id)
+        if durable_record is None:
+            raise RuntimeError(
+                f"Failed to read back persisted analysis record '{record.analysis_id}' from storage."
+            )
 
-    return CLIExitCode.UNEXPECTED_ERROR
+        # 7. Render output from durable_record
+        output_str = format_analysis_record_output(durable_record, target_db_path)
+        sys.stdout.write(f"{output_str}\n")
+
+        # 8. Return exit code based on terminal status
+        if durable_record.status is SinglePaperAnalysisStatus.SUCCESS:
+            return CLIExitCode.SUCCESS
+        if durable_record.status in (
+            SinglePaperAnalysisStatus.QUALITY_HALTED,
+            SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED,
+        ):
+            return CLIExitCode.HALTED_OR_UNAVAILABLE
+        if durable_record.status in (
+            SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
+            SinglePaperAnalysisStatus.EXTRACTION_FAILED,
+        ):
+            return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+
+        return CLIExitCode.UNEXPECTED_ERROR
+
+    except Exception as err:
+        sys.stderr.write(f"Unexpected internal error: {err}\n")
+        return CLIExitCode.UNEXPECTED_ERROR
