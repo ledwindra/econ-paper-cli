@@ -72,7 +72,6 @@ def extract_research_question(
             ResearchQuestionWarning(ResearchQuestionWarningCode.MISSING_SECTION)
         )
 
-    sections_used = tuple(sec.kind for sec in usable_sections)
     request = _build_generation_request(usable_sections)
 
     try:
@@ -98,10 +97,7 @@ def extract_research_question(
     if response.abstained:
         warnings = list(initial_warnings)
         warnings.append(
-            ResearchQuestionWarning(
-                ResearchQuestionWarningCode.GENERATION_FAILED,
-                "Model abstained from generating a response.",
-            )
+            ResearchQuestionWarning(ResearchQuestionWarningCode.MODEL_ABSTAINED)
         )
         return ResearchQuestionResult(
             policy_version=settings.policy_version,
@@ -145,6 +141,13 @@ def extract_research_question(
             evidence=(),
             warnings=_canonicalize_warnings(warnings),
         )
+
+    # Derive sections_used from validated evidence in canonical order
+    sections_used = tuple(
+        kind
+        for kind in (PDFSectionKind.ABSTRACT, PDFSectionKind.INTRODUCTION)
+        if any(item.section_kind is kind for item in validated_evidence)
+    )
 
     return ResearchQuestionResult(
         policy_version=settings.policy_version,

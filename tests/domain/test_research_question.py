@@ -131,10 +131,11 @@ def test_research_question_result_explicit_validation() -> None:
     with pytest.raises(ResearchQuestionValidationError, match="evidence"):
         replace(res, evidence=())
 
-    # Evidence section_kind must be in sections_used
+    # Evidence section_kind must match sections_used
     ev_intro = replace(ev, section_kind=PDFSectionKind.INTRODUCTION)
     with pytest.raises(
-        ResearchQuestionValidationError, match="not included in sections_used"
+        ResearchQuestionValidationError,
+        match="sections_used must exactly match",
     ):
         replace(res, evidence=(ev_intro,))
 
@@ -169,9 +170,10 @@ def test_research_question_result_unavailable_validation() -> None:
     with pytest.raises(ResearchQuestionValidationError, match="must be empty"):
         replace(res, evidence=(ev,))
 
-    # UNAVAILABLE requires at least one warning
+    # UNAVAILABLE requires at least one terminal warning
     with pytest.raises(
-        ResearchQuestionValidationError, match="must contain at least one warning"
+        ResearchQuestionValidationError,
+        match="must contain at least one terminal warning code",
     ):
         replace(res, warnings=())
 

@@ -21,6 +21,7 @@ class ResearchQuestionWarningCode(str, Enum):
     NO_USABLE_SECTIONS = "no_usable_sections"
     MISSING_SECTION = "missing_section"
     GENERATION_FAILED = "generation_failed"
+    MODEL_ABSTAINED = "model_abstained"
     MALFORMED_STRUCTURED_RESPONSE = "malformed_structured_response"
     UNGROUNDED_EVIDENCE = "ungrounded_evidence"
 
@@ -36,6 +37,9 @@ _WARNING_MESSAGES = {
     ResearchQuestionWarningCode.GENERATION_FAILED: (
         "Model generation failed during research question extraction."
     ),
+    ResearchQuestionWarningCode.MODEL_ABSTAINED: (
+        "Model abstained from generating a research question response due to insufficient evidence."
+    ),
     ResearchQuestionWarningCode.MALFORMED_STRUCTURED_RESPONSE: (
         "Model response was malformed or did not conform to the expected structured format."
     ),
@@ -46,6 +50,16 @@ _WARNING_MESSAGES = {
 _WARNING_ORDER = {
     code: position for position, code in enumerate(ResearchQuestionWarningCode)
 }
+
+_UNAVAILABLE_WARNING_CODES = frozenset(
+    {
+        ResearchQuestionWarningCode.NO_USABLE_SECTIONS,
+        ResearchQuestionWarningCode.GENERATION_FAILED,
+        ResearchQuestionWarningCode.MODEL_ABSTAINED,
+        ResearchQuestionWarningCode.MALFORMED_STRUCTURED_RESPONSE,
+        ResearchQuestionWarningCode.UNGROUNDED_EVIDENCE,
+    }
+)
 
 _CANONICAL_RESEARCH_QUESTION_SETTINGS: dict[str, dict[str, object]] = {
     "research-question-extraction-v1": {}
@@ -180,6 +194,8 @@ class ResearchQuestionResult:
                 "warnings must use canonical code order."
             )
 
+        warning_code_set = set(warning_codes)
+
         if self.kind is ResearchQuestionKind.UNAVAILABLE:
             if self.question_text is not None:
                 raise ResearchQuestionValidationError(
@@ -189,9 +205,9 @@ class ResearchQuestionResult:
                 raise ResearchQuestionValidationError(
                     "evidence must be empty when kind is UNAVAILABLE."
                 )
-            if not self.warnings:
+            if not any(code in _UNAVAILABLE_WARNING_CODES for code in warning_code_set):
                 raise ResearchQuestionValidationError(
-                    "Result with UNAVAILABLE kind must contain at least one warning."
+                    "Result with UNAVAILABLE kind must contain at least one terminal warning code."
                 )
         else:
             if (
@@ -209,13 +225,16 @@ class ResearchQuestionResult:
                 raise ResearchQuestionValidationError(
                     "evidence cannot be empty when question is available."
                 )
+            if any(code in _UNAVAILABLE_WARNING_CODES for code in warning_code_set):
+                raise ResearchQuestionValidationError(
+                    "Result with available research question cannot contain terminal warning codes."
+                )
 
-            used_set = set(self.sections_used)
-            for item in self.evidence:
-                if item.section_kind not in used_set:
-                    raise ResearchQuestionValidationError(
-                        f"Evidence section_kind '{item.section_kind.value}' was not included in sections_used."
-                    )
+            evidence_kinds = set(item.section_kind for item in self.evidence)
+            if set(self.sections_used) != evidence_kinds:
+                raise ResearchQuestionValidationError(
+                    "sections_used must exactly match the distinct section kinds present in evidence."
+                )
 
 
 def _validate_nonempty_text(field_name: str, value: object) -> None:

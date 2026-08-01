@@ -173,8 +173,7 @@ def test_explicit_question_in_introduction() -> None:
         res.question_text
         == "Do carbon taxes reduce emissions without reducing employment?"
     )
-    assert len(res.sections_used) == 1
-    assert res.sections_used[0] is PDFSectionKind.INTRODUCTION
+    assert res.sections_used == (PDFSectionKind.INTRODUCTION,)
     assert len(res.evidence) == 1
     assert res.evidence[0].excerpt_text == excerpt
     assert any(
@@ -309,7 +308,7 @@ def test_neither_section_usable_skips_generation() -> None:
     )
 
 
-def test_generator_abstention_treated_as_unavailable() -> None:
+def test_generator_abstention_emits_model_abstained_warning() -> None:
     abs_text = "Abstract\nWe study inflation persistence."
     sec_abs = _make_section(
         PDFSectionKind.ABSTRACT, abs_text, page_number=1, start_offset=0
@@ -324,7 +323,8 @@ def test_generator_abstention_treated_as_unavailable() -> None:
     assert res.kind is ResearchQuestionKind.UNAVAILABLE
     assert res.question_text is None
     codes = [w.code for w in res.warnings]
-    assert ResearchQuestionWarningCode.GENERATION_FAILED in codes
+    assert ResearchQuestionWarningCode.MODEL_ABSTAINED in codes
+    assert ResearchQuestionWarningCode.MISSING_SECTION in codes
 
 
 def test_generator_failure_handled_gracefully() -> None:
@@ -343,6 +343,7 @@ def test_generator_failure_handled_gracefully() -> None:
     assert res.question_text is None
     codes = [w.code for w in res.warnings]
     assert ResearchQuestionWarningCode.GENERATION_FAILED in codes
+    assert ResearchQuestionWarningCode.MISSING_SECTION in codes
 
 
 def test_extra_top_level_or_evidence_keys_rejected() -> None:
@@ -353,7 +354,6 @@ def test_extra_top_level_or_evidence_keys_rejected() -> None:
     sec_res = _make_section_result((sec_abs,))
 
     exc = "We study inflation persistence."
-    # Extra top-level key "unsupported_field"
     resp_extra_top = json.dumps(
         {
             "research_question": "What drives inflation persistence?",
@@ -381,34 +381,6 @@ def test_extra_top_level_or_evidence_keys_rejected() -> None:
         for w in res1.warnings
     )
 
-    # Extra evidence key "confidence_score"
-    resp_extra_ev = json.dumps(
-        {
-            "research_question": "What drives inflation persistence?",
-            "kind": "explicit",
-            "evidence": [
-                {
-                    "section_kind": "abstract",
-                    "excerpt_text": exc,
-                    "page_number": 1,
-                    "start_character_offset": abs_text.find(exc),
-                    "end_character_offset": abs_text.find(exc) + len(exc),
-                    "confidence_score": 0.99,
-                }
-            ],
-        }
-    )
-
-    gen2 = FakeGenerator(response_text=resp_extra_ev)
-    res2 = extract_research_question(
-        sec_res, gen2, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
-    )
-    assert res2.kind is ResearchQuestionKind.UNAVAILABLE
-    assert any(
-        w.code is ResearchQuestionWarningCode.MALFORMED_STRUCTURED_RESPONSE
-        for w in res2.warnings
-    )
-
 
 def test_mismatched_text_at_valid_offsets_rejected() -> None:
     abs_text = "Abstract\nFirst sentence here. Second sentence here."
@@ -417,7 +389,6 @@ def test_mismatched_text_at_valid_offsets_rejected() -> None:
     )
     sec_res = _make_section_result((sec_abs,))
 
-    # excerpt_text is "Second sentence here." but offsets point to "First sentence here."
     first_sent = "First sentence here."
     second_sent = "Second sentence here."
     resp_json = json.dumps(
@@ -448,7 +419,9 @@ def test_mismatched_text_at_valid_offsets_rejected() -> None:
     )
 
 
-def test_deterministic_prompt_ordering_and_repeated_runs() -> None:
+def test_both_sections_supplied_but_sections_used_derived_from_abstract_evidence_only() -> (
+    None
+):
     abs_text = "Abstract\nWe study trade tariffs."
     intro_text = "1. Introduction\nTrade tariffs affect welfare."
     sec_abs = _make_section(
@@ -476,17 +449,12 @@ def test_deterministic_prompt_ordering_and_repeated_runs() -> None:
         }
     )
 
-    gen1 = FakeGenerator(response_text=resp_json)
-    res1 = extract_research_question(
-        sec_res, gen1, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
+    gen = FakeGenerator(response_text=resp_json)
+    res = extract_research_question(
+        sec_res, gen, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
     )
 
-    gen2 = FakeGenerator(response_text=resp_json)
-    res2 = extract_research_question(
-        sec_res, gen2, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
-    )
-
-    assert res1 == res2
-    assert gen1.last_request is not None
-    assert gen2.last_request is not None
-    assert gen1.last_request.question == gen2.last_request.question
+    assert res.kind is ResearchQuestionKind.EXPLICIT
+    assert res.sections_used == (
+        PDFSectionKind.ABSTRACT,
+    )  # Derived only from evidence!

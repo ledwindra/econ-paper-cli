@@ -19,6 +19,7 @@ The research-question extraction service (`extract_research_question`) operates 
    - `no_usable_sections`: Neither section was completed or usable; generation was skipped.
    - `missing_section`: Only one section (Abstract or Introduction) was available.
    - `generation_failed`: Generator model execution failed or timed out.
+   - `model_abstained`: Generator model abstained from generating a response due to insufficient evidence.
    - `malformed_structured_response`: Model response was invalid JSON or lacked required fields.
    - `ungrounded_evidence`: Returned evidence text, offsets, or page numbers could not be grounded in source section spans.
 
