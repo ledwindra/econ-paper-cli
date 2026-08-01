@@ -67,3 +67,7 @@ class PDFQualityValidationError(DomainError):
 
 class PDFSectionValidationError(DomainError):
     """Raised when a PDF section-detection domain object fails validation."""
+
+
+class ResearchQuestionValidationError(DomainError):
+    """Raised when a research-question domain object fails validation."""

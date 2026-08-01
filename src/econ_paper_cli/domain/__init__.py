@@ -25,6 +25,7 @@ from econ_paper_cli.domain.errors import (
     PDFExtractionValidationError,
     PDFQualityValidationError,
     PDFSectionValidationError,
+    ResearchQuestionValidationError,
     StorageRecordValidationError,
 )
 from econ_paper_cli.domain.evidence import RetrievalEvidence
@@ -59,6 +60,15 @@ from econ_paper_cli.domain.pdf_sections import (
     PDFSectionSpan,
     PDFSectionWarning,
     PDFSectionWarningCode,
+)
+from econ_paper_cli.domain.research_question import (
+    DEFAULT_RESEARCH_QUESTION_SETTINGS,
+    ResearchQuestionEvidence,
+    ResearchQuestionKind,
+    ResearchQuestionResult,
+    ResearchQuestionSettings,
+    ResearchQuestionWarning,
+    ResearchQuestionWarningCode,
 )
 from econ_paper_cli.domain.storage import (
     ConversionSettings,
@@ -120,6 +130,14 @@ __all__ = [
     "DEFAULT_PDF_SECTION_SETTINGS",
     "PreflightCandidate",
     "RedistributionStatus",
+    "ResearchQuestionEvidence",
+    "ResearchQuestionKind",
+    "ResearchQuestionResult",
+    "ResearchQuestionSettings",
+    "ResearchQuestionValidationError",
+    "ResearchQuestionWarning",
+    "ResearchQuestionWarningCode",
+    "DEFAULT_RESEARCH_QUESTION_SETTINGS",
     "RetrievalEvidence",
     "SourceProvenance",
     "StorageRecordValidationError",
