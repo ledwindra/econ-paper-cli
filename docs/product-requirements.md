@@ -40,7 +40,21 @@ The MVP must:
   or disagreement;
 - avoid telemetry and uploads of queries, documents, or indexes by default; and
 - distribute only metadata, permitted derived artifacts, and content with
-  documented redistribution rights.
+## Single-PDF analysis workflow
+
+The `econpapers analyze` command runs an offline, local-first single-paper research-question analysis on one PDF document:
+
+```text
+econpapers analyze PDF_PATH --llama-cpp-path EXECUTABLE_PATH --model-path MODEL_PATH --model-id MODEL_ID --model-bytes BYTES --model-checksum SHA256 [OPTIONS]
+```
+
+It executes the five-stage workflow (`PREFLIGHT`, `EXTRACTION`, `QUALITY_ASSESSMENT`, `SECTION_DETECTION`, `QUESTION_EXTRACTION`), persists the result atomically in SQLite, reads back the durable record, and renders structured evidence and provenance to standard output.
+
+Process exit code semantics:
+- `0`: Successful research question extraction (`SUCCESS`).
+- `1`: Halted or unavailable analysis (`QUALITY_HALTED`, `QUESTION_EXTRACTION_HALTED`).
+- `2`: Expected preflight, extraction, input, or configuration failure (`PREFLIGHT_FAILED`, `EXTRACTION_FAILED`, invalid arguments or missing local models).
+- `3`: Unexpected internal process failure.
 
 ## Artifact requirements
 

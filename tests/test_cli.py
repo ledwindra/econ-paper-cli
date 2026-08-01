@@ -29,8 +29,39 @@ def test_help_lists_available_commands(capsys: pytest.CaptureFixture[str]) -> No
 
     assert exit_info.value.code == 0
     output = capsys.readouterr().out
-    for command in ("setup", "status", "chat", "update"):
+    for command in ("setup", "status", "chat", "update", "analyze"):
         assert command in output
+
+
+def test_analyze_help_lists_all_options(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["analyze", "--help"])
+
+    assert exit_info.value.code == 0
+    output = capsys.readouterr().out
+    for flag in (
+        "PDF_PATH",
+        "--llama-cpp-path",
+        "--model-path",
+        "--model-id",
+        "--model-bytes",
+        "--model-checksum",
+        "--threads",
+        "--timeout",
+        "--db-path",
+    ):
+        assert flag in output
+
+
+def test_analyze_missing_required_arguments_fails(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["analyze"])
+
+    assert exit_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "the following arguments are required" in err
 
 
 def test_no_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
