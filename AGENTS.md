@@ -33,7 +33,6 @@ For every issue:
 6. Update documentation when behavior changes.
 7. Run all applicable checks.
 8. Summarize what changed, why, and any remaining risks.
-9. Automatically set up a background monitor (`schedule`) to poll for new PR reviews and comments.
 
 Work on one issue per pull request.
 
@@ -163,7 +162,6 @@ Tests must not download models, papers, or indexes unless explicitly marked as i
 
 - Use small, descriptive commits.
 - Keep one issue per pull request.
-- Always submit changes via a dedicated feature branch and GitHub pull request (`gh pr create`) rather than pushing directly to `main`.
 - Do not rewrite unrelated history.
 - Do not modify lockfiles unless dependencies changed.
 - Never commit secrets, tokens, cookies, or personal paths.
