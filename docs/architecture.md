@@ -307,9 +307,18 @@ one ordered record per source page, including empty-text pages, plus optional ra
 document-information strings and parser provenance. The adapter normalizes only line
 endings, translates filesystem, encryption, malformed-file, and parser failures into
 typed protocol errors, and never modifies the source. The application-facing
-`extract_pdf` service requires explicit extractor injection. OCR, quality assessment,
-bibliographic normalization, Markdown conversion, passage creation, database writes,
-index updates, CLI syntax, and network enrichment remain unimplemented.
+`extract_pdf` service requires explicit extractor injection. OCR, bibliographic
+normalization, Markdown conversion, passage creation, database writes, index updates,
+CLI syntax, and network enrichment remain unimplemented.
+
+Issue 32 implements immutable extraction-quality settings, measurements, page
+observations, warning contracts, and document statuses in the domain layer. The pure
+`assess_pdf_extraction_quality` service accepts only a validated `PDFExtractionResult`
+and explicit versioned settings. It measures empty and sparse pages, text volume,
+control, replacement, and repeated-character anomalies, and page-text imbalance. The
+default thresholds and deterministic status precedence are specified in
+[`docs/pdf-quality-assessment.md`](pdf-quality-assessment.md). Assessment performs no
+OCR, parser retry, filesystem access, persistence, conversion, or text mutation.
 
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.

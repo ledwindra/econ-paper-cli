@@ -23,6 +23,7 @@ from econ_paper_cli.domain.errors import (
     PaperValidationError,
     PassageValidationError,
     PDFExtractionValidationError,
+    PDFQualityValidationError,
     StorageRecordValidationError,
 )
 from econ_paper_cli.domain.evidence import RetrievalEvidence
@@ -36,6 +37,16 @@ from econ_paper_cli.domain.pdf_extraction import (
     ExtractedPDFPage,
     PDFDocumentMetadata,
     PDFExtractionResult,
+)
+from econ_paper_cli.domain.pdf_quality import (
+    DEFAULT_PDF_QUALITY_SETTINGS,
+    PDFExtractionQualityAssessment,
+    PDFPageQualityObservation,
+    PDFQualityMeasurements,
+    PDFQualitySettings,
+    PDFQualityStatus,
+    PDFQualityWarning,
+    PDFQualityWarningCode,
 )
 from econ_paper_cli.domain.storage import (
     ConversionSettings,
@@ -76,6 +87,15 @@ __all__ = [
     "PDFDocumentMetadata",
     "PDFExtractionResult",
     "PDFExtractionValidationError",
+    "PDFExtractionQualityAssessment",
+    "PDFPageQualityObservation",
+    "PDFQualityMeasurements",
+    "PDFQualitySettings",
+    "PDFQualityStatus",
+    "PDFQualityValidationError",
+    "PDFQualityWarning",
+    "PDFQualityWarningCode",
+    "DEFAULT_PDF_QUALITY_SETTINGS",
     "PreflightCandidate",
     "RedistributionStatus",
     "RetrievalEvidence",

@@ -59,3 +59,7 @@ class IngestionReadError(IngestionError):
 
 class PDFExtractionValidationError(DomainError):
     """Raised when a PDF extraction domain object fails validation."""
+
+
+class PDFQualityValidationError(DomainError):
+    """Raised when a PDF extraction-quality domain object fails validation."""
