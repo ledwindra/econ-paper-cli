@@ -145,6 +145,13 @@ class PDFSection:
                 "end_page_number must match the last span's page_number."
             )
 
+        total_span_chars = sum(span.character_count for span in self.spans)
+        if len(self.text) != total_span_chars:
+            raise PDFSectionValidationError(
+                f"text length ({len(self.text)}) does not match total character count "
+                f"of spans ({total_span_chars})."
+            )
+
         previous_page = 0
         previous_end_offset = 0
         for span in self.spans:
@@ -200,6 +207,10 @@ class PDFSectionDetectionResult:
 
     def __post_init__(self) -> None:
         _validate_nonempty_text("policy_version", self.policy_version)
+        if self.policy_version not in _CANONICAL_SECTION_SETTINGS:
+            raise PDFSectionValidationError(
+                f"policy_version '{self.policy_version}' is not a recognized policy version."
+            )
         if not isinstance(self.sections, tuple) or not all(
             isinstance(section, PDFSection) for section in self.sections
         ):
@@ -227,6 +238,64 @@ class PDFSectionDetectionResult:
             != warning_codes
         ):
             raise PDFSectionValidationError("warnings must use canonical code order.")
+
+        warning_code_set = set(warning_codes)
+        has_sections = len(self.sections) > 0
+        section_kinds_set = set(section_kinds)
+
+        if PDFSectionWarningCode.NO_PAGES in warning_code_set and has_sections:
+            raise PDFSectionValidationError(
+                "NO_PAGES warning contradicts presence of sections."
+            )
+        if PDFSectionWarningCode.ALL_PAGES_EMPTY in warning_code_set and has_sections:
+            raise PDFSectionValidationError(
+                "ALL_PAGES_EMPTY warning contradicts presence of sections."
+            )
+
+        if PDFSectionKind.ABSTRACT in section_kinds_set:
+            if PDFSectionWarningCode.MISSING_ABSTRACT in warning_code_set:
+                raise PDFSectionValidationError(
+                    "MISSING_ABSTRACT warning contradicts presence of Abstract section."
+                )
+        elif (
+            PDFSectionWarningCode.NO_PAGES not in warning_code_set
+            and PDFSectionWarningCode.ALL_PAGES_EMPTY not in warning_code_set
+        ):
+            if PDFSectionWarningCode.MISSING_ABSTRACT not in warning_code_set:
+                raise PDFSectionValidationError(
+                    "Result missing Abstract section must include MISSING_ABSTRACT warning."
+                )
+
+        if PDFSectionKind.INTRODUCTION in section_kinds_set:
+            if PDFSectionWarningCode.MISSING_INTRODUCTION in warning_code_set:
+                raise PDFSectionValidationError(
+                    "MISSING_INTRODUCTION warning contradicts presence of Introduction section."
+                )
+        elif (
+            PDFSectionWarningCode.NO_PAGES not in warning_code_set
+            and PDFSectionWarningCode.ALL_PAGES_EMPTY not in warning_code_set
+        ):
+            if PDFSectionWarningCode.MISSING_INTRODUCTION not in warning_code_set:
+                raise PDFSectionValidationError(
+                    "Result missing Introduction section must include MISSING_INTRODUCTION warning."
+                )
+
+        if len(self.sections) > 1:
+            prev_sec = self.sections[0]
+            for curr_sec in self.sections[1:]:
+                if curr_sec.start_page_number < prev_sec.end_page_number:
+                    raise PDFSectionValidationError(
+                        "sections must be ordered and non-overlapping."
+                    )
+                if (
+                    curr_sec.start_page_number == prev_sec.end_page_number
+                    and curr_sec.spans[0].start_character_offset
+                    < prev_sec.spans[-1].end_character_offset
+                ):
+                    raise PDFSectionValidationError(
+                        "sections on the same page cannot overlap."
+                    )
+                prev_sec = curr_sec
 
 
 def _validate_nonempty_text(field_name: str, value: object) -> None:

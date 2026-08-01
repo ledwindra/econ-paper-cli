@@ -77,7 +77,6 @@ def test_abstract_and_introduction_same_page() -> None:
     assert "Labor mobility is a key factor" in intro_sec.text
     assert "2. Empirical Framework" not in intro_sec.text
 
-    # Verify spans on same page do not overlap
     assert (
         abs_sec.spans[0].end_character_offset
         <= intro_sec.spans[0].start_character_offset
@@ -125,6 +124,25 @@ def test_introduction_heading_variations(heading_text: str) -> None:
     intro = result.sections[1]
     assert intro.heading_text == heading_text
     assert "introduction text" in intro.text
+
+
+def test_numbered_prose_and_list_items_do_not_truncate_introduction() -> None:
+    p1 = (
+        "1. Introduction\n"
+        "2 million households received the transfer under the new social policy.\n"
+        "2. We next estimate the empirical model across municipalities.\n"
+        "2. In this section we present the main policy background.\n"
+        "Further introduction prose continues here.\n\n"
+        "2. Data\n"
+        "We describe the data sources.\n"
+    )
+    result = detect_pdf_sections(_extraction(p1), settings=DEFAULT_PDF_SECTION_SETTINGS)
+
+    intro = next(s for s in result.sections if s.kind is PDFSectionKind.INTRODUCTION)
+    assert "2 million households received" in intro.text
+    assert "2. We next estimate" in intro.text
+    assert "2. In this section we present" in intro.text
+    assert "2. Data" not in intro.text
 
 
 def test_multipage_section_content_preserves_page_boundaries_and_offsets() -> None:
@@ -180,27 +198,41 @@ def test_heading_words_embedded_in_prose_are_ignored() -> None:
     assert "real introduction heading" in intro_sec.text
 
 
-def test_toc_lines_ignored_as_heading_candidates() -> None:
-    p1 = "Table of Contents\nAbstract ............................ 2\n1. Introduction .................... 3\n\nAbstract\nActual abstract text.\n\n1. Introduction\nActual intro text.\n\n2. Data\nData text.\n"
-    result = detect_pdf_sections(_extraction(p1), settings=DEFAULT_PDF_SECTION_SETTINGS)
+def test_toc_lines_and_running_headers_ignored_for_body_heading_selection() -> None:
+    p1 = "Table of Contents\nAbstract ............................ 2\n1. Introduction .................... 3\n\nAbstract\nActual abstract text.\n"
+    p2 = "Abstract\n1. Introduction\nActual intro text.\n\n2. Data\nData text.\n"
 
-    assert len(result.sections) == 2
-    assert result.sections[0].heading_text == "Abstract"
-    assert "Actual abstract text" in result.sections[0].text
-    assert result.sections[1].heading_text == "1. Introduction"
-    assert "Actual intro text" in result.sections[1].text
-
-
-def test_duplicate_heading_candidates_emit_warning() -> None:
-    p1 = "Abstract\nFirst abstract text.\n"
-    p2 = "Abstract\nSecond abstract text.\n\n1. Introduction\nIntro text.\n\n2. Data\nData text.\n"
-
+    # p2 line "Abstract" at top of page 2 is a running header appearing on multiple pages
     result = detect_pdf_sections(
         _extraction(p1, p2), settings=DEFAULT_PDF_SECTION_SETTINGS
     )
 
+    assert len(result.sections) == 2
+    abs_sec = result.sections[0]
+    intro_sec = result.sections[1]
+
+    assert abs_sec.heading_text == "Abstract"
+    assert "Actual abstract text" in abs_sec.text
+    assert intro_sec.heading_text == "1. Introduction"
+    assert "Actual intro text" in intro_sec.text
+
+
+def test_ambiguous_abstract_and_introduction_candidates_emit_warning_and_omit_section() -> (
+    None
+):
+    p1 = "\nAbstract\nFirst abstract text.\n"
+    p2 = "\nAbstract\nSecond abstract text.\n"
+    p3 = "\n1. Introduction\nFirst intro text.\n"
+    p4 = "\n1. Introduction\nSecond intro text.\n\n2. Data\nData text.\n"
+
+    result = detect_pdf_sections(
+        _extraction(p1, p2, p3, p4), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+
     codes = tuple(w.code for w in result.warnings)
-    assert PDFSectionWarningCode.DUPLICATE_ABSTRACT_CANDIDATES in codes
+    assert PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES in codes
+    assert PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES in codes
+    assert len(result.sections) == 0
 
 
 def test_empty_pages_and_zero_page_results() -> None:

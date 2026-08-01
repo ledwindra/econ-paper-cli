@@ -37,22 +37,27 @@ def test_section_span_validation() -> None:
         )
 
 
-def test_section_validation() -> None:
+def test_section_validation_enforces_exact_text_length_and_span_alignment() -> None:
     span1 = PDFSectionSpan(
-        page_number=1, start_character_offset=10, end_character_offset=50
+        page_number=1, start_character_offset=0, end_character_offset=20
     )
     span2 = PDFSectionSpan(
-        page_number=2, start_character_offset=0, end_character_offset=30
+        page_number=2, start_character_offset=0, end_character_offset=15
     )
+    valid_text = "A" * 35
+
     section = PDFSection(
         kind=PDFSectionKind.ABSTRACT,
         heading_text="Abstract",
         start_page_number=1,
         end_page_number=2,
         spans=(span1, span2),
-        text="Sample abstract text spanning two pages.",
+        text=valid_text,
     )
     assert section.kind is PDFSectionKind.ABSTRACT
+
+    with pytest.raises(PDFSectionValidationError, match="text length"):
+        replace(section, text="Short text")
 
     with pytest.raises(PDFSectionValidationError, match="heading_text"):
         replace(section, heading_text="   ")
@@ -91,8 +96,9 @@ def test_settings_canonical_binding() -> None:
 
 
 def test_section_detection_result_validation() -> None:
+    text = "Sample text 40 chars long string here..."
     span = PDFSectionSpan(
-        page_number=1, start_character_offset=10, end_character_offset=50
+        page_number=1, start_character_offset=0, end_character_offset=len(text)
     )
     section = PDFSection(
         kind=PDFSectionKind.ABSTRACT,
@@ -100,28 +106,73 @@ def test_section_detection_result_validation() -> None:
         start_page_number=1,
         end_page_number=1,
         spans=(span,),
-        text="Sample text",
+        text=text,
     )
+    intro_span = PDFSectionSpan(
+        page_number=2, start_character_offset=0, end_character_offset=len(text)
+    )
+    intro_section = PDFSection(
+        kind=PDFSectionKind.INTRODUCTION,
+        heading_text="Introduction",
+        start_page_number=2,
+        end_page_number=2,
+        spans=(intro_span,),
+        text=text,
+    )
+
     result = PDFSectionDetectionResult(
         policy_version="pdf-section-detection-v1",
-        sections=(section,),
+        sections=(section, intro_section),
         warnings=(),
     )
-    assert result.sections[0].kind is PDFSectionKind.ABSTRACT
+    assert len(result.sections) == 2
+
+    with pytest.raises(
+        PDFSectionValidationError, match="not a recognized policy version"
+    ):
+        PDFSectionDetectionResult(
+            policy_version="unrecognized-v2",
+            sections=(),
+            warnings=(PDFSectionWarning(PDFSectionWarningCode.NO_PAGES),),
+        )
 
     with pytest.raises(PDFSectionValidationError, match="unique in sections"):
         PDFSectionDetectionResult(
             policy_version="pdf-section-detection-v1",
             sections=(section, section),
+            warnings=(PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION),),
+        )
+
+    with pytest.raises(
+        PDFSectionValidationError, match="contradicts presence of Abstract"
+    ):
+        PDFSectionDetectionResult(
+            policy_version="pdf-section-detection-v1",
+            sections=(section, intro_section),
+            warnings=(PDFSectionWarning(PDFSectionWarningCode.MISSING_ABSTRACT),),
+        )
+
+    with pytest.raises(
+        PDFSectionValidationError, match="contradicts presence of sections"
+    ):
+        PDFSectionDetectionResult(
+            policy_version="pdf-section-detection-v1",
+            sections=(section,),
+            warnings=(PDFSectionWarning(PDFSectionWarningCode.NO_PAGES),),
+        )
+
+    with pytest.raises(
+        PDFSectionValidationError, match="must include MISSING_ABSTRACT"
+    ):
+        PDFSectionDetectionResult(
+            policy_version="pdf-section-detection-v1",
+            sections=(intro_section,),
             warnings=(),
         )
 
-    w1 = PDFSectionWarning(PDFSectionWarningCode.MISSING_ABSTRACT)
-    w2 = PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION)
-
-    with pytest.raises(PDFSectionValidationError, match="canonical code order"):
+    with pytest.raises(PDFSectionValidationError, match="ordered and non-overlapping"):
         PDFSectionDetectionResult(
             policy_version="pdf-section-detection-v1",
-            sections=(),
-            warnings=(w2, w1),
+            sections=(intro_section, section),
+            warnings=(),
         )
