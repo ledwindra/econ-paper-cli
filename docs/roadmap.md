@@ -133,11 +133,13 @@ Completed:
   a replaceable parser protocol
 - Preserve canonical source paths, page boundaries, parser provenance, and typed
   failures for missing, unreadable, malformed, and password-encrypted PDFs
+- Assess successful extraction results through immutable versioned settings,
+  deterministic measurements and statuses, and stable actionable warnings
 
 Not yet implemented:
 
 - Connect preflight eligibility decisions to extraction orchestration
-- Add supported OCR, extraction-quality reporting, and actionable failures
+- Add supported OCR and connect extraction-quality outcomes to orchestration
 - Generate inspectable Markdown and stable passages with complete provenance
 - Populate SQLite through the storage protocol and refresh rebuildable
   retrieval state
