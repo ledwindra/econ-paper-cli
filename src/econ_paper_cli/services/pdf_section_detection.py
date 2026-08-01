@@ -179,10 +179,10 @@ def detect_pdf_sections(
             )
 
     # Determine Introduction section boundaries
-    if selected_intro is not None:
+    if valid_intro is not None:
         next_section_candidate = _find_next_section_candidate(
             all_lines,
-            start_index=selected_intro.line_index + 1,
+            start_index=valid_intro.line_index + 1,
             running_headers=running_headers,
         )
         if next_section_candidate is not None:
@@ -195,8 +195,8 @@ def detect_pdf_sections(
 
         intro_section = _build_section(
             kind=PDFSectionKind.INTRODUCTION,
-            heading_line=all_lines[selected_intro.line_index],
-            start_line_index=selected_intro.line_index + 1,
+            heading_line=all_lines[valid_intro.line_index],
+            start_line_index=valid_intro.line_index + 1,
             end_line_index=end_line_index,
             all_lines=all_lines,
             extraction=extraction,
@@ -207,7 +207,7 @@ def detect_pdf_sections(
             warnings_list.append(
                 PDFSectionWarning(
                     PDFSectionWarningCode.EMPTY_INTRODUCTION_BODY,
-                    (all_lines[selected_intro.line_index].page_number,),
+                    (all_lines[valid_intro.line_index].page_number,),
                 )
             )
 

@@ -324,6 +324,8 @@ def test_introduction_preceding_abstract_emits_unresolved_abstract_boundary() ->
 
     codes = [w.code for w in result.warnings]
     assert PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY in codes
+    assert PDFSectionWarningCode.MISSING_INTRODUCTION in codes
+    assert len(result.sections) == 0
 
 
 def test_empty_pages_and_zero_page_results() -> None:
