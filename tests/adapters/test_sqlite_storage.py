@@ -489,7 +489,7 @@ def test_v1_empty_database_migration(tmp_path: Path) -> None:
 
     storage = SQLiteStorage(db_file)
     storage.initialize()
-    assert storage.get_schema_version() == 2
+    assert storage.get_schema_version() == CURRENT_SCHEMA_VERSION
     assert storage.count_papers() == 0
     storage.close()
 
@@ -661,7 +661,7 @@ def test_v1_populated_database_with_provenance_migrates_successfully(
 
     storage = SQLiteStorage(db_file)
     storage.initialize()
-    assert storage.get_schema_version() == 2
+    assert storage.get_schema_version() == CURRENT_SCHEMA_VERSION
 
     # Verify existing provenance values survived without alteration or error
     rec = storage.get_paper_record("paper.v1")
