@@ -10,6 +10,7 @@ from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.domain import Paper, Passage
 from econ_paper_cli.domain.errors import (
     IngestionEmptyDirectoryError,
+    IngestionInvalidPathError,
     IngestionPathNotFoundError,
     IngestionUnsupportedFileError,
 )
@@ -238,6 +239,20 @@ def test_empty_directory_raises_empty_directory_error(tmp_path: Path) -> None:
 
     with pytest.raises(IngestionEmptyDirectoryError, match="No supported PDF files"):
         run_ingestion_preflight(empty_dir)
+
+
+def test_existing_path_that_is_neither_file_nor_directory_raises_invalid_path_error(
+    tmp_path: Path,
+) -> None:
+    import os
+
+    fifo_path = tmp_path / "test.fifo"
+    os.mkfifo(fifo_path)
+
+    with pytest.raises(
+        IngestionInvalidPathError, match="is not a regular file or directory"
+    ):
+        run_ingestion_preflight(fifo_path)
 
 
 def test_batch_duplicate_files_with_identical_bytes(tmp_path: Path) -> None:

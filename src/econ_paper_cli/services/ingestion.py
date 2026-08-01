@@ -57,6 +57,11 @@ def run_ingestion_preflight(
             raise IngestionPathNotFoundError(
                 f"Target path for ingestion does not exist: '{expanded_path}'."
             )
+        resolved_target = expanded_path.resolve()
+        is_file = resolved_target.is_file()
+        is_dir = resolved_target.is_dir()
+    except IngestionPathNotFoundError:
+        raise
     except PermissionError as err:
         raise IngestionPermissionError(
             f"Permission denied accessing '{expanded_path}': {err}."
@@ -66,15 +71,13 @@ def run_ingestion_preflight(
             f"Read error checking path '{expanded_path}': {err}."
         ) from err
 
-    resolved_target = expanded_path.resolve()
-
-    if resolved_target.is_file():
+    if is_file:
         if resolved_target.suffix.lower() != ".pdf":
             raise IngestionUnsupportedFileError(
                 f"Specified file '{resolved_target}' is not a supported PDF document (.pdf)."
             )
         pdf_paths = [resolved_target]
-    elif resolved_target.is_dir():
+    elif is_dir:
         try:
             # Recursively discover all regular files ending with .pdf (case-insensitive)
             discovered = [

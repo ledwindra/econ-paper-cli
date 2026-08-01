@@ -76,6 +76,17 @@ class IngestionPreflightResult:
             raise IngestionValidationError(
                 "candidates must be a tuple of PreflightCandidate instances."
             )
+        for field_name, val in (
+            ("new_candidate_count", self.new_candidate_count),
+            ("stored_candidate_count", self.stored_candidate_count),
+            ("batch_duplicate_count", self.batch_duplicate_count),
+            ("total_candidate_count", self.total_candidate_count),
+        ):
+            if isinstance(val, bool) or not isinstance(val, int) or val < 0:
+                raise IngestionValidationError(
+                    f"{field_name} must be a non-negative int (got {val!r})."
+                )
+
         expected_new = sum(
             1 for c in self.candidates if not c.is_stored and not c.is_batch_duplicate
         )

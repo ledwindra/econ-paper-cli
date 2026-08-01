@@ -167,3 +167,25 @@ def test_ingestion_preflight_result_validation_errors() -> None:
             batch_duplicate_count=1,
             total_candidate_count=1,
         )
+
+    # Boolean counts must be rejected (True == 1 in Python but not a valid int count)
+    with pytest.raises(IngestionValidationError, match="must be a non-negative int"):
+        IngestionPreflightResult(
+            target_path=target,
+            candidates=(candidate,),
+            new_candidate_count=True,  # type: ignore[arg-type]
+            stored_candidate_count=0,
+            batch_duplicate_count=0,
+            total_candidate_count=1,
+        )
+
+    # Float counts must be rejected (1.0 == 1 in Python but not a valid int count)
+    with pytest.raises(IngestionValidationError, match="must be a non-negative int"):
+        IngestionPreflightResult(
+            target_path=target,
+            candidates=(candidate,),
+            new_candidate_count=1.0,  # type: ignore[arg-type]
+            stored_candidate_count=0,
+            batch_duplicate_count=0,
+            total_candidate_count=1,
+        )
