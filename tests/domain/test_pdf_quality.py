@@ -83,31 +83,47 @@ def test_settings_reject_blank_version_and_contradictory_thresholds() -> None:
         )
 
 
-def test_settings_reject_reusing_policy_version_with_different_thresholds() -> None:
-    with pytest.raises(PDFQualityValidationError, match="already bound"):
+def test_settings_reject_modified_canonical_thresholds_or_unrecognized_version() -> (
+    None
+):
+    with pytest.raises(
+        PDFQualityValidationError, match="bound to a canonical threshold set"
+    ):
         PDFQualitySettings(
             policy_version="pdf-extraction-quality-v1",
             high_empty_page_ratio_threshold=0.75,
         )
 
-    v2 = PDFQualitySettings(
-        policy_version="test-policy-v2",
-        high_empty_page_ratio_threshold=0.75,
-    )
-    assert v2.high_empty_page_ratio_threshold == 0.75
+    with pytest.raises(
+        PDFQualityValidationError, match="not a recognized policy version"
+    ):
+        PDFQualitySettings(policy_version="unrecognized-policy-v2")
 
-    # Re-instantiating with identical thresholds succeeds
-    v2_same = PDFQualitySettings(
-        policy_version="test-policy-v2",
-        high_empty_page_ratio_threshold=0.75,
-    )
-    assert v2_same == v2
 
-    with pytest.raises(PDFQualityValidationError, match="already bound"):
-        PDFQualitySettings(
-            policy_version="test-policy-v2",
-            high_empty_page_ratio_threshold=0.80,
-        )
+def test_policy_version_reproducibility_across_process_boundary() -> None:
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "from econ_paper_cli.domain import PDFQualitySettings, PDFQualityValidationError\n"
+        "s = PDFQualitySettings()\n"
+        "assert s.policy_version == 'pdf-extraction-quality-v1'\n"
+        "try:\n"
+        "    PDFQualitySettings(policy_version='pdf-extraction-quality-v1', high_empty_page_ratio_threshold=0.75)\n"
+        "    sys.exit(1)\n"
+        "except PDFQualityValidationError:\n"
+        "    pass\n"
+        "try:\n"
+        "    PDFQualitySettings(policy_version='unknown-v2')\n"
+        "    sys.exit(1)\n"
+        "except PDFQualityValidationError:\n"
+        "    sys.exit(0)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True
+    )
+    assert result.returncode == 0, f"Process execution failed:\n{result.stderr}"
 
 
 @pytest.mark.parametrize("value", [True, 1.5, -1])

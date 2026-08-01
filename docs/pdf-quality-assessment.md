@@ -7,10 +7,10 @@ errors defined by the `PDFExtractor` protocol.
 
 Call `assess_pdf_extraction_quality` with an extraction result and an explicit
 `PDFQualitySettings` instance. The assessment records the settings'
-`policy_version`; changing a threshold or measurement rule requires a new
-policy version so later re-ingestion can reproduce the decision. Each
-`policy_version` is bound to an immutable threshold set; attempting to reuse
-a `policy_version` with different thresholds raises a `PDFQualityValidationError`.
+`policy_version`. Each supported `policy_version` is bound to a static,
+canonical threshold set (such as `pdf-extraction-quality-v1`). Attempting to
+modify thresholds for a canonical policy version or using an unrecognized
+version string raises a `PDFQualityValidationError`.
 
 ## Default policy
 

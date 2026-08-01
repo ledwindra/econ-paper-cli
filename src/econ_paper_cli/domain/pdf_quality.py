@@ -81,7 +81,19 @@ _WARNING_MESSAGES = {
 _WARNING_ORDER = {code: position for position, code in enumerate(PDFQualityWarningCode)}
 
 
-_KNOWN_POLICY_SETTINGS: dict[str, dict[str, object]] = {}
+_CANONICAL_POLICY_SETTINGS: dict[str, dict[str, object]] = {
+    "pdf-extraction-quality-v1": {
+        "sparse_page_non_whitespace_threshold": 80,
+        "very_low_text_non_whitespace_threshold": 200,
+        "high_empty_page_ratio_threshold": 0.5,
+        "anomaly_ratio_warning_threshold": 0.01,
+        "anomaly_ratio_unusable_threshold": 0.1,
+        "repeated_character_run_threshold": 12,
+        "repeated_character_ratio_unusable_threshold": 0.2,
+        "minimum_pages_for_imbalance": 4,
+        "severe_page_imbalance_ratio_threshold": 0.8,
+    }
+}
 
 
 def _settings_thresholds(settings: "PDFQualitySettings") -> dict[str, object]:
@@ -161,15 +173,15 @@ class PDFQualitySettings:
             )
 
         current_thresholds = _settings_thresholds(self)
-        existing = _KNOWN_POLICY_SETTINGS.get(self.policy_version)
-        if existing is not None:
-            if existing != current_thresholds:
-                raise PDFQualityValidationError(
-                    f"policy_version '{self.policy_version}' is already bound to a "
-                    "different threshold set."
-                )
-        else:
-            _KNOWN_POLICY_SETTINGS[self.policy_version] = current_thresholds
+        canonical = _CANONICAL_POLICY_SETTINGS.get(self.policy_version)
+        if canonical is None:
+            raise PDFQualityValidationError(
+                f"policy_version '{self.policy_version}' is not a recognized policy version."
+            )
+        if current_thresholds != canonical:
+            raise PDFQualityValidationError(
+                f"policy_version '{self.policy_version}' is bound to a canonical threshold set and cannot be modified."
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,30 +300,6 @@ class PDFQualityMeasurements:
                 raise PDFQualityValidationError(
                     f"{field_name} cannot exceed non_whitespace_character_count."
                 )
-        if (
-            self.minimum_page_non_whitespace_character_count
-            > self.maximum_page_non_whitespace_character_count
-        ):
-            raise PDFQualityValidationError(
-                "minimum page text count cannot exceed maximum page text count."
-            )
-        if self.page_count == 0 and any(
-            (
-                self.total_character_count,
-                self.printable_character_count,
-                self.non_whitespace_character_count,
-                self.empty_page_count,
-                self.sparse_page_count,
-                self.control_character_count,
-                self.replacement_character_count,
-                self.repeated_character_count,
-                self.minimum_page_non_whitespace_character_count,
-                self.maximum_page_non_whitespace_character_count,
-            )
-        ):
-            raise PDFQualityValidationError(
-                "all measurements must be zero when page_count is zero."
-            )
         if (
             self.minimum_page_non_whitespace_character_count
             > self.maximum_page_non_whitespace_character_count

@@ -254,11 +254,11 @@ def test_repeated_assessment_is_equivalent() -> None:
 
 
 def test_explicit_policy_version_is_preserved() -> None:
-    settings = PDFQualitySettings(policy_version="quality-policy-test-v2")
+    settings = PDFQualitySettings(policy_version="pdf-extraction-quality-v1")
 
     assessment = _assess(_text(500), settings=settings)
 
-    assert assessment.policy_version == "quality-policy-test-v2"
+    assert assessment.policy_version == "pdf-extraction-quality-v1"
 
 
 def test_service_rejects_non_contract_inputs() -> None:
