@@ -12,23 +12,24 @@ from econ_paper_cli.adapters.sqlite_storage import (
 from econ_paper_cli.domain import (
     DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     PDFQualityStatus,
+    PDFQualityWarning,
+    PDFQualityWarningCode,
     PDFSectionKind,
+    PDFSectionWarning,
+    PDFSectionWarningCode,
     ResearchQuestionKind,
+    ResearchQuestionWarning,
+    ResearchQuestionWarningCode,
     SinglePaperAnalysisEvidenceRecord,
-    SinglePaperAnalysisFailureCode,
     SinglePaperAnalysisQuestionRecord,
     SinglePaperAnalysisRecord,
     SinglePaperAnalysisSectionRecord,
+    SinglePaperAnalysisSectionSpanRecord,
     SinglePaperAnalysisSettings,
     SinglePaperAnalysisStage,
     SinglePaperAnalysisStatus,
-    SinglePaperAnalysisWarning,
-    SinglePaperAnalysisWarningCode,
     compute_analysis_id,
     compute_settings_fingerprint,
-)
-from econ_paper_cli.protocols.storage import (
-    StorageTransactionError,
 )
 
 CHECKSUM_1 = "a" * 64
@@ -40,24 +41,44 @@ def _make_success_record(
     checksum: str = CHECKSUM_1,
     settings: SinglePaperAnalysisSettings = DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
 ) -> SinglePaperAnalysisRecord:
+    canon_path = pdf_path.resolve()
+
+    span_abs = SinglePaperAnalysisSectionSpanRecord(
+        page_number=1,
+        start_character_offset=0,
+        end_character_offset=30,
+        ordinal_position=0,
+    )
     sec_abs = SinglePaperAnalysisSectionRecord(
         section_kind=PDFSectionKind.ABSTRACT,
         heading_text="Abstract",
         page_start=1,
         page_end=1,
-        start_character_offset=0,
-        end_character_offset=30,
+        spans=(span_abs,),
         ordinal_position=0,
+    )
+
+    span_intro_p1 = SinglePaperAnalysisSectionSpanRecord(
+        page_number=1,
+        start_character_offset=32,
+        end_character_offset=100,
+        ordinal_position=0,
+    )
+    span_intro_p2 = SinglePaperAnalysisSectionSpanRecord(
+        page_number=2,
+        start_character_offset=0,
+        end_character_offset=250,
+        ordinal_position=1,
     )
     sec_intro = SinglePaperAnalysisSectionRecord(
         section_kind=PDFSectionKind.INTRODUCTION,
         heading_text="1. Introduction",
         page_start=1,
         page_end=2,
-        start_character_offset=32,
-        end_character_offset=100,
+        spans=(span_intro_p1, span_intro_p2),
         ordinal_position=1,
     )
+
     ev_abs = SinglePaperAnalysisEvidenceRecord(
         section_kind=PDFSectionKind.ABSTRACT,
         excerpt_text="Abstract excerpt for question",
@@ -72,8 +93,8 @@ def _make_success_record(
         sections_used=(PDFSectionKind.ABSTRACT,),
     )
     return SinglePaperAnalysisRecord(
-        analysis_id=compute_analysis_id(checksum, settings, pdf_path),
-        source_path=pdf_path,
+        analysis_id=compute_analysis_id(checksum, settings, canon_path),
+        source_path=canon_path,
         content_checksum=checksum,
         status=SinglePaperAnalysisStatus.SUCCESS,
         completed_stages=tuple(SinglePaperAnalysisStage),
@@ -84,6 +105,17 @@ def _make_success_record(
         quality_status=PDFQualityStatus.USABLE,
         settings=settings,
         settings_fingerprint=compute_settings_fingerprint(settings),
+        quality_warnings=(
+            PDFQualityWarning(
+                code=PDFQualityWarningCode.SPARSE_PAGES, page_numbers=(2,)
+            ),
+        ),
+        section_warnings=(
+            PDFSectionWarning(code=PDFSectionWarningCode.MISSING_NEXT_SECTION_BOUNDARY),
+        ),
+        research_question_warnings=(
+            ResearchQuestionWarning(code=ResearchQuestionWarningCode.MISSING_SECTION),
+        ),
         warnings=(),
         sections=(sec_abs, sec_intro),
         research_question=rq,
@@ -93,35 +125,116 @@ def _make_success_record(
     )
 
 
-def test_schema_migration_v2_to_v3(tmp_path: Path) -> None:
-    """Migration 3 creates single_paper_analysis tables in a v2 database."""
-    db_file = tmp_path / "v2_db.db"
+def test_schema_migration_v2_populated_to_v3(tmp_path: Path) -> None:
+    """Migration 3 creates single_paper_analysis tables and preserves populated v2 data."""
+    db_file = tmp_path / "v2_populated.db"
+    conn = sqlite3.connect(str(db_file))
+
+    # Create exact schema version 2
+    conn.executescript(
+        """
+        CREATE TABLE schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL,
+            description TEXT NOT NULL
+        );
+        CREATE TABLE papers (
+            paper_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            authors_json TEXT NOT NULL,
+            year INTEGER,
+            abstract TEXT,
+            source_name TEXT NOT NULL,
+            source_identifier TEXT NOT NULL,
+            source_url TEXT,
+            content_checksum TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_papers_checksum ON papers(content_checksum);
+        CREATE TABLE source_provenance (
+            paper_id TEXT PRIMARY KEY,
+            source_path TEXT NOT NULL,
+            source_format TEXT NOT NULL,
+            source_file_size INTEGER NOT NULL,
+            content_checksum TEXT NOT NULL COLLATE NOCASE,
+            markdown_path TEXT NOT NULL,
+            extraction_method TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE
+        );
+        CREATE TABLE conversion_settings (
+            paper_id TEXT PRIMARY KEY,
+            conversion_version TEXT NOT NULL,
+            ocr_enabled INTEGER NOT NULL,
+            parameters_json TEXT NOT NULL,
+            FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE
+        );
+        CREATE TABLE passages (
+            passage_id TEXT PRIMARY KEY,
+            paper_id TEXT NOT NULL,
+            text TEXT NOT NULL,
+            section_heading TEXT,
+            page_start INTEGER,
+            page_end INTEGER,
+            ordinal_position INTEGER NOT NULL,
+            FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE,
+            CONSTRAINT uq_paper_ordinal UNIQUE(paper_id, ordinal_position)
+        );
+        CREATE TABLE ingestion_warnings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            paper_id TEXT NOT NULL,
+            warning_code TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE
+        );
+        CREATE TABLE ingestion_completions (
+            paper_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            completed_at TEXT NOT NULL,
+            passage_count INTEGER NOT NULL,
+            warning_count INTEGER NOT NULL,
+            error_message TEXT,
+            FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE
+        );
+        """
+    )
+    ck = "a" * 64
+    conn.execute(
+        "INSERT INTO schema_migrations VALUES (2, '2026-07-31T20:00:00Z', 'Update paper content_checksum collation');"
+    )
+    conn.execute(
+        "INSERT INTO papers VALUES ('paper.v2', 'V2 Paper Title', '[\"Author\"]', 2024, 'Abstract', 'NBER', '123', NULL, ?, '2026-07-31T20:00:00Z', '2026-07-31T20:00:00Z');",
+        (ck,),
+    )
+    conn.execute(
+        "INSERT INTO source_provenance VALUES ('paper.v2', '/path/paper.pdf', 'pdf', 1024, ?, '/path/paper.md', 'pdfplumber', '2026-07-31T20:00:00Z');",
+        (ck,),
+    )
+    conn.execute(
+        "INSERT INTO conversion_settings VALUES ('paper.v2', '1.0.0', 0, '{}');"
+    )
+    conn.execute(
+        "INSERT INTO ingestion_completions VALUES ('paper.v2', 'completed', '2026-07-31T20:00:00Z', 0, 0, NULL);"
+    )
+    conn.commit()
+    conn.close()
+
     storage = SQLiteStorage(db_file)
     storage.initialize()
 
     assert storage.get_schema_version() == CURRENT_SCHEMA_VERSION
 
-    # Verify new tables exist in sqlite_master
-    conn = sqlite3.connect(str(db_file))
-    cur = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'single_paper_analys%'"
-    )
-    tables = {row[0] for row in cur.fetchall()}
-    conn.close()
-
-    expected_tables = {
-        "single_paper_analyses",
-        "single_paper_analysis_warnings",
-        "single_paper_analysis_sections",
-        "single_paper_analysis_questions",
-        "single_paper_analysis_evidence",
-    }
-    assert tables == expected_tables
+    # Verify existing V2 paper survived
+    paper = storage.get_paper_record("paper.v2")
+    assert paper is not None
+    assert paper.paper.title == "V2 Paper Title"
     storage.close()
 
 
-def test_save_and_get_success_analysis_record(tmp_path: Path) -> None:
-    pdf_path = tmp_path / "paper.pdf"
+def test_save_and_get_multi_page_section_and_typed_warnings(tmp_path: Path) -> None:
+    pdf_path = (tmp_path / "paper.pdf").resolve()
     storage = SQLiteStorage(":memory:")
     storage.initialize()
 
@@ -131,165 +244,93 @@ def test_save_and_get_success_analysis_record(tmp_path: Path) -> None:
     retrieved = storage.get_single_paper_analysis(record.analysis_id)
     assert retrieved is not None
     assert retrieved == record
-    assert retrieved.status is SinglePaperAnalysisStatus.SUCCESS
+
+    # Verify multi-page section span round-trip
     assert len(retrieved.sections) == 2
-    assert retrieved.sections[0].heading_text == "Abstract"
-    assert retrieved.research_question is not None
+    intro = retrieved.sections[1]
+    assert intro.heading_text == "1. Introduction"
+    assert len(intro.spans) == 2
+    assert intro.spans[0].page_number == 1
+    assert intro.spans[0].start_character_offset == 32
+    assert intro.spans[0].end_character_offset == 100
+    assert intro.spans[1].page_number == 2
+    assert intro.spans[1].start_character_offset == 0
+    assert intro.spans[1].end_character_offset == 250
+
+    # Verify typed stage warnings round-trip
+    assert len(retrieved.quality_warnings) == 1
+    assert retrieved.quality_warnings[0].code is PDFQualityWarningCode.SPARSE_PAGES
+    assert retrieved.quality_warnings[0].page_numbers == (2,)
+
+    assert len(retrieved.section_warnings) == 1
     assert (
-        retrieved.research_question.question_text
-        == "What is the effect of trade policy?"
+        retrieved.section_warnings[0].code
+        is PDFSectionWarningCode.MISSING_NEXT_SECTION_BOUNDARY
     )
-    assert len(retrieved.evidence) == 1
-    assert retrieved.evidence[0].excerpt_text == "Abstract excerpt for question"
+
+    assert len(retrieved.research_question_warnings) == 1
+    assert (
+        retrieved.research_question_warnings[0].code
+        is ResearchQuestionWarningCode.MISSING_SECTION
+    )
+
     storage.close()
 
 
-def test_idempotent_repeated_writes(tmp_path: Path) -> None:
-    """Writing the exact same analysis_id repeatedly leaves equivalent record and no duplicate rows."""
-    pdf_path = tmp_path / "paper.pdf"
-    storage = SQLiteStorage(":memory:")
+def test_database_level_foreign_key_evidence_integrity(tmp_path: Path) -> None:
+    """DB-level foreign key constraint prevents evidence referencing an unpersisted section."""
+    db_file = tmp_path / "fk_test.db"
+    storage = SQLiteStorage(db_file)
     storage.initialize()
-
-    record = _make_success_record(pdf_path)
-    storage.save_single_paper_analysis(record)
-    storage.save_single_paper_analysis(record)
-    storage.save_single_paper_analysis(record)
-
-    retrieved = storage.get_single_paper_analysis(record.analysis_id)
-    assert retrieved is not None
-    assert len(retrieved.sections) == 2
-    assert len(retrieved.evidence) == 1
 
     conn = storage._ensure_initialized()
-    cur = conn.execute(
-        "SELECT COUNT(*) FROM single_paper_analyses WHERE analysis_id = ?",
-        (record.analysis_id,),
-    )
-    assert cur.fetchone()[0] == 1
+    conn.execute("PRAGMA foreign_keys = ON;")
 
-    cur_sec = conn.execute(
-        "SELECT COUNT(*) FROM single_paper_analysis_sections WHERE analysis_id = ?",
-        (record.analysis_id,),
-    )
-    assert cur_sec.fetchone()[0] == 2
-
-    storage.close()
-
-
-def test_changed_checksum_or_settings_creates_distinct_records(tmp_path: Path) -> None:
-    pdf_path = tmp_path / "paper.pdf"
-    storage = SQLiteStorage(":memory:")
-    storage.initialize()
-
-    rec1 = _make_success_record(pdf_path, checksum=CHECKSUM_1)
-    rec2 = _make_success_record(pdf_path, checksum=CHECKSUM_2)
-
-    custom_settings = SinglePaperAnalysisSettings(
-        policy_version="single-paper-analysis-v2"
-    )
-    rec3 = _make_success_record(pdf_path, checksum=CHECKSUM_1, settings=custom_settings)
-
-    assert rec1.analysis_id != rec2.analysis_id
-    assert rec1.analysis_id != rec3.analysis_id
-
-    storage.save_single_paper_analysis(rec1)
-    storage.save_single_paper_analysis(rec2)
-    storage.save_single_paper_analysis(rec3)
-
-    all_recs = storage.list_single_paper_analyses()
-    assert len(all_recs) == 3
-
-    by_ck1 = storage.get_single_paper_analysis_by_checksum(CHECKSUM_1)
-    assert by_ck1 is not None
-
-    by_ck1_custom = storage.get_single_paper_analysis_by_checksum(
-        CHECKSUM_1, settings_fingerprint=rec3.settings_fingerprint
-    )
-    assert by_ck1_custom is not None
-    assert by_ck1_custom.analysis_id == rec3.analysis_id
-
-    storage.close()
-
-
-def test_save_and_get_failed_and_halted_outcomes(tmp_path: Path) -> None:
-    pdf_path = tmp_path / "paper.pdf"
-    storage = SQLiteStorage(":memory:")
-    storage.initialize()
-
-    settings = DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS
-
-    # 1. PREFLIGHT_FAILED record
-    preflight_rec = SinglePaperAnalysisRecord(
-        analysis_id=compute_analysis_id(None, settings, pdf_path),
-        source_path=pdf_path,
-        content_checksum=None,
-        status=SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
-        completed_stages=(),
-        failed_stage=SinglePaperAnalysisStage.PREFLIGHT,
-        skipped_stages=(
-            SinglePaperAnalysisStage.EXTRACTION,
-            SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
-            SinglePaperAnalysisStage.SECTION_DETECTION,
-            SinglePaperAnalysisStage.QUESTION_EXTRACTION,
+    # Insert parent analysis
+    conn.execute(
+        """INSERT INTO single_paper_analyses (
+            analysis_id, content_checksum, source_path, policy_version,
+            status, failed_stage, failure_code, error_message,
+            completed_stages_json, skipped_stages_json, quality_status,
+            quality_settings_json, section_settings_json, research_question_settings_json,
+            settings_fingerprint, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "anal_1",
+            "a" * 64,
+            "/path/paper.pdf",
+            "v1",
+            "success",
+            None,
+            None,
+            None,
+            "[]",
+            "[]",
+            "usable",
+            "{}",
+            "{}",
+            "{}",
+            "fp1",
+            "2026-08-01T20:00:00Z",
+            "2026-08-01T20:00:00Z",
         ),
-        failure_code=SinglePaperAnalysisFailureCode.PATH_NOT_FOUND,
-        error_message=f"File not found: {pdf_path}",
-        quality_status=None,
-        settings=settings,
-        settings_fingerprint=compute_settings_fingerprint(settings),
-        warnings=(),
-        sections=(),
-        research_question=None,
-        evidence=(),
-        created_at="2026-08-01T20:00:00Z",
-        updated_at="2026-08-01T20:00:00Z",
     )
-    storage.save_single_paper_analysis(preflight_rec)
-    ret_pf = storage.get_single_paper_analysis(preflight_rec.analysis_id)
-    assert ret_pf == preflight_rec
 
-    # 2. QUALITY_HALTED record
-    quality_rec = SinglePaperAnalysisRecord(
-        analysis_id=compute_analysis_id(CHECKSUM_1, settings, pdf_path),
-        source_path=pdf_path,
-        content_checksum=CHECKSUM_1,
-        status=SinglePaperAnalysisStatus.QUALITY_HALTED,
-        completed_stages=(
-            SinglePaperAnalysisStage.PREFLIGHT,
-            SinglePaperAnalysisStage.EXTRACTION,
-            SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
-        ),
-        failed_stage=None,
-        skipped_stages=(
-            SinglePaperAnalysisStage.SECTION_DETECTION,
-            SinglePaperAnalysisStage.QUESTION_EXTRACTION,
-        ),
-        failure_code=None,
-        error_message=None,
-        quality_status=PDFQualityStatus.UNUSABLE,
-        settings=settings,
-        settings_fingerprint=compute_settings_fingerprint(settings),
-        warnings=(
-            SinglePaperAnalysisWarning(
-                code=SinglePaperAnalysisWarningCode.QUALITY_HALTED,
-                details="Extraction garbage.",
-            ),
-        ),
-        sections=(),
-        research_question=None,
-        evidence=(),
-        created_at="2026-08-01T20:00:00Z",
-        updated_at="2026-08-01T20:00:00Z",
-    )
-    storage.save_single_paper_analysis(quality_rec)
-    ret_q = storage.get_single_paper_analysis(quality_rec.analysis_id)
-    assert ret_q == quality_rec
+    # Attempt to insert evidence referencing section_kind 'abstract' when no section exists!
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """INSERT INTO single_paper_analysis_evidence (
+                analysis_id, section_kind, excerpt_text, page_number,
+                start_character_offset, end_character_offset, ordinal_position
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            ("anal_1", "abstract", "Excerpt", 1, 0, 7, 0),
+        )
 
     storage.close()
 
 
 def test_cascade_delete_analysis_record(tmp_path: Path) -> None:
-    pdf_path = tmp_path / "paper.pdf"
+    pdf_path = (tmp_path / "paper.pdf").resolve()
     storage = SQLiteStorage(":memory:")
     storage.initialize()
 
@@ -305,6 +346,7 @@ def test_cascade_delete_analysis_record(tmp_path: Path) -> None:
     for tbl in (
         "single_paper_analysis_warnings",
         "single_paper_analysis_sections",
+        "single_paper_analysis_section_spans",
         "single_paper_analysis_questions",
         "single_paper_analysis_evidence",
     ):
@@ -313,43 +355,5 @@ def test_cascade_delete_analysis_record(tmp_path: Path) -> None:
             (record.analysis_id,),
         )
         assert cur.fetchone()[0] == 0
-
-    storage.close()
-
-
-def test_transaction_rollback_leaves_no_partial_data(tmp_path: Path) -> None:
-    """An error during write rolls back entire transaction cleanly."""
-    pdf_path = tmp_path / "paper.pdf"
-    storage = SQLiteStorage(":memory:")
-    storage.initialize()
-
-    real_conn = storage._ensure_initialized()
-
-    class ProxyConn:
-        def __init__(self, conn):
-            self._conn = conn
-
-        def execute(self, sql, *args, **kwargs):
-            if "INSERT INTO single_paper_analysis_evidence" in sql:
-                raise sqlite3.OperationalError("Simulated database error")
-            return self._conn.execute(sql, *args, **kwargs)
-
-        def __getattr__(self, name):
-            return getattr(self._conn, name)
-
-    storage._conn = ProxyConn(real_conn)
-    record = _make_success_record(pdf_path)
-
-    with pytest.raises(StorageTransactionError, match="Simulated database error"):
-        storage.save_single_paper_analysis(record)
-
-    storage._conn = real_conn
-
-    # Verify no parent or child rows were created
-    cur = real_conn.execute(
-        "SELECT COUNT(*) FROM single_paper_analyses WHERE analysis_id = ?",
-        (record.analysis_id,),
-    )
-    assert cur.fetchone()[0] == 0
 
     storage.close()

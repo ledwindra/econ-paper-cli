@@ -32,18 +32,21 @@ from econ_paper_cli.domain.pdf_quality import (
     PDFExtractionQualityAssessment,
     PDFQualitySettings,
     PDFQualityStatus,
+    PDFQualityWarning,
 )
 from econ_paper_cli.domain.pdf_sections import (
     DEFAULT_PDF_SECTION_SETTINGS,
     PDFSectionDetectionResult,
     PDFSectionKind,
     PDFSectionSettings,
+    PDFSectionWarning,
 )
 from econ_paper_cli.domain.research_question import (
     DEFAULT_RESEARCH_QUESTION_SETTINGS,
     ResearchQuestionKind,
     ResearchQuestionResult,
     ResearchQuestionSettings,
+    ResearchQuestionWarning,
 )
 
 _SHA256_HEX_PATTERN = re.compile(r"[a-f0-9]{64}")
@@ -150,6 +153,29 @@ _STATUS_FAILED_STAGE: dict[
     SinglePaperAnalysisStatus.QUALITY_HALTED: None,
     SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED: None,
     SinglePaperAnalysisStatus.SUCCESS: None,
+}
+
+# Expected skipped_stages per status.
+_STATUS_SKIPPED: dict[
+    SinglePaperAnalysisStatus, tuple[SinglePaperAnalysisStage, ...]
+] = {
+    SinglePaperAnalysisStatus.PREFLIGHT_FAILED: (
+        SinglePaperAnalysisStage.EXTRACTION,
+        SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
+        SinglePaperAnalysisStage.SECTION_DETECTION,
+        SinglePaperAnalysisStage.QUESTION_EXTRACTION,
+    ),
+    SinglePaperAnalysisStatus.EXTRACTION_FAILED: (
+        SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
+        SinglePaperAnalysisStage.SECTION_DETECTION,
+        SinglePaperAnalysisStage.QUESTION_EXTRACTION,
+    ),
+    SinglePaperAnalysisStatus.QUALITY_HALTED: (
+        SinglePaperAnalysisStage.SECTION_DETECTION,
+        SinglePaperAnalysisStage.QUESTION_EXTRACTION,
+    ),
+    SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED: (),
+    SinglePaperAnalysisStatus.SUCCESS: (),
 }
 
 # Statuses that require a failure_code.
@@ -599,15 +625,34 @@ def compute_analysis_id(
 
 
 @dataclass(frozen=True, slots=True)
+class SinglePaperAnalysisSectionSpanRecord:
+    """Persisted page-local character span metadata for a section."""
+
+    page_number: int
+    start_character_offset: int
+    end_character_offset: int
+    ordinal_position: int
+
+    def __post_init__(self) -> None:
+        _validate_positive_int("page_number", self.page_number)
+        _validate_nonnegative_int("start_character_offset", self.start_character_offset)
+        _validate_nonnegative_int("end_character_offset", self.end_character_offset)
+        if self.start_character_offset > self.end_character_offset:
+            raise SinglePaperAnalysisValidationError(
+                "start_character_offset cannot exceed end_character_offset."
+            )
+        _validate_nonnegative_int("ordinal_position", self.ordinal_position)
+
+
+@dataclass(frozen=True, slots=True)
 class SinglePaperAnalysisSectionRecord:
-    """Persisted section metadata with exact page and character offsets."""
+    """Persisted section metadata with exact page-local spans."""
 
     section_kind: PDFSectionKind
     heading_text: str
     page_start: int
     page_end: int
-    start_character_offset: int
-    end_character_offset: int
+    spans: tuple[SinglePaperAnalysisSectionSpanRecord, ...]
     ordinal_position: int
 
     def __post_init__(self) -> None:
@@ -622,12 +667,23 @@ class SinglePaperAnalysisSectionRecord:
             raise SinglePaperAnalysisValidationError(
                 "page_start cannot exceed page_end."
             )
-        _validate_nonnegative_int("start_character_offset", self.start_character_offset)
-        _validate_nonnegative_int("end_character_offset", self.end_character_offset)
-        if self.start_character_offset > self.end_character_offset:
+        if not isinstance(self.spans, tuple) or not self.spans:
             raise SinglePaperAnalysisValidationError(
-                "start_character_offset cannot exceed end_character_offset."
+                "spans must be a non-empty tuple of SinglePaperAnalysisSectionSpanRecord."
             )
+        for idx, span in enumerate(self.spans):
+            if not isinstance(span, SinglePaperAnalysisSectionSpanRecord):
+                raise SinglePaperAnalysisValidationError(
+                    "spans elements must be SinglePaperAnalysisSectionSpanRecord instances."
+                )
+            if span.ordinal_position != idx:
+                raise SinglePaperAnalysisValidationError(
+                    f"span[{idx}] ordinal_position ({span.ordinal_position}) does not match index ({idx})."
+                )
+            if span.page_number < self.page_start or span.page_number > self.page_end:
+                raise SinglePaperAnalysisValidationError(
+                    f"span page_number {span.page_number} lies outside section range [{self.page_start}, {self.page_end}]."
+                )
         _validate_nonnegative_int("ordinal_position", self.ordinal_position)
 
 
@@ -716,6 +772,9 @@ class SinglePaperAnalysisRecord:
     quality_status: PDFQualityStatus | None
     settings: SinglePaperAnalysisSettings
     settings_fingerprint: str
+    quality_warnings: tuple[PDFQualityWarning, ...]
+    section_warnings: tuple[PDFSectionWarning, ...]
+    research_question_warnings: tuple[ResearchQuestionWarning, ...]
     warnings: tuple[SinglePaperAnalysisWarning, ...]
     sections: tuple[SinglePaperAnalysisSectionRecord, ...]
     research_question: SinglePaperAnalysisQuestionRecord | None
@@ -727,6 +786,10 @@ class SinglePaperAnalysisRecord:
         _validate_nonempty_text("analysis_id", self.analysis_id)
         if not isinstance(self.source_path, Path):
             raise SinglePaperAnalysisValidationError("source_path must be a Path.")
+        if self.source_path != self.source_path.resolve():
+            raise SinglePaperAnalysisValidationError(
+                "source_path must be canonical/absolute."
+            )
         if self.content_checksum is not None:
             _validate_checksum(self.content_checksum)
         if not isinstance(self.status, SinglePaperAnalysisStatus):
@@ -770,6 +833,39 @@ class SinglePaperAnalysisRecord:
                 "settings must be a SinglePaperAnalysisSettings instance."
             )
         _validate_nonempty_text("settings_fingerprint", self.settings_fingerprint)
+        expected_fp = compute_settings_fingerprint(self.settings)
+        if self.settings_fingerprint != expected_fp:
+            raise SinglePaperAnalysisValidationError(
+                f"settings_fingerprint '{self.settings_fingerprint}' does not match expected '{expected_fp}'."
+            )
+
+        expected_id = compute_analysis_id(
+            self.content_checksum, self.settings, self.source_path
+        )
+        if self.analysis_id != expected_id:
+            raise SinglePaperAnalysisValidationError(
+                f"analysis_id '{self.analysis_id}' does not match expected '{expected_id}'."
+            )
+
+        if not isinstance(self.quality_warnings, tuple) or not all(
+            isinstance(w, PDFQualityWarning) for w in self.quality_warnings
+        ):
+            raise SinglePaperAnalysisValidationError(
+                "quality_warnings must be a tuple of PDFQualityWarning instances."
+            )
+        if not isinstance(self.section_warnings, tuple) or not all(
+            isinstance(w, PDFSectionWarning) for w in self.section_warnings
+        ):
+            raise SinglePaperAnalysisValidationError(
+                "section_warnings must be a tuple of PDFSectionWarning instances."
+            )
+        if not isinstance(self.research_question_warnings, tuple) or not all(
+            isinstance(w, ResearchQuestionWarning)
+            for w in self.research_question_warnings
+        ):
+            raise SinglePaperAnalysisValidationError(
+                "research_question_warnings must be a tuple of ResearchQuestionWarning instances."
+            )
         if not isinstance(self.warnings, tuple) or not all(
             isinstance(w, SinglePaperAnalysisWarning) for w in self.warnings
         ):
@@ -809,7 +905,51 @@ class SinglePaperAnalysisRecord:
         _validate_nonempty_text("created_at", self.created_at)
         _validate_nonempty_text("updated_at", self.updated_at)
 
-        # Invariant validations
+        # Stage tuple sequence invariants
+        expected_completed = _STATUS_COMPLETED[self.status]
+        if self.completed_stages != expected_completed:
+            raise SinglePaperAnalysisValidationError(
+                f"completed_stages {self.completed_stages} does not match expected {expected_completed} for status {self.status}."
+            )
+        expected_failed = _STATUS_FAILED_STAGE[self.status]
+        if self.failed_stage != expected_failed:
+            raise SinglePaperAnalysisValidationError(
+                f"failed_stage '{self.failed_stage}' does not match expected '{expected_failed}' for status {self.status}."
+            )
+        expected_skipped = _STATUS_SKIPPED[self.status]
+        if self.skipped_stages != expected_skipped:
+            raise SinglePaperAnalysisValidationError(
+                f"skipped_stages {self.skipped_stages} does not match expected {expected_skipped} for status {self.status}."
+            )
+        if self.status in (
+            SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
+            SinglePaperAnalysisStatus.EXTRACTION_FAILED,
+        ):
+            if self.failure_code is None:
+                raise SinglePaperAnalysisValidationError(
+                    f"failure_code is required for failed status {self.status}."
+                )
+            if (
+                self.status is SinglePaperAnalysisStatus.PREFLIGHT_FAILED
+                and self.failure_code not in _PREFLIGHT_FAILURE_CODES
+            ):
+                raise SinglePaperAnalysisValidationError(
+                    f"failure_code '{self.failure_code}' is not a valid preflight failure code."
+                )
+            if (
+                self.status is SinglePaperAnalysisStatus.EXTRACTION_FAILED
+                and self.failure_code not in _EXTRACTION_FAILURE_CODES
+            ):
+                raise SinglePaperAnalysisValidationError(
+                    f"failure_code '{self.failure_code}' is not a valid extraction failure code."
+                )
+        else:
+            if self.failure_code is not None:
+                raise SinglePaperAnalysisValidationError(
+                    f"failure_code must be None for non-failure status {self.status}."
+                )
+
+        # Status Invariant validations
         if self.status is SinglePaperAnalysisStatus.SUCCESS:
             if not self.sections:
                 raise SinglePaperAnalysisValidationError(
@@ -862,13 +1002,29 @@ class SinglePaperAnalysisRecord:
                     "Failed statuses cannot contain sections, research questions, or evidence."
                 )
 
-        # Referential integrity checks
-        section_kinds = {sec.section_kind for sec in self.sections}
+        # Referential integrity checks: Evidence must match a detected section span
+        section_map = {sec.section_kind: sec for sec in self.sections}
         for ev in self.evidence:
-            if ev.section_kind not in section_kinds:
+            if ev.section_kind not in section_map:
                 raise SinglePaperAnalysisValidationError(
                     f"Evidence section_kind '{ev.section_kind}' does not match any detected section."
                 )
+            matching_sec = section_map[ev.section_kind]
+            span_found = False
+            for sp in matching_sec.spans:
+                if sp.page_number == ev.page_number:
+                    if (
+                        ev.start_character_offset >= sp.start_character_offset
+                        and ev.end_character_offset <= sp.end_character_offset
+                    ):
+                        span_found = True
+                        break
+            if not span_found:
+                raise SinglePaperAnalysisValidationError(
+                    f"Evidence excerpt span [{ev.start_character_offset}, {ev.end_character_offset}] on page {ev.page_number} "
+                    f"does not fall within any section span of '{ev.section_kind.value}'."
+                )
+
         if (
             self.research_question is not None
             and self.research_question.kind is not ResearchQuestionKind.UNAVAILABLE
@@ -888,6 +1044,38 @@ class SinglePaperAnalysisRecord:
         updated_at: str | None = None,
     ) -> "SinglePaperAnalysisRecord":
         """Construct a SinglePaperAnalysisRecord from a SinglePaperAnalysisResult."""
+        if result.policy_version != settings.policy_version:
+            raise SinglePaperAnalysisValidationError(
+                f"result.policy_version '{result.policy_version}' does not match settings.policy_version '{settings.policy_version}'."
+            )
+        if (
+            result.quality_assessment is not None
+            and result.quality_assessment.policy_version
+            != settings.quality_settings.policy_version
+        ):
+            raise SinglePaperAnalysisValidationError(
+                f"quality_assessment.policy_version '{result.quality_assessment.policy_version}' "
+                f"does not match settings.quality_settings.policy_version '{settings.quality_settings.policy_version}'."
+            )
+        if (
+            result.section_result is not None
+            and result.section_result.policy_version
+            != settings.section_settings.policy_version
+        ):
+            raise SinglePaperAnalysisValidationError(
+                f"section_result.policy_version '{result.section_result.policy_version}' "
+                f"does not match settings.section_settings.policy_version '{settings.section_settings.policy_version}'."
+            )
+        if (
+            result.research_question_result is not None
+            and result.research_question_result.policy_version
+            != settings.research_question_settings.policy_version
+        ):
+            raise SinglePaperAnalysisValidationError(
+                f"research_question_result.policy_version '{result.research_question_result.policy_version}' "
+                f"does not match settings.research_question_settings.policy_version '{settings.research_question_settings.policy_version}'."
+            )
+
         now_str = datetime.now(timezone.utc).isoformat()
         c_at = created_at or now_str
         u_at = updated_at or now_str
@@ -895,17 +1083,39 @@ class SinglePaperAnalysisRecord:
         settings_fp = compute_settings_fingerprint(settings)
         analysis_id = compute_analysis_id(result.checksum, settings, result.source_path)
 
+        quality_warnings = (
+            result.quality_assessment.warnings
+            if result.quality_assessment is not None
+            else ()
+        )
+        section_warnings = (
+            result.section_result.warnings if result.section_result is not None else ()
+        )
+        rq_warnings = (
+            result.research_question_result.warnings
+            if result.research_question_result is not None
+            else ()
+        )
+
         sections: list[SinglePaperAnalysisSectionRecord] = []
         if result.section_result is not None:
             for idx, sec in enumerate(result.section_result.sections):
+                spans = tuple(
+                    SinglePaperAnalysisSectionSpanRecord(
+                        page_number=sp.page_number,
+                        start_character_offset=sp.start_character_offset,
+                        end_character_offset=sp.end_character_offset,
+                        ordinal_position=sp_idx,
+                    )
+                    for sp_idx, sp in enumerate(sec.spans)
+                )
                 sections.append(
                     SinglePaperAnalysisSectionRecord(
                         section_kind=sec.kind,
                         heading_text=sec.heading_text,
                         page_start=sec.start_page_number,
                         page_end=sec.end_page_number,
-                        start_character_offset=sec.spans[0].start_character_offset,
-                        end_character_offset=sec.spans[-1].end_character_offset,
+                        spans=spans,
                         ordinal_position=idx,
                     )
                 )
@@ -939,7 +1149,7 @@ class SinglePaperAnalysisRecord:
 
         return cls(
             analysis_id=analysis_id,
-            source_path=result.source_path,
+            source_path=result.source_path.resolve(),
             content_checksum=result.checksum,
             status=result.status,
             completed_stages=result.completed_stages,
@@ -950,6 +1160,9 @@ class SinglePaperAnalysisRecord:
             quality_status=quality_status,
             settings=settings,
             settings_fingerprint=settings_fp,
+            quality_warnings=quality_warnings,
+            section_warnings=section_warnings,
+            research_question_warnings=rq_warnings,
             warnings=result.warnings,
             sections=tuple(sections),
             research_question=rq_record,

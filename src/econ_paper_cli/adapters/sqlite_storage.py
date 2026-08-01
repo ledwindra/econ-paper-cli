@@ -8,11 +8,23 @@ from econ_paper_cli.adapters.storage_paths import get_default_db_path
 from econ_paper_cli.domain.corpora import Corpus
 from econ_paper_cli.domain.papers import Paper
 from econ_paper_cli.domain.passages import Passage
-from econ_paper_cli.domain.pdf_quality import PDFQualitySettings, PDFQualityStatus
-from econ_paper_cli.domain.pdf_sections import PDFSectionKind, PDFSectionSettings
+from econ_paper_cli.domain.pdf_quality import (
+    PDFQualitySettings,
+    PDFQualityStatus,
+    PDFQualityWarning,
+    PDFQualityWarningCode,
+)
+from econ_paper_cli.domain.pdf_sections import (
+    PDFSectionKind,
+    PDFSectionSettings,
+    PDFSectionWarning,
+    PDFSectionWarningCode,
+)
 from econ_paper_cli.domain.research_question import (
     ResearchQuestionKind,
     ResearchQuestionSettings,
+    ResearchQuestionWarning,
+    ResearchQuestionWarningCode,
 )
 from econ_paper_cli.domain.single_paper_analysis import (
     SinglePaperAnalysisEvidenceRecord,
@@ -20,6 +32,7 @@ from econ_paper_cli.domain.single_paper_analysis import (
     SinglePaperAnalysisQuestionRecord,
     SinglePaperAnalysisRecord,
     SinglePaperAnalysisSectionRecord,
+    SinglePaperAnalysisSectionSpanRecord,
     SinglePaperAnalysisSettings,
     SinglePaperAnalysisStage,
     SinglePaperAnalysisStatus,
@@ -190,7 +203,7 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
     ),
     (
         3,
-        "Add single-paper research-question analysis storage tables",
+        "Single paper analysis research-question persistence tables",
         [
             """CREATE TABLE IF NOT EXISTS single_paper_analyses (
                 analysis_id TEXT PRIMARY KEY,
@@ -211,31 +224,44 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );""",
-            "CREATE INDEX IF NOT EXISTS idx_analyses_checksum ON single_paper_analyses(content_checksum);",
+            "CREATE INDEX IF NOT EXISTS idx_single_paper_analyses_checksum ON single_paper_analyses(content_checksum);",
+            "CREATE INDEX IF NOT EXISTS idx_single_paper_analyses_fingerprint ON single_paper_analyses(settings_fingerprint);",
             """CREATE TABLE IF NOT EXISTS single_paper_analysis_warnings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 analysis_id TEXT NOT NULL,
+                warning_domain TEXT NOT NULL,
                 warning_code TEXT NOT NULL,
                 details TEXT,
+                page_numbers_json TEXT,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(analysis_id) REFERENCES single_paper_analyses(analysis_id) ON DELETE CASCADE
             );""",
             "CREATE INDEX IF NOT EXISTS idx_analysis_warnings_analysis_id ON single_paper_analysis_warnings(analysis_id);",
             """CREATE TABLE IF NOT EXISTS single_paper_analysis_sections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 analysis_id TEXT NOT NULL,
                 content_checksum TEXT COLLATE NOCASE,
                 section_kind TEXT NOT NULL,
                 heading_text TEXT NOT NULL,
                 page_start INTEGER NOT NULL,
                 page_end INTEGER NOT NULL,
-                start_character_offset INTEGER NOT NULL,
-                end_character_offset INTEGER NOT NULL,
                 ordinal_position INTEGER NOT NULL,
+                PRIMARY KEY(analysis_id, section_kind),
                 FOREIGN KEY(analysis_id) REFERENCES single_paper_analyses(analysis_id) ON DELETE CASCADE,
                 CONSTRAINT uq_analysis_section_ordinal UNIQUE(analysis_id, ordinal_position)
             );""",
             "CREATE INDEX IF NOT EXISTS idx_analysis_sections_analysis_id ON single_paper_analysis_sections(analysis_id);",
+            """CREATE TABLE IF NOT EXISTS single_paper_analysis_section_spans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                analysis_id TEXT NOT NULL,
+                section_kind TEXT NOT NULL,
+                page_number INTEGER NOT NULL,
+                start_character_offset INTEGER NOT NULL,
+                end_character_offset INTEGER NOT NULL,
+                ordinal_position INTEGER NOT NULL,
+                FOREIGN KEY(analysis_id, section_kind) REFERENCES single_paper_analysis_sections(analysis_id, section_kind) ON DELETE CASCADE,
+                CONSTRAINT uq_analysis_section_span_ordinal UNIQUE(analysis_id, section_kind, ordinal_position)
+            );""",
+            "CREATE INDEX IF NOT EXISTS idx_analysis_section_spans_analysis_sec ON single_paper_analysis_section_spans(analysis_id, section_kind);",
             """CREATE TABLE IF NOT EXISTS single_paper_analysis_questions (
                 analysis_id TEXT PRIMARY KEY,
                 question_text TEXT,
@@ -252,7 +278,7 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 start_character_offset INTEGER NOT NULL,
                 end_character_offset INTEGER NOT NULL,
                 ordinal_position INTEGER NOT NULL,
-                FOREIGN KEY(analysis_id) REFERENCES single_paper_analyses(analysis_id) ON DELETE CASCADE,
+                FOREIGN KEY(analysis_id, section_kind) REFERENCES single_paper_analysis_sections(analysis_id, section_kind) ON DELETE CASCADE,
                 CONSTRAINT uq_analysis_evidence_ordinal UNIQUE(analysis_id, ordinal_position)
             );""",
             "CREATE INDEX IF NOT EXISTS idx_analysis_evidence_analysis_id ON single_paper_analysis_evidence(analysis_id);",
@@ -858,6 +884,25 @@ class SQLiteStorage(StorageBackend):
         try:
             conn.execute("BEGIN IMMEDIATE")
 
+            # Check if record already exists to preserve created_at / updated_at when equivalent
+            cur_ex = conn.execute(
+                "SELECT created_at, updated_at FROM single_paper_analyses WHERE analysis_id = ?",
+                (record.analysis_id,),
+            )
+            ex_row = cur_ex.fetchone()
+            c_at = ex_row["created_at"] if ex_row else record.created_at
+            u_at = record.updated_at
+
+            if ex_row is not None:
+                ex_rec = self.get_single_paper_analysis(record.analysis_id)
+                if ex_rec is not None:
+                    rec_dict = dataclasses.asdict(record)
+                    ex_dict = dataclasses.asdict(ex_rec)
+                    rec_dict["updated_at"] = ""
+                    ex_dict["updated_at"] = ""
+                    if rec_dict == ex_dict:
+                        u_at = ex_row["updated_at"]
+
             # Delete existing analysis record if updating (cascades to related child tables)
             conn.execute(
                 "DELETE FROM single_paper_analyses WHERE analysis_id = ?",
@@ -891,33 +936,76 @@ class SQLiteStorage(StorageBackend):
                         dataclasses.asdict(record.settings.research_question_settings)
                     ),
                     record.settings_fingerprint,
-                    record.created_at,
-                    record.updated_at,
+                    c_at,
+                    u_at,
                 ),
             )
 
             # Insert into single_paper_analysis_warnings
+            for warning in record.quality_warnings:
+                conn.execute(
+                    """INSERT INTO single_paper_analysis_warnings (
+                        analysis_id, warning_domain, warning_code, details, page_numbers_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        record.analysis_id,
+                        "quality",
+                        warning.code.value,
+                        warning.message,
+                        json.dumps(warning.page_numbers),
+                        c_at,
+                    ),
+                )
+            for warning in record.section_warnings:
+                conn.execute(
+                    """INSERT INTO single_paper_analysis_warnings (
+                        analysis_id, warning_domain, warning_code, details, page_numbers_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        record.analysis_id,
+                        "section",
+                        warning.code.value,
+                        warning.message,
+                        None,
+                        c_at,
+                    ),
+                )
+            for warning in record.research_question_warnings:
+                conn.execute(
+                    """INSERT INTO single_paper_analysis_warnings (
+                        analysis_id, warning_domain, warning_code, details, page_numbers_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        record.analysis_id,
+                        "research_question",
+                        warning.code.value,
+                        warning.message,
+                        None,
+                        c_at,
+                    ),
+                )
             for warning in record.warnings:
                 conn.execute(
                     """INSERT INTO single_paper_analysis_warnings (
-                        analysis_id, warning_code, details, created_at
-                    ) VALUES (?, ?, ?, ?)""",
+                        analysis_id, warning_domain, warning_code, details, page_numbers_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)""",
                     (
                         record.analysis_id,
+                        "orchestration",
                         warning.code.value,
                         warning.details,
-                        record.created_at,
+                        None,
+                        c_at,
                     ),
                 )
 
-            # Insert into single_paper_analysis_sections
+            # Insert into single_paper_analysis_sections and section_spans
             for sec in record.sections:
                 conn.execute(
                     """INSERT INTO single_paper_analysis_sections (
                         analysis_id, content_checksum, section_kind, heading_text,
-                        page_start, page_end, start_character_offset, end_character_offset,
-                        ordinal_position
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        page_start, page_end, ordinal_position
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (
                         record.analysis_id,
                         chk,
@@ -925,11 +1013,24 @@ class SQLiteStorage(StorageBackend):
                         sec.heading_text,
                         sec.page_start,
                         sec.page_end,
-                        sec.start_character_offset,
-                        sec.end_character_offset,
                         sec.ordinal_position,
                     ),
                 )
+                for sp in sec.spans:
+                    conn.execute(
+                        """INSERT INTO single_paper_analysis_section_spans (
+                            analysis_id, section_kind, page_number,
+                            start_character_offset, end_character_offset, ordinal_position
+                        ) VALUES (?, ?, ?, ?, ?, ?)""",
+                        (
+                            record.analysis_id,
+                            sec.section_kind.value,
+                            sp.page_number,
+                            sp.start_character_offset,
+                            sp.end_character_offset,
+                            sp.ordinal_position,
+                        ),
+                    )
 
             # Insert into single_paper_analysis_questions
             if record.research_question is not None:
@@ -1028,31 +1129,75 @@ class SQLiteStorage(StorageBackend):
                 "SELECT * FROM single_paper_analysis_warnings WHERE analysis_id = ? ORDER BY id ASC",
                 (analysis_id,),
             )
-            warnings = tuple(
-                SinglePaperAnalysisWarning(
-                    code=SinglePaperAnalysisWarningCode(w["warning_code"]),
-                    details=w["details"],
-                )
-                for w in cur_w.fetchall()
-            )
+            w_rows = cur_w.fetchall()
+            q_warnings: list[PDFQualityWarning] = []
+            s_warnings: list[PDFSectionWarning] = []
+            rq_warnings: list[ResearchQuestionWarning] = []
+            o_warnings: list[SinglePaperAnalysisWarning] = []
+            for w in w_rows:
+                domain = w["warning_domain"]
+                code_val = w["warning_code"]
+                if domain == "quality":
+                    pgs = (
+                        tuple(json.loads(w["page_numbers_json"]))
+                        if w["page_numbers_json"]
+                        else ()
+                    )
+                    q_warnings.append(
+                        PDFQualityWarning(
+                            code=PDFQualityWarningCode(code_val), page_numbers=pgs
+                        )
+                    )
+                elif domain == "section":
+                    s_warnings.append(
+                        PDFSectionWarning(code=PDFSectionWarningCode(code_val))
+                    )
+                elif domain == "research_question":
+                    rq_warnings.append(
+                        ResearchQuestionWarning(
+                            code=ResearchQuestionWarningCode(code_val)
+                        )
+                    )
+                elif domain == "orchestration":
+                    o_warnings.append(
+                        SinglePaperAnalysisWarning(
+                            code=SinglePaperAnalysisWarningCode(code_val),
+                            details=w["details"],
+                        )
+                    )
 
-            # Sections
+            # Sections and Section Spans
             cur_s = conn.execute(
                 "SELECT * FROM single_paper_analysis_sections WHERE analysis_id = ? ORDER BY ordinal_position ASC",
                 (analysis_id,),
             )
-            sections = tuple(
-                SinglePaperAnalysisSectionRecord(
-                    section_kind=PDFSectionKind(s["section_kind"]),
-                    heading_text=s["heading_text"],
-                    page_start=s["page_start"],
-                    page_end=s["page_end"],
-                    start_character_offset=s["start_character_offset"],
-                    end_character_offset=s["end_character_offset"],
-                    ordinal_position=s["ordinal_position"],
+            sec_rows = cur_s.fetchall()
+            sections_list: list[SinglePaperAnalysisSectionRecord] = []
+            for s in sec_rows:
+                sk = s["section_kind"]
+                cur_sp = conn.execute(
+                    "SELECT * FROM single_paper_analysis_section_spans WHERE analysis_id = ? AND section_kind = ? ORDER BY ordinal_position ASC",
+                    (analysis_id, sk),
                 )
-                for s in cur_s.fetchall()
-            )
+                spans = tuple(
+                    SinglePaperAnalysisSectionSpanRecord(
+                        page_number=sp["page_number"],
+                        start_character_offset=sp["start_character_offset"],
+                        end_character_offset=sp["end_character_offset"],
+                        ordinal_position=sp["ordinal_position"],
+                    )
+                    for sp in cur_sp.fetchall()
+                )
+                sections_list.append(
+                    SinglePaperAnalysisSectionRecord(
+                        section_kind=PDFSectionKind(sk),
+                        heading_text=s["heading_text"],
+                        page_start=s["page_start"],
+                        page_end=s["page_end"],
+                        spans=spans,
+                        ordinal_position=s["ordinal_position"],
+                    )
+                )
 
             # Question
             cur_q = conn.execute(
@@ -1101,8 +1246,11 @@ class SQLiteStorage(StorageBackend):
                 quality_status=quality_status,
                 settings=settings,
                 settings_fingerprint=row["settings_fingerprint"],
-                warnings=warnings,
-                sections=sections,
+                quality_warnings=tuple(q_warnings),
+                section_warnings=tuple(s_warnings),
+                research_question_warnings=tuple(rq_warnings),
+                warnings=tuple(o_warnings),
+                sections=tuple(sections_list),
                 research_question=rq_record,
                 evidence=evidence,
                 created_at=row["created_at"],

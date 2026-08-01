@@ -18,9 +18,20 @@ def save_single_paper_analysis_result(
 
     Returns the resulting immutable SinglePaperAnalysisRecord.
     """
-    record = SinglePaperAnalysisRecord.from_result(result, settings=settings)
+    from econ_paper_cli.domain.single_paper_analysis import compute_analysis_id
+
+    analysis_id = compute_analysis_id(
+        result.checksum, settings, result.source_path.resolve()
+    )
+    existing = storage.get_single_paper_analysis(analysis_id)
+    created_at = existing.created_at if existing else None
+    updated_at = existing.updated_at if existing else None
+
+    record = SinglePaperAnalysisRecord.from_result(
+        result, settings=settings, created_at=created_at, updated_at=updated_at
+    )
     storage.save_single_paper_analysis(record)
-    return record
+    return storage.get_single_paper_analysis(analysis_id) or record
 
 
 def get_single_paper_analysis_record(
