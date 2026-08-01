@@ -71,3 +71,7 @@ class PDFSectionValidationError(DomainError):
 
 class ResearchQuestionValidationError(DomainError):
     """Raised when a research-question domain object fails validation."""
+
+
+class SinglePaperAnalysisValidationError(DomainError):
+    """Raised when a single-paper analysis domain object fails validation."""
