@@ -33,6 +33,7 @@ For every issue:
 6. Update documentation when behavior changes.
 7. Run all applicable checks.
 8. Summarize what changed, why, and any remaining risks.
+9. Automatically set up a background monitor (`schedule`) to poll for new PR reviews and comments.
 
 Work on one issue per pull request.
 
