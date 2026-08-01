@@ -26,7 +26,7 @@ from econ_paper_cli.protocols.storage import (
     StorageValidationError,
 )
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 _MIGRATIONS: list[tuple[int, str, list[str]]] = [
     (
@@ -47,7 +47,7 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 source_name TEXT NOT NULL,
                 source_identifier TEXT NOT NULL,
                 source_url TEXT,
-                content_checksum TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                content_checksum TEXT NOT NULL UNIQUE,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );""",
@@ -56,9 +56,7 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 paper_id TEXT PRIMARY KEY,
                 source_path TEXT NOT NULL,
                 source_format TEXT NOT NULL,
-                source_file_size INTEGER NOT NULL,
-                content_checksum TEXT NOT NULL COLLATE NOCASE,
-                markdown_path TEXT NOT NULL,
+                content_checksum TEXT NOT NULL,
                 extraction_method TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE
@@ -78,8 +76,7 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 page_start INTEGER,
                 page_end INTEGER,
                 ordinal_position INTEGER NOT NULL,
-                FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE,
-                CONSTRAINT uq_paper_ordinal UNIQUE(paper_id, ordinal_position)
+                FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE
             );""",
             "CREATE INDEX IF NOT EXISTS idx_passages_paper_ordinal ON passages(paper_id, ordinal_position);",
             """CREATE TABLE IF NOT EXISTS ingestion_warnings (
@@ -100,6 +97,64 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 error_message TEXT,
                 FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE
             );""",
+        ],
+    ),
+    (
+        2,
+        "Add provenance fields, case-insensitive checksums, and passage ordinal uniqueness constraint",
+        [
+            """CREATE TABLE papers_v2 (
+                paper_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                authors_json TEXT NOT NULL,
+                year INTEGER,
+                abstract TEXT,
+                source_name TEXT NOT NULL,
+                source_identifier TEXT NOT NULL,
+                source_url TEXT,
+                content_checksum TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );""",
+            "INSERT INTO papers_v2 SELECT * FROM papers;",
+            "DROP TABLE papers;",
+            "ALTER TABLE papers_v2 RENAME TO papers;",
+            "CREATE INDEX IF NOT EXISTS idx_papers_checksum ON papers(content_checksum);",
+            """CREATE TABLE source_provenance_v2 (
+                paper_id TEXT PRIMARY KEY,
+                source_path TEXT NOT NULL,
+                source_format TEXT NOT NULL,
+                source_file_size INTEGER NOT NULL DEFAULT 1,
+                content_checksum TEXT NOT NULL COLLATE NOCASE,
+                markdown_path TEXT NOT NULL DEFAULT '',
+                extraction_method TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE
+            );""",
+            """INSERT INTO source_provenance_v2 (
+                paper_id, source_path, source_format, source_file_size,
+                content_checksum, markdown_path, extraction_method, created_at
+            ) SELECT
+                paper_id, source_path, source_format, 1,
+                content_checksum, source_path, extraction_method, created_at
+            FROM source_provenance;""",
+            "DROP TABLE source_provenance;",
+            "ALTER TABLE source_provenance_v2 RENAME TO source_provenance;",
+            """CREATE TABLE passages_v2 (
+                passage_id TEXT PRIMARY KEY,
+                paper_id TEXT NOT NULL,
+                text TEXT NOT NULL,
+                section_heading TEXT,
+                page_start INTEGER,
+                page_end INTEGER,
+                ordinal_position INTEGER NOT NULL,
+                FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE,
+                CONSTRAINT uq_paper_ordinal UNIQUE(paper_id, ordinal_position)
+            );""",
+            "INSERT INTO passages_v2 SELECT * FROM passages;",
+            "DROP TABLE passages;",
+            "ALTER TABLE passages_v2 RENAME TO passages;",
+            "CREATE INDEX IF NOT EXISTS idx_passages_paper_ordinal ON passages(paper_id, ordinal_position);",
         ],
     ),
 ]
@@ -143,12 +198,15 @@ class SQLiteStorage(StorageBackend):
             self._conn = sqlite3.connect(conn_str)
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA foreign_keys = ON;")
-        except sqlite3.Error as err:
-            raise StorageConnectionError(
-                f"Failed to connect to SQLite database at '{self._db_path}': {err}."
-            ) from err
-
-        self._run_migrations()
+            self._run_migrations()
+        except Exception:
+            if self._conn is not None:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                self._conn = None
+            raise
 
     def close(self) -> None:
         """Close active database connection."""
@@ -198,25 +256,29 @@ class SQLiteStorage(StorageBackend):
                 f"Database schema version {current_version} is newer than maximum supported version {CURRENT_SCHEMA_VERSION}."
             )
 
-        for version, description, statements in migrations:
-            if version > current_version:
-                try:
-                    conn.execute("BEGIN IMMEDIATE")
-                    for stmt in statements:
-                        conn.execute(stmt)
-                    now_str = datetime.now(timezone.utc).isoformat()
-                    conn.execute(
-                        "INSERT INTO schema_migrations (version, applied_at, description) VALUES (?, ?, ?)",
-                        (version, now_str, description),
-                    )
-                    conn.commit()
-                except Exception as err:
-                    conn.rollback()
-                    if isinstance(err, sqlite3.Error):
-                        raise StorageMigrationError(
-                            f"Migration to schema version {version} failed: {err}."
-                        ) from err
-                    raise
+        try:
+            conn.execute("PRAGMA foreign_keys = OFF;")
+            for version, description, statements in migrations:
+                if version > current_version:
+                    try:
+                        conn.execute("BEGIN IMMEDIATE")
+                        for stmt in statements:
+                            conn.execute(stmt)
+                        now_str = datetime.now(timezone.utc).isoformat()
+                        conn.execute(
+                            "INSERT INTO schema_migrations (version, applied_at, description) VALUES (?, ?, ?)",
+                            (version, now_str, description),
+                        )
+                        conn.commit()
+                    except Exception as err:
+                        conn.rollback()
+                        if isinstance(err, sqlite3.Error):
+                            raise StorageMigrationError(
+                                f"Migration to schema version {version} failed: {err}."
+                            ) from err
+                        raise
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON;")
 
     def save_paper_record(self, record: PaperRecord) -> None:
         """Persist or replace a paper record in a single atomic transaction."""
