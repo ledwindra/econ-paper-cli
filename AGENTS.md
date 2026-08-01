@@ -162,6 +162,7 @@ Tests must not download models, papers, or indexes unless explicitly marked as i
 
 - Use small, descriptive commits.
 - Keep one issue per pull request.
+- Always submit changes via a dedicated feature branch and GitHub pull request (`gh pr create`) rather than pushing directly to `main`.
 - Do not rewrite unrelated history.
 - Do not modify lockfiles unless dependencies changed.
 - Never commit secrets, tokens, cookies, or personal paths.
