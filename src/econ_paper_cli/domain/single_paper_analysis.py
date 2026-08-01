@@ -74,6 +74,43 @@ _CANONICAL_SINGLE_PAPER_SETTINGS: dict[str, dict[str, object]] = {
     "single-paper-analysis-v1": {}
 }
 
+# Canonical stage sequence
+_ALL_STAGES = tuple(SinglePaperAnalysisStage)
+
+# Stage sequences for each non-success terminal status.
+# completed_stages must contain only *successfully completed* stages.
+# The failed stage is the last stage attempted (for failure statuses).
+_STATUS_COMPLETED: dict[
+    SinglePaperAnalysisStatus, tuple[SinglePaperAnalysisStage, ...]
+] = {
+    SinglePaperAnalysisStatus.PREFLIGHT_FAILED: (),
+    SinglePaperAnalysisStatus.EXTRACTION_FAILED: (SinglePaperAnalysisStage.PREFLIGHT,),
+    SinglePaperAnalysisStatus.QUALITY_HALTED: (
+        SinglePaperAnalysisStage.PREFLIGHT,
+        SinglePaperAnalysisStage.EXTRACTION,
+        SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
+    ),
+    SinglePaperAnalysisStatus.SECTION_DETECTION_HALTED: (
+        SinglePaperAnalysisStage.PREFLIGHT,
+        SinglePaperAnalysisStage.EXTRACTION,
+        SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
+        SinglePaperAnalysisStage.SECTION_DETECTION,
+    ),
+    SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED: _ALL_STAGES,
+    SinglePaperAnalysisStatus.SUCCESS: _ALL_STAGES,
+}
+
+_STATUS_FAILED_STAGE: dict[
+    SinglePaperAnalysisStatus, SinglePaperAnalysisStage | None
+] = {
+    SinglePaperAnalysisStatus.PREFLIGHT_FAILED: SinglePaperAnalysisStage.PREFLIGHT,
+    SinglePaperAnalysisStatus.EXTRACTION_FAILED: SinglePaperAnalysisStage.EXTRACTION,
+    SinglePaperAnalysisStatus.QUALITY_HALTED: None,
+    SinglePaperAnalysisStatus.SECTION_DETECTION_HALTED: None,
+    SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED: None,
+    SinglePaperAnalysisStatus.SUCCESS: None,
+}
+
 
 @dataclass(frozen=True, slots=True)
 class SinglePaperAnalysisSettings:
@@ -135,13 +172,25 @@ class SinglePaperAnalysisWarning:
 
 @dataclass(frozen=True, slots=True)
 class SinglePaperAnalysisResult:
-    """Immutable composite result of single-paper research-question analysis."""
+    """Immutable composite result of single-paper research-question analysis.
+
+    Stage outcome semantics:
+    - ``completed_stages``: stages that executed and *succeeded*.
+    - ``failed_stage``: the stage that failed (not None for PREFLIGHT_FAILED and
+      EXTRACTION_FAILED; None for halt/success statuses).
+    - ``skipped_stages``: stages that were not attempted because a prior stage
+      failed or halted.
+
+    The union ``completed_stages + ((failed_stage,) if failed_stage else ()) +
+    skipped_stages`` must equal the canonical stage tuple in order.
+    """
 
     policy_version: str
     source_path: Path
     checksum: str | None
     status: SinglePaperAnalysisStatus
     completed_stages: tuple[SinglePaperAnalysisStage, ...]
+    failed_stage: SinglePaperAnalysisStage | None
     skipped_stages: tuple[SinglePaperAnalysisStage, ...]
     preflight_result: IngestionPreflightResult | None
     extraction_result: PDFExtractionResult | None
@@ -173,6 +222,12 @@ class SinglePaperAnalysisResult:
             raise SinglePaperAnalysisValidationError(
                 "completed_stages must be a tuple of SinglePaperAnalysisStage instances."
             )
+        if self.failed_stage is not None and not isinstance(
+            self.failed_stage, SinglePaperAnalysisStage
+        ):
+            raise SinglePaperAnalysisValidationError(
+                "failed_stage must be a SinglePaperAnalysisStage instance or None."
+            )
         if not isinstance(self.skipped_stages, tuple) or not all(
             isinstance(s, SinglePaperAnalysisStage) for s in self.skipped_stages
         ):
@@ -189,19 +244,37 @@ class SinglePaperAnalysisResult:
             _validate_nonempty_text("error_message", self.error_message)
 
         # Stage combination & sequence checks
-        all_stages = tuple(SinglePaperAnalysisStage)
-        combined = self.completed_stages + self.skipped_stages
-        if combined != all_stages:
+        combined: tuple[SinglePaperAnalysisStage, ...]
+        if self.failed_stage is not None:
+            combined = (
+                self.completed_stages + (self.failed_stage,) + self.skipped_stages
+            )
+        else:
+            combined = self.completed_stages + self.skipped_stages
+        if combined != _ALL_STAGES:
             raise SinglePaperAnalysisValidationError(
-                f"completed_stages + skipped_stages must equal canonical stage sequence {all_stages}."
+                f"completed_stages + failed_stage + skipped_stages must equal canonical "
+                f"stage sequence {_ALL_STAGES}."
             )
 
-        # Status-specific state invariants
+        # Verify failed_stage matches status expectation
+        expected_failed = _STATUS_FAILED_STAGE[self.status]
+        if self.failed_stage != expected_failed:
+            raise SinglePaperAnalysisValidationError(
+                f"failed_stage {self.failed_stage!r} does not match expected "
+                f"failed_stage {expected_failed!r} for status {self.status.value}."
+            )
+
+        # Verify completed_stages matches status expectation
+        expected_completed = _STATUS_COMPLETED[self.status]
+        if self.completed_stages != expected_completed:
+            raise SinglePaperAnalysisValidationError(
+                f"completed_stages {self.completed_stages!r} does not match expected "
+                f"{expected_completed!r} for status {self.status.value}."
+            )
+
+        # Status-specific field invariants
         if self.status is SinglePaperAnalysisStatus.SUCCESS:
-            if self.skipped_stages:
-                raise SinglePaperAnalysisValidationError(
-                    "SUCCESS status cannot have skipped stages."
-                )
             if (
                 self.preflight_result is None
                 or self.extraction_result is None
@@ -222,10 +295,6 @@ class SinglePaperAnalysisResult:
                 )
 
         elif self.status is SinglePaperAnalysisStatus.PREFLIGHT_FAILED:
-            if self.completed_stages != (SinglePaperAnalysisStage.PREFLIGHT,):
-                raise SinglePaperAnalysisValidationError(
-                    "PREFLIGHT_FAILED status must complete only PREFLIGHT stage."
-                )
             if (
                 self.extraction_result is not None
                 or self.quality_assessment is not None
@@ -241,13 +310,6 @@ class SinglePaperAnalysisResult:
                 )
 
         elif self.status is SinglePaperAnalysisStatus.EXTRACTION_FAILED:
-            if self.completed_stages != (
-                SinglePaperAnalysisStage.PREFLIGHT,
-                SinglePaperAnalysisStage.EXTRACTION,
-            ):
-                raise SinglePaperAnalysisValidationError(
-                    "EXTRACTION_FAILED status must complete PREFLIGHT and EXTRACTION stages."
-                )
             if (
                 self.quality_assessment is not None
                 or self.section_result is not None
@@ -262,14 +324,6 @@ class SinglePaperAnalysisResult:
                 )
 
         elif self.status is SinglePaperAnalysisStatus.QUALITY_HALTED:
-            if self.completed_stages != (
-                SinglePaperAnalysisStage.PREFLIGHT,
-                SinglePaperAnalysisStage.EXTRACTION,
-                SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
-            ):
-                raise SinglePaperAnalysisValidationError(
-                    "QUALITY_HALTED status must complete up to QUALITY_ASSESSMENT stage."
-                )
             if (
                 self.section_result is not None
                 or self.research_question_result is not None
@@ -290,25 +344,16 @@ class SinglePaperAnalysisResult:
                 )
 
         elif self.status is SinglePaperAnalysisStatus.SECTION_DETECTION_HALTED:
-            if self.completed_stages != (
-                SinglePaperAnalysisStage.PREFLIGHT,
-                SinglePaperAnalysisStage.EXTRACTION,
-                SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
-                SinglePaperAnalysisStage.SECTION_DETECTION,
-            ):
-                raise SinglePaperAnalysisValidationError(
-                    "SECTION_DETECTION_HALTED status must complete up to SECTION_DETECTION stage."
-                )
             if self.research_question_result is not None:
                 raise SinglePaperAnalysisValidationError(
                     "SECTION_DETECTION_HALTED status must have None for research_question_result."
                 )
+            if self.section_result is None:
+                raise SinglePaperAnalysisValidationError(
+                    "SECTION_DETECTION_HALTED status requires section_result."
+                )
 
         elif self.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED:
-            if self.skipped_stages:
-                raise SinglePaperAnalysisValidationError(
-                    "QUESTION_EXTRACTION_HALTED completed all 5 stages."
-                )
             if (
                 self.research_question_result is None
                 or self.research_question_result.kind

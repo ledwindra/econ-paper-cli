@@ -7,7 +7,6 @@ from econ_paper_cli.domain.errors import (
     SinglePaperAnalysisValidationError,
 )
 from econ_paper_cli.domain.pdf_quality import PDFQualityStatus
-from econ_paper_cli.domain.pdf_sections import PDFSectionKind
 from econ_paper_cli.domain.research_question import ResearchQuestionKind
 from econ_paper_cli.domain.single_paper_analysis import (
     DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
@@ -19,7 +18,10 @@ from econ_paper_cli.domain.single_paper_analysis import (
     SinglePaperAnalysisWarningCode,
 )
 from econ_paper_cli.protocols.generation import Generator
-from econ_paper_cli.protocols.pdf_extraction import PDFExtractor
+from econ_paper_cli.protocols.pdf_extraction import (
+    PDFExtractionError,
+    PDFExtractor,
+)
 from econ_paper_cli.services.ingestion import run_ingestion_preflight
 from econ_paper_cli.services.pdf_quality import assess_pdf_extraction_quality
 from econ_paper_cli.services.pdf_section_detection import detect_pdf_sections
@@ -36,9 +38,13 @@ def analyze_single_paper(
 ) -> SinglePaperAnalysisResult:
     """Orchestrate end-to-end single-PDF research-question analysis.
 
-    Executes ingestion preflight, text extraction, extraction quality assessment,
-    Abstract/Introduction section detection, and structured research question
-    extraction in deterministic order, preserving typed stage results and provenance.
+    Accepts exactly one local PDF file path. Directories, multi-file batches,
+    and non-PDF paths are rejected as PREFLIGHT_FAILED.
+
+    Executes ingestion preflight → text extraction → quality assessment →
+    section detection → research question extraction in deterministic order.
+    Typed ``IngestionError`` and ``PDFExtractionError`` subclasses are mapped
+    to stable failure outcomes; unexpected exceptions propagate unchanged.
     """
     _validate_inputs(pdf_extractor, generator, settings)
 
@@ -47,15 +53,17 @@ def analyze_single_paper(
         raise SinglePaperAnalysisValidationError("pdf_path must be a Path or string.")
 
     # Stage 1: Ingestion Preflight
+    # Only typed IngestionError subclasses are caught here; programming errors propagate.
     try:
         preflight_result = run_ingestion_preflight(source_path)
-    except (IngestionError, Exception) as error:
+    except IngestionError as error:
         return SinglePaperAnalysisResult(
             policy_version=settings.policy_version,
             source_path=source_path,
             checksum=None,
             status=SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
-            completed_stages=(SinglePaperAnalysisStage.PREFLIGHT,),
+            completed_stages=(),
+            failed_stage=SinglePaperAnalysisStage.PREFLIGHT,
             skipped_stages=(
                 SinglePaperAnalysisStage.EXTRACTION,
                 SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
@@ -71,21 +79,82 @@ def analyze_single_paper(
             error_message=str(error),
         )
 
-    checksum = preflight_result.candidates[0].content_checksum
-
-    # Stage 2: PDF Text Extraction
-    try:
-        extraction_result = pdf_extractor.extract(source_path)
-    except Exception as error:
+    # Enforce single-file contract: the target must be a regular file, not a
+    # directory (even if the directory contains exactly one PDF).
+    if not preflight_result.target_path.is_file():
+        reason = (
+            f"'{source_path}' is a directory, not a single PDF file. "
+            "analyze_single_paper requires a path to a single PDF file."
+        )
         return SinglePaperAnalysisResult(
             policy_version=settings.policy_version,
             source_path=source_path,
+            checksum=None,
+            status=SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
+            completed_stages=(),
+            failed_stage=SinglePaperAnalysisStage.PREFLIGHT,
+            skipped_stages=(
+                SinglePaperAnalysisStage.EXTRACTION,
+                SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
+                SinglePaperAnalysisStage.SECTION_DETECTION,
+                SinglePaperAnalysisStage.QUESTION_EXTRACTION,
+            ),
+            preflight_result=preflight_result,
+            extraction_result=None,
+            quality_assessment=None,
+            section_result=None,
+            research_question_result=None,
+            warnings=(),
+            error_message=reason,
+        )
+
+    # Additional guard: preflight must have discovered exactly one candidate
+    # (this catches unexpected edge cases in the preflight adapter).
+    if preflight_result.total_candidate_count != 1:
+        reason = (
+            f"Expected exactly one PDF candidate but found "
+            f"{preflight_result.total_candidate_count}. "
+            "analyze_single_paper requires a path to a single PDF file."
+        )
+        return SinglePaperAnalysisResult(
+            policy_version=settings.policy_version,
+            source_path=source_path,
+            checksum=None,
+            status=SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
+            completed_stages=(),
+            failed_stage=SinglePaperAnalysisStage.PREFLIGHT,
+            skipped_stages=(
+                SinglePaperAnalysisStage.EXTRACTION,
+                SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
+                SinglePaperAnalysisStage.SECTION_DETECTION,
+                SinglePaperAnalysisStage.QUESTION_EXTRACTION,
+            ),
+            preflight_result=preflight_result,
+            extraction_result=None,
+            quality_assessment=None,
+            section_result=None,
+            research_question_result=None,
+            warnings=(),
+            error_message=reason,
+        )
+
+    candidate = preflight_result.candidates[0]
+    checksum = candidate.content_checksum
+    # Use the canonical resolved path from the preflight candidate for extraction.
+    canonical_path = candidate.source_path
+
+    # Stage 2: PDF Text Extraction
+    # Only typed PDFExtractionError subclasses are caught; programming errors propagate.
+    try:
+        extraction_result = pdf_extractor.extract(canonical_path)
+    except PDFExtractionError as error:
+        return SinglePaperAnalysisResult(
+            policy_version=settings.policy_version,
+            source_path=canonical_path,
             checksum=checksum,
             status=SinglePaperAnalysisStatus.EXTRACTION_FAILED,
-            completed_stages=(
-                SinglePaperAnalysisStage.PREFLIGHT,
-                SinglePaperAnalysisStage.EXTRACTION,
-            ),
+            completed_stages=(SinglePaperAnalysisStage.PREFLIGHT,),
+            failed_stage=SinglePaperAnalysisStage.EXTRACTION,
             skipped_stages=(
                 SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
                 SinglePaperAnalysisStage.SECTION_DETECTION,
@@ -97,7 +166,7 @@ def analyze_single_paper(
             section_result=None,
             research_question_result=None,
             warnings=(),
-            error_message=f"PDF text extraction failed: {error}",
+            error_message=str(error),
         )
 
     # Stage 3: Extraction Quality Assessment
@@ -110,7 +179,7 @@ def analyze_single_paper(
     ):
         return SinglePaperAnalysisResult(
             policy_version=settings.policy_version,
-            source_path=source_path,
+            source_path=canonical_path,
             checksum=checksum,
             status=SinglePaperAnalysisStatus.QUALITY_HALTED,
             completed_stages=(
@@ -118,6 +187,7 @@ def analyze_single_paper(
                 SinglePaperAnalysisStage.EXTRACTION,
                 SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
             ),
+            failed_stage=None,
             skipped_stages=(
                 SinglePaperAnalysisStage.SECTION_DETECTION,
                 SinglePaperAnalysisStage.QUESTION_EXTRACTION,
@@ -140,38 +210,10 @@ def analyze_single_paper(
     section_result = detect_pdf_sections(
         extraction_result, settings=settings.section_settings
     )
-    has_usable_sections = any(
-        sec.kind in (PDFSectionKind.ABSTRACT, PDFSectionKind.INTRODUCTION)
-        and bool(sec.text.strip())
-        for sec in section_result.sections
-    )
-    if not has_usable_sections:
-        return SinglePaperAnalysisResult(
-            policy_version=settings.policy_version,
-            source_path=source_path,
-            checksum=checksum,
-            status=SinglePaperAnalysisStatus.SECTION_DETECTION_HALTED,
-            completed_stages=(
-                SinglePaperAnalysisStage.PREFLIGHT,
-                SinglePaperAnalysisStage.EXTRACTION,
-                SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
-                SinglePaperAnalysisStage.SECTION_DETECTION,
-            ),
-            skipped_stages=(SinglePaperAnalysisStage.QUESTION_EXTRACTION,),
-            preflight_result=preflight_result,
-            extraction_result=extraction_result,
-            quality_assessment=quality_assessment,
-            section_result=section_result,
-            research_question_result=None,
-            warnings=(
-                SinglePaperAnalysisWarning(
-                    SinglePaperAnalysisWarningCode.SECTION_DETECTION_HALTED,
-                ),
-            ),
-            error_message=None,
-        )
 
     # Stage 5: Research Question Extraction
+    # Always call extract_research_question, even when no usable sections are
+    # present — the service returns NO_USABLE_SECTIONS internally.
     research_question_result = extract_research_question(
         section_result, generator, settings.research_question_settings
     )
@@ -179,7 +221,7 @@ def analyze_single_paper(
     if research_question_result.kind is ResearchQuestionKind.UNAVAILABLE:
         return SinglePaperAnalysisResult(
             policy_version=settings.policy_version,
-            source_path=source_path,
+            source_path=canonical_path,
             checksum=checksum,
             status=SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED,
             completed_stages=(
@@ -189,6 +231,7 @@ def analyze_single_paper(
                 SinglePaperAnalysisStage.SECTION_DETECTION,
                 SinglePaperAnalysisStage.QUESTION_EXTRACTION,
             ),
+            failed_stage=None,
             skipped_stages=(),
             preflight_result=preflight_result,
             extraction_result=extraction_result,
@@ -205,7 +248,7 @@ def analyze_single_paper(
 
     return SinglePaperAnalysisResult(
         policy_version=settings.policy_version,
-        source_path=source_path,
+        source_path=canonical_path,
         checksum=checksum,
         status=SinglePaperAnalysisStatus.SUCCESS,
         completed_stages=(
@@ -215,6 +258,7 @@ def analyze_single_paper(
             SinglePaperAnalysisStage.SECTION_DETECTION,
             SinglePaperAnalysisStage.QUESTION_EXTRACTION,
         ),
+        failed_stage=None,
         skipped_stages=(),
         preflight_result=preflight_result,
         extraction_result=extraction_result,

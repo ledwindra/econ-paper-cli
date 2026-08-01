@@ -177,6 +177,7 @@ def test_single_paper_analysis_result_success_validation(tmp_path: Path) -> None
         checksum="a" * 64,
         status=SinglePaperAnalysisStatus.SUCCESS,
         completed_stages=tuple(SinglePaperAnalysisStage),
+        failed_stage=None,
         skipped_stages=(),
         preflight_result=preflight,
         extraction_result=extraction,
@@ -189,24 +190,113 @@ def test_single_paper_analysis_result_success_validation(tmp_path: Path) -> None
 
     assert res.status is SinglePaperAnalysisStatus.SUCCESS
     assert res.completed_stages == tuple(SinglePaperAnalysisStage)
+    assert res.failed_stage is None
     assert res.skipped_stages == ()
 
 
-def test_invalid_stage_combinations_rejected(tmp_path: Path) -> None:
+def test_preflight_failed_result_uses_failed_stage(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "paper.pdf"
+
+    res = SinglePaperAnalysisResult(
+        policy_version="single-paper-analysis-v1",
+        source_path=pdf_path,
+        checksum=None,
+        status=SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
+        completed_stages=(),
+        failed_stage=SinglePaperAnalysisStage.PREFLIGHT,
+        skipped_stages=(
+            SinglePaperAnalysisStage.EXTRACTION,
+            SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
+            SinglePaperAnalysisStage.SECTION_DETECTION,
+            SinglePaperAnalysisStage.QUESTION_EXTRACTION,
+        ),
+        preflight_result=None,
+        extraction_result=None,
+        quality_assessment=None,
+        section_result=None,
+        research_question_result=None,
+        warnings=(),
+        error_message="File not found.",
+    )
+
+    assert res.status is SinglePaperAnalysisStatus.PREFLIGHT_FAILED
+    assert res.completed_stages == ()
+    assert res.failed_stage is SinglePaperAnalysisStage.PREFLIGHT
+    assert SinglePaperAnalysisStage.EXTRACTION in res.skipped_stages
+
+
+def test_extraction_failed_result_uses_failed_stage(tmp_path: Path) -> None:
     pdf_path = tmp_path / "paper.pdf"
     preflight = _make_preflight(pdf_path)
 
+    res = SinglePaperAnalysisResult(
+        policy_version="single-paper-analysis-v1",
+        source_path=pdf_path,
+        checksum="a" * 64,
+        status=SinglePaperAnalysisStatus.EXTRACTION_FAILED,
+        completed_stages=(SinglePaperAnalysisStage.PREFLIGHT,),
+        failed_stage=SinglePaperAnalysisStage.EXTRACTION,
+        skipped_stages=(
+            SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
+            SinglePaperAnalysisStage.SECTION_DETECTION,
+            SinglePaperAnalysisStage.QUESTION_EXTRACTION,
+        ),
+        preflight_result=preflight,
+        extraction_result=None,
+        quality_assessment=None,
+        section_result=None,
+        research_question_result=None,
+        warnings=(),
+        error_message="Corrupted PDF.",
+    )
+
+    assert res.completed_stages == (SinglePaperAnalysisStage.PREFLIGHT,)
+    assert res.failed_stage is SinglePaperAnalysisStage.EXTRACTION
+    assert SinglePaperAnalysisStage.QUALITY_ASSESSMENT in res.skipped_stages
+
+
+def test_wrong_failed_stage_rejected(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "paper.pdf"
+
+    with pytest.raises(SinglePaperAnalysisValidationError, match="failed_stage"):
+        SinglePaperAnalysisResult(
+            policy_version="single-paper-analysis-v1",
+            source_path=pdf_path,
+            checksum=None,
+            status=SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
+            completed_stages=(),
+            failed_stage=SinglePaperAnalysisStage.EXTRACTION,  # Wrong!
+            skipped_stages=(
+                SinglePaperAnalysisStage.EXTRACTION,
+                SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
+                SinglePaperAnalysisStage.SECTION_DETECTION,
+                SinglePaperAnalysisStage.QUESTION_EXTRACTION,
+            ),
+            preflight_result=None,
+            extraction_result=None,
+            quality_assessment=None,
+            section_result=None,
+            research_question_result=None,
+            warnings=(),
+            error_message="Error",
+        )
+
+
+def test_invalid_stage_sequence_rejected(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "paper.pdf"
+
     with pytest.raises(
-        SinglePaperAnalysisValidationError, match="must equal canonical stage sequence"
+        SinglePaperAnalysisValidationError, match="canonical stage sequence"
     ):
         SinglePaperAnalysisResult(
             policy_version="single-paper-analysis-v1",
             source_path=pdf_path,
-            checksum="a" * 64,
+            checksum=None,
             status=SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
-            completed_stages=(SinglePaperAnalysisStage.PREFLIGHT,),
-            skipped_stages=(),  # Invalid: missing skipped stages!
-            preflight_result=preflight,
+            completed_stages=(),
+            failed_stage=SinglePaperAnalysisStage.PREFLIGHT,
+            skipped_stages=(),  # Missing 4 stages!
+            preflight_result=None,
             extraction_result=None,
             quality_assessment=None,
             section_result=None,
