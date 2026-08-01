@@ -20,8 +20,10 @@ class PDFSectionWarningCode(str, Enum):
     ALL_PAGES_EMPTY = "all_pages_empty"
     MISSING_ABSTRACT = "missing_abstract"
     UNRESOLVED_ABSTRACT_BOUNDARY = "unresolved_abstract_boundary"
+    EMPTY_ABSTRACT_BODY = "empty_abstract_body"
     MISSING_INTRODUCTION = "missing_introduction"
     MISSING_NEXT_SECTION_BOUNDARY = "missing_next_section_boundary"
+    EMPTY_INTRODUCTION_BODY = "empty_introduction_body"
     DUPLICATE_ABSTRACT_CANDIDATES = "duplicate_abstract_candidates"
     DUPLICATE_INTRODUCTION_CANDIDATES = "duplicate_introduction_candidates"
     AMBIGUOUS_ABSTRACT_CANDIDATES = "ambiguous_abstract_candidates"
@@ -44,12 +46,18 @@ _WARNING_MESSAGES = {
         "Abstract heading candidate was detected, but its end boundary could not be "
         "resolved."
     ),
+    PDFSectionWarningCode.EMPTY_ABSTRACT_BODY: (
+        "Abstract heading was detected, but the section content is empty."
+    ),
     PDFSectionWarningCode.MISSING_INTRODUCTION: (
         "No Introduction heading candidate was detected in the document text."
     ),
     PDFSectionWarningCode.MISSING_NEXT_SECTION_BOUNDARY: (
         "Introduction heading was detected, but no subsequent top-level section "
         "heading was found. Introduction extends to the end of the extracted text."
+    ),
+    PDFSectionWarningCode.EMPTY_INTRODUCTION_BODY: (
+        "Introduction heading was detected, but the section content is empty."
     ),
     PDFSectionWarningCode.DUPLICATE_ABSTRACT_CANDIDATES: (
         "Multiple distinct Abstract heading candidates were detected."
@@ -161,8 +169,8 @@ class PDFSection:
             )
         if not self.spans:
             raise PDFSectionValidationError("spans cannot be empty.")
-        if not isinstance(self.text, str):
-            raise PDFSectionValidationError("text must be a string.")
+        if not isinstance(self.text, str) or not self.text.strip():
+            raise PDFSectionValidationError("text must be a non-empty string.")
 
         if self.spans[0].page_number != self.start_page_number:
             raise PDFSectionValidationError(
@@ -302,6 +310,28 @@ class PDFSectionDetectionResult:
                 raise PDFSectionValidationError(
                     "UNRESOLVED_ABSTRACT_BOUNDARY warning contradicts MISSING_ABSTRACT warning."
                 )
+            if PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES in warning_code_set:
+                raise PDFSectionValidationError(
+                    "UNRESOLVED_ABSTRACT_BOUNDARY warning contradicts AMBIGUOUS_ABSTRACT_CANDIDATES warning."
+                )
+
+        if PDFSectionWarningCode.EMPTY_ABSTRACT_BODY in warning_code_set:
+            if PDFSectionKind.ABSTRACT in section_kinds_set:
+                raise PDFSectionValidationError(
+                    "EMPTY_ABSTRACT_BODY warning contradicts presence of Abstract section."
+                )
+            if PDFSectionWarningCode.MISSING_ABSTRACT in warning_code_set:
+                raise PDFSectionValidationError(
+                    "EMPTY_ABSTRACT_BODY warning contradicts MISSING_ABSTRACT warning."
+                )
+            if PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY in warning_code_set:
+                raise PDFSectionValidationError(
+                    "EMPTY_ABSTRACT_BODY warning contradicts UNRESOLVED_ABSTRACT_BOUNDARY warning."
+                )
+            if PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES in warning_code_set:
+                raise PDFSectionValidationError(
+                    "EMPTY_ABSTRACT_BODY warning contradicts AMBIGUOUS_ABSTRACT_CANDIDATES warning."
+                )
 
         if PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES in warning_code_set:
             if PDFSectionKind.INTRODUCTION in section_kinds_set:
@@ -309,7 +339,24 @@ class PDFSectionDetectionResult:
                     "AMBIGUOUS_INTRODUCTION_CANDIDATES warning contradicts presence of Introduction section."
                 )
 
-        # Grounding checks for ambiguity and duplicate warnings
+        if PDFSectionWarningCode.EMPTY_INTRODUCTION_BODY in warning_code_set:
+            if PDFSectionKind.INTRODUCTION in section_kinds_set:
+                raise PDFSectionValidationError(
+                    "EMPTY_INTRODUCTION_BODY warning contradicts presence of Introduction section."
+                )
+            if PDFSectionWarningCode.MISSING_INTRODUCTION in warning_code_set:
+                raise PDFSectionValidationError(
+                    "EMPTY_INTRODUCTION_BODY warning contradicts MISSING_INTRODUCTION warning."
+                )
+            if (
+                PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES
+                in warning_code_set
+            ):
+                raise PDFSectionValidationError(
+                    "EMPTY_INTRODUCTION_BODY warning contradicts AMBIGUOUS_INTRODUCTION_CANDIDATES warning."
+                )
+
+        # Grounding checks for candidates
         if len(set(self.candidates)) != len(self.candidates):
             raise PDFSectionValidationError("candidates must be unique.")
 
@@ -321,6 +368,37 @@ class PDFSectionDetectionResult:
         )
 
         for warning in self.warnings:
+            if warning.code in {
+                PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY,
+                PDFSectionWarningCode.EMPTY_ABSTRACT_BODY,
+            }:
+                if not abstract_candidates:
+                    raise PDFSectionValidationError(
+                        f"{warning.code.value} warning must be grounded by at least 1 Abstract candidate."
+                    )
+                expected_pages = tuple(
+                    sorted(set(c.page_number for c in abstract_candidates))
+                )
+                if warning.page_numbers != expected_pages:
+                    raise PDFSectionValidationError(
+                        f"{warning.code.value} page_numbers ({warning.page_numbers}) "
+                        f"do not match candidate page numbers ({expected_pages})."
+                    )
+
+            if warning.code is PDFSectionWarningCode.EMPTY_INTRODUCTION_BODY:
+                if not intro_candidates:
+                    raise PDFSectionValidationError(
+                        f"{warning.code.value} warning must be grounded by at least 1 Introduction candidate."
+                    )
+                expected_pages = tuple(
+                    sorted(set(c.page_number for c in intro_candidates))
+                )
+                if warning.page_numbers != expected_pages:
+                    raise PDFSectionValidationError(
+                        f"{warning.code.value} page_numbers ({warning.page_numbers}) "
+                        f"do not match candidate page numbers ({expected_pages})."
+                    )
+
             if warning.code in {
                 PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES,
                 PDFSectionWarningCode.DUPLICATE_ABSTRACT_CANDIDATES,
@@ -369,6 +447,7 @@ class PDFSectionDetectionResult:
             not in warning_code_set
             and PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY
             not in warning_code_set
+            and PDFSectionWarningCode.EMPTY_ABSTRACT_BODY not in warning_code_set
         ):
             if PDFSectionWarningCode.MISSING_ABSTRACT not in warning_code_set:
                 raise PDFSectionValidationError(
@@ -385,6 +464,7 @@ class PDFSectionDetectionResult:
             and PDFSectionWarningCode.ALL_PAGES_EMPTY not in warning_code_set
             and PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES
             not in warning_code_set
+            and PDFSectionWarningCode.EMPTY_INTRODUCTION_BODY not in warning_code_set
         ):
             if PDFSectionWarningCode.MISSING_INTRODUCTION not in warning_code_set:
                 raise PDFSectionValidationError(

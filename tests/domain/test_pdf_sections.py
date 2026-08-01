@@ -224,6 +224,89 @@ def test_section_detection_result_validation_and_distinct_candidate_grounding() 
         )
 
 
+def test_result_unresolved_abstract_boundary_and_empty_body_grounding() -> None:
+    c_abs = PDFHeadingCandidate(
+        kind=PDFSectionKind.ABSTRACT,
+        heading_text="Abstract",
+        page_number=1,
+        start_character_offset=0,
+        end_character_offset=8,
+    )
+    c_intro = PDFHeadingCandidate(
+        kind=PDFSectionKind.INTRODUCTION,
+        heading_text="1. Introduction",
+        page_number=2,
+        start_character_offset=0,
+        end_character_offset=15,
+    )
+
+    # UNRESOLVED_ABSTRACT_BOUNDARY must be grounded by Abstract candidate
+    with pytest.raises(
+        PDFSectionValidationError,
+        match="must be grounded by at least 1 Abstract candidate",
+    ):
+        PDFSectionDetectionResult(
+            policy_version="pdf-section-detection-v1",
+            sections=(),
+            candidates=(),
+            warnings=(
+                PDFSectionWarning(
+                    PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY,
+                    page_numbers=(1,),
+                ),
+                PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION),
+            ),
+        )
+
+    # EMPTY_ABSTRACT_BODY must be grounded by Abstract candidate
+    with pytest.raises(
+        PDFSectionValidationError,
+        match="must be grounded by at least 1 Abstract candidate",
+    ):
+        PDFSectionDetectionResult(
+            policy_version="pdf-section-detection-v1",
+            sections=(),
+            candidates=(),
+            warnings=(
+                PDFSectionWarning(
+                    PDFSectionWarningCode.EMPTY_ABSTRACT_BODY, page_numbers=(1,)
+                ),
+                PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION),
+            ),
+        )
+
+    # EMPTY_INTRODUCTION_BODY must be grounded by Introduction candidate
+    with pytest.raises(
+        PDFSectionValidationError,
+        match="must be grounded by at least 1 Introduction candidate",
+    ):
+        PDFSectionDetectionResult(
+            policy_version="pdf-section-detection-v1",
+            sections=(),
+            candidates=(c_abs,),
+            warnings=(
+                PDFSectionWarning(PDFSectionWarningCode.MISSING_ABSTRACT),
+                PDFSectionWarning(
+                    PDFSectionWarningCode.EMPTY_INTRODUCTION_BODY, page_numbers=(2,)
+                ),
+            ),
+        )
+
+    # Valid EMPTY_INTRODUCTION_BODY grounding
+    res_empty_intro = PDFSectionDetectionResult(
+        policy_version="pdf-section-detection-v1",
+        sections=(),
+        candidates=(c_intro,),
+        warnings=(
+            PDFSectionWarning(PDFSectionWarningCode.MISSING_ABSTRACT),
+            PDFSectionWarning(
+                PDFSectionWarningCode.EMPTY_INTRODUCTION_BODY, page_numbers=(2,)
+            ),
+        ),
+    )
+    assert len(res_empty_intro.warnings) == 2
+
+
 def test_result_rejects_unrecognized_policy_version() -> None:
     with pytest.raises(
         PDFSectionValidationError, match="not a recognized policy version"

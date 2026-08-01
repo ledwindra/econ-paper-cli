@@ -144,32 +144,12 @@ def detect_pdf_sections(
 
     # Determine Abstract section boundaries
     if selected_abstract is not None:
-        abstract_end_line_index: int | None = None
-
-        is_intro_ambiguous = any(
-            w.code is PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES
-            for w in warnings_list
-        )
-
-        if not is_intro_ambiguous:
-            if selected_intro is not None:
-                abstract_end_line_index = selected_intro.line_index
-            else:
-                # Look for any next top-level section candidate to bound the Abstract
-                next_sec_candidate = _find_next_section_candidate(
-                    all_lines,
-                    start_index=selected_abstract.line_index + 1,
-                    running_headers=running_headers,
-                )
-                if next_sec_candidate is not None:
-                    abstract_end_line_index = next_sec_candidate.line_index
-
-        if abstract_end_line_index is not None:
+        if selected_intro is not None:
             abstract_section = _build_section(
                 kind=PDFSectionKind.ABSTRACT,
                 heading_line=all_lines[selected_abstract.line_index],
                 start_line_index=selected_abstract.line_index + 1,
-                end_line_index=abstract_end_line_index,
+                end_line_index=selected_intro.line_index,
                 all_lines=all_lines,
                 extraction=extraction,
             )
@@ -178,7 +158,7 @@ def detect_pdf_sections(
             else:
                 warnings_list.append(
                     PDFSectionWarning(
-                        PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY,
+                        PDFSectionWarningCode.EMPTY_ABSTRACT_BODY,
                         (all_lines[selected_abstract.line_index].page_number,),
                     )
                 )
@@ -217,7 +197,10 @@ def detect_pdf_sections(
             sections_list.append(intro_section)
         else:
             warnings_list.append(
-                PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION)
+                PDFSectionWarning(
+                    PDFSectionWarningCode.EMPTY_INTRODUCTION_BODY,
+                    (all_lines[selected_intro.line_index].page_number,),
+                )
             )
 
     # Cross-field required missing warnings
@@ -235,6 +218,9 @@ def detect_pdf_sections(
             w.code is PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY
             for w in warnings_list
         )
+        and not any(
+            w.code is PDFSectionWarningCode.EMPTY_ABSTRACT_BODY for w in warnings_list
+        )
     ):
         warnings_list.append(PDFSectionWarning(PDFSectionWarningCode.MISSING_ABSTRACT))
 
@@ -245,6 +231,10 @@ def detect_pdf_sections(
         )
         and not any(
             w.code is PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES
+            for w in warnings_list
+        )
+        and not any(
+            w.code is PDFSectionWarningCode.EMPTY_INTRODUCTION_BODY
             for w in warnings_list
         )
     ):

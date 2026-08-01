@@ -216,12 +216,12 @@ def test_missing_abstract_and_missing_next_section_warnings() -> None:
 
 
 def test_missing_introduction_warning() -> None:
-    p1 = "Abstract\nOnly abstract exists in this document.\n\n2. Data\nData text.\n"
+    p1 = "Abstract\nOnly abstract exists in this document.\n"
     result = detect_pdf_sections(_extraction(p1), settings=DEFAULT_PDF_SECTION_SETTINGS)
 
-    assert len(result.sections) == 1
-    assert result.sections[0].kind is PDFSectionKind.ABSTRACT
+    assert len(result.sections) == 0
     codes = tuple(w.code for w in result.warnings)
+    assert PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY in codes
     assert PDFSectionWarningCode.MISSING_INTRODUCTION in codes
 
 
@@ -302,6 +302,16 @@ def test_ambiguous_abstract_and_introduction_candidates_emit_warning_and_omit_se
     assert PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES in codes
     assert len(result.sections) == 0
     assert len(result.candidates) == 4
+
+
+def test_empty_section_bodies_emit_empty_body_warnings() -> None:
+    p1 = "Abstract\n1. Introduction\n2. Data\nData text.\n"
+    result = detect_pdf_sections(_extraction(p1), settings=DEFAULT_PDF_SECTION_SETTINGS)
+
+    codes = [w.code for w in result.warnings]
+    assert PDFSectionWarningCode.EMPTY_ABSTRACT_BODY in codes
+    assert PDFSectionWarningCode.EMPTY_INTRODUCTION_BODY in codes
+    assert len(result.sections) == 0
 
 
 def test_empty_pages_and_zero_page_results() -> None:
