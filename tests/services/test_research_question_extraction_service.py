@@ -346,7 +346,7 @@ def test_generator_failure_handled_gracefully() -> None:
     assert ResearchQuestionWarningCode.MISSING_SECTION in codes
 
 
-def test_extra_top_level_or_evidence_keys_rejected() -> None:
+def test_extra_top_level_keys_rejected() -> None:
     abs_text = "Abstract\nWe study inflation persistence."
     sec_abs = _make_section(
         PDFSectionKind.ABSTRACT, abs_text, page_number=1, start_offset=0
@@ -371,14 +371,50 @@ def test_extra_top_level_or_evidence_keys_rejected() -> None:
         }
     )
 
-    gen1 = FakeGenerator(response_text=resp_extra_top)
-    res1 = extract_research_question(
-        sec_res, gen1, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
+    gen = FakeGenerator(response_text=resp_extra_top)
+    res = extract_research_question(
+        sec_res, gen, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
     )
-    assert res1.kind is ResearchQuestionKind.UNAVAILABLE
+    assert res.kind is ResearchQuestionKind.UNAVAILABLE
     assert any(
         w.code is ResearchQuestionWarningCode.MALFORMED_STRUCTURED_RESPONSE
-        for w in res1.warnings
+        for w in res.warnings
+    )
+
+
+def test_extra_evidence_keys_rejected() -> None:
+    abs_text = "Abstract\nWe study inflation persistence."
+    sec_abs = _make_section(
+        PDFSectionKind.ABSTRACT, abs_text, page_number=1, start_offset=0
+    )
+    sec_res = _make_section_result((sec_abs,))
+
+    exc = "We study inflation persistence."
+    resp_extra_ev = json.dumps(
+        {
+            "research_question": "What drives inflation persistence?",
+            "kind": "explicit",
+            "evidence": [
+                {
+                    "section_kind": "abstract",
+                    "excerpt_text": exc,
+                    "page_number": 1,
+                    "start_character_offset": abs_text.find(exc),
+                    "end_character_offset": abs_text.find(exc) + len(exc),
+                    "confidence_score": 0.99,
+                }
+            ],
+        }
+    )
+
+    gen = FakeGenerator(response_text=resp_extra_ev)
+    res = extract_research_question(
+        sec_res, gen, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
+    )
+    assert res.kind is ResearchQuestionKind.UNAVAILABLE
+    assert any(
+        w.code is ResearchQuestionWarningCode.MALFORMED_STRUCTURED_RESPONSE
+        for w in res.warnings
     )
 
 
@@ -458,3 +494,47 @@ def test_both_sections_supplied_but_sections_used_derived_from_abstract_evidence
     assert res.sections_used == (
         PDFSectionKind.ABSTRACT,
     )  # Derived only from evidence!
+
+
+def test_deterministic_prompt_ordering_and_repeated_runs() -> None:
+    abs_text = "Abstract\nWe study trade tariffs."
+    intro_text = "1. Introduction\nTrade tariffs affect welfare."
+    sec_abs = _make_section(
+        PDFSectionKind.ABSTRACT, abs_text, page_number=1, start_offset=0
+    )
+    sec_intro = _make_section(
+        PDFSectionKind.INTRODUCTION, intro_text, page_number=2, start_offset=0
+    )
+    sec_res = _make_section_result((sec_abs, sec_intro))
+
+    exc_abs = "We study trade tariffs."
+    resp_json = json.dumps(
+        {
+            "research_question": "How do tariffs affect welfare?",
+            "kind": "explicit",
+            "evidence": [
+                {
+                    "section_kind": "abstract",
+                    "excerpt_text": exc_abs,
+                    "page_number": 1,
+                    "start_character_offset": abs_text.find(exc_abs),
+                    "end_character_offset": abs_text.find(exc_abs) + len(exc_abs),
+                }
+            ],
+        }
+    )
+
+    gen1 = FakeGenerator(response_text=resp_json)
+    res1 = extract_research_question(
+        sec_res, gen1, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
+    )
+
+    gen2 = FakeGenerator(response_text=resp_json)
+    res2 = extract_research_question(
+        sec_res, gen2, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
+    )
+
+    assert res1 == res2
+    assert gen1.last_request is not None
+    assert gen2.last_request is not None
+    assert gen1.last_request.question == gen2.last_request.question

@@ -140,6 +140,47 @@ def test_research_question_result_explicit_validation() -> None:
         replace(res, evidence=(ev_intro,))
 
 
+def test_available_result_rejects_terminal_warning_codes() -> None:
+    excerpt = "We study the impact of microcredit on poverty."
+    ev = ResearchQuestionEvidence(
+        section_kind=PDFSectionKind.ABSTRACT,
+        excerpt_text=excerpt,
+        page_number=1,
+        start_character_offset=5,
+        end_character_offset=5 + len(excerpt),
+    )
+
+    with pytest.raises(
+        ResearchQuestionValidationError,
+        match="cannot contain terminal warning codes",
+    ):
+        ResearchQuestionResult(
+            policy_version="research-question-extraction-v1",
+            question_text="What is the impact of microcredit on poverty?",
+            kind=ResearchQuestionKind.EXPLICIT,
+            sections_used=(PDFSectionKind.ABSTRACT,),
+            evidence=(ev,),
+            warnings=(
+                ResearchQuestionWarning(ResearchQuestionWarningCode.GENERATION_FAILED),
+            ),
+        )
+
+    with pytest.raises(
+        ResearchQuestionValidationError,
+        match="cannot contain terminal warning codes",
+    ):
+        ResearchQuestionResult(
+            policy_version="research-question-extraction-v1",
+            question_text="What is the impact of microcredit on poverty?",
+            kind=ResearchQuestionKind.INFERRED,
+            sections_used=(PDFSectionKind.ABSTRACT,),
+            evidence=(ev,),
+            warnings=(
+                ResearchQuestionWarning(ResearchQuestionWarningCode.MODEL_ABSTAINED),
+            ),
+        )
+
+
 def test_research_question_result_unavailable_validation() -> None:
     res = ResearchQuestionResult(
         policy_version="research-question-extraction-v1",
@@ -170,12 +211,17 @@ def test_research_question_result_unavailable_validation() -> None:
     with pytest.raises(ResearchQuestionValidationError, match="must be empty"):
         replace(res, evidence=(ev,))
 
-    # UNAVAILABLE requires at least one terminal warning
+    # UNAVAILABLE requires at least one terminal warning (MISSING_SECTION alone is rejected)
     with pytest.raises(
         ResearchQuestionValidationError,
         match="must contain at least one terminal warning code",
     ):
-        replace(res, warnings=())
+        replace(
+            res,
+            warnings=(
+                ResearchQuestionWarning(ResearchQuestionWarningCode.MISSING_SECTION),
+            ),
+        )
 
 
 def test_result_rejects_non_canonical_warning_ordering_and_duplicates() -> None:
