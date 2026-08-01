@@ -1,5 +1,6 @@
 """Unit tests for SQLite storage adapter."""
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,7 @@ from econ_paper_cli.adapters.sqlite_storage import (
     CURRENT_SCHEMA_VERSION,
     SQLiteStorage,
 )
-from econ_paper_cli.domain import Paper, Passage
+from econ_paper_cli.domain import Corpus, Paper, Passage
 from econ_paper_cli.domain.storage import (
     ConversionSettings,
     IngestionCompletion,
@@ -19,6 +20,7 @@ from econ_paper_cli.domain.storage import (
 from econ_paper_cli.protocols.storage import (
     ChecksumConflictError,
     StorageBackend,
+    StorageIncompatibleSchemaError,
     StorageMigrationError,
     StorageTransactionError,
 )
@@ -51,7 +53,9 @@ def sample_paper_record() -> PaperRecord:
     provenance = SourceProvenance(
         source_path="/papers/2024/w12345.pdf",
         source_format="pdf",
+        source_file_size=1024567,
         content_checksum=CHECKSUM_1,
+        markdown_path="/papers/2024/w12345.md",
         extraction_method="pdfplumber-v1",
         created_at="2026-07-31T20:00:00Z",
     )
@@ -126,6 +130,19 @@ def test_save_and_retrieve_round_trip(sample_paper_record: PaperRecord) -> None:
     storage.close()
 
 
+def test_load_corpus_contract(sample_paper_record: PaperRecord) -> None:
+    storage = SQLiteStorage(":memory:")
+    storage.save_paper_record(sample_paper_record)
+
+    corpus = storage.load_corpus()
+    assert isinstance(corpus, Corpus)
+    assert len(corpus.papers) == 1
+    assert corpus.papers[0] == sample_paper_record.paper
+    assert len(corpus.passages) == 1
+    assert corpus.passages[0] == sample_paper_record.passages[0]
+    storage.close()
+
+
 def test_idempotency_and_deterministic_replacement(
     sample_paper_record: PaperRecord,
 ) -> None:
@@ -195,11 +212,13 @@ def test_idempotency_and_deterministic_replacement(
     storage.close()
 
 
-def test_checksum_uniqueness_conflict(sample_paper_record: PaperRecord) -> None:
+def test_checksum_uniqueness_conflict_and_case_insensitivity(
+    sample_paper_record: PaperRecord,
+) -> None:
     storage = SQLiteStorage(":memory:")
     storage.save_paper_record(sample_paper_record)
 
-    # Attempt to save a DIFFERENT paper_id using the SAME checksum
+    # Attempt to save a DIFFERENT paper_id using the SAME checksum (checksum_1)
     conflicting_paper = Paper(
         paper_id="paper.different.v1",
         title="Different Paper Title",
@@ -222,7 +241,9 @@ def test_checksum_uniqueness_conflict(sample_paper_record: PaperRecord) -> None:
     conflicting_provenance = SourceProvenance(
         source_path="/papers/different.pdf",
         source_format="pdf",
+        source_file_size=2048,
         content_checksum=CHECKSUM_1,  # Same checksum as paper.2024.v1!
+        markdown_path="/papers/different.md",
         extraction_method="pdfplumber-v1",
         created_at="2026-07-31T20:00:00Z",
     )
@@ -250,14 +271,67 @@ def test_checksum_uniqueness_conflict(sample_paper_record: PaperRecord) -> None:
     storage.close()
 
 
+def test_rejection_of_duplicate_passage_ordinal_positions(
+    tmp_path: Path, sample_paper_record: PaperRecord
+) -> None:
+    db_file = tmp_path / "ordinal_test.db"
+    storage = SQLiteStorage(db_file)
+    storage.initialize()
+    conn = storage._conn
+    assert conn is not None
+
+    storage.save_paper_record(sample_paper_record)
+
+    # Attempt to insert a second passage with the same paper_id and same ordinal_position (0)
+    with pytest.raises(sqlite3.IntegrityError):
+        with conn:
+            conn.execute(
+                """INSERT INTO passages (
+                    passage_id, paper_id, text, section_heading,
+                    page_start, page_end, ordinal_position
+                ) VALUES ('paper.2024.v1:p2', 'paper.2024.v1', 'Duplicate ordinal text', NULL, 1, 1, 0)"""
+            )
+
+    storage.close()
+
+
+def test_unsupported_newer_schema_rejection(tmp_path: Path) -> None:
+    db_file = tmp_path / "newer_schema.db"
+    conn = sqlite3.connect(str(db_file))
+    conn.execute(
+        """CREATE TABLE schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL,
+            description TEXT NOT NULL
+        );"""
+    )
+    conn.execute(
+        "INSERT INTO schema_migrations (version, applied_at, description) VALUES (99, '2026-07-31T20:00:00Z', 'Future schema');"
+    )
+    conn.commit()
+    conn.close()
+
+    storage = SQLiteStorage(db_file)
+    with pytest.raises(
+        StorageIncompatibleSchemaError,
+        match="Database schema version 99 is newer than maximum supported version",
+    ):
+        storage.initialize()
+
+    # DB remains unchanged
+    conn = sqlite3.connect(str(db_file))
+    cursor = conn.execute("SELECT MAX(version) AS v FROM schema_migrations")
+    assert cursor.fetchone()[0] == 99
+    conn.close()
+
+
 def test_transaction_rollback_on_failure(sample_paper_record: PaperRecord) -> None:
     storage = SQLiteStorage(":memory:")
     storage.initialize()
     conn = storage._conn
     assert conn is not None
 
-    # Inject an invalid DB table state or simulate an error during transaction
-    # We create an artificial trigger that fails during passage insert
+    # Inject an artificial trigger that fails during passage insert
     conn.execute(
         """CREATE TRIGGER fail_passage_insert BEFORE INSERT ON passages
            BEGIN

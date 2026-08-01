@@ -16,15 +16,20 @@ def get_default_storage_dir(
     """Resolve the canonical cross-platform application storage directory.
 
     Resolution order:
-    1. ECONPAPERS_STORAGE_DIR environment variable (if non-empty)
-    2. Windows: %LOCALAPPDATA% / app_name -> %APPDATA% / app_name -> ~/AppData/Local/app_name
-    3. macOS: ~/Library/Application Support / app_name
-    4. Linux/POSIX: ${XDG_DATA_HOME:-~/.local/share} / app_name
+    1. ECONPAPERS_LIBRARY_DIR environment variable (if non-empty)
+    2. ECONPAPERS_STORAGE_DIR environment variable (if non-empty)
+    3. Windows: %LOCALAPPDATA% / app_name -> %APPDATA% / app_name -> ~/AppData/Local/app_name
+    4. macOS: ~/Library/Application Support / app_name
+    5. Linux/POSIX: ${XDG_DATA_HOME:-~/.local/share} / app_name
     """
     env_map = os.environ if env is None else env
-    custom_dir = env_map.get("ECONPAPERS_STORAGE_DIR", "").strip()
-    if custom_dir:
-        return Path(custom_dir)
+    custom_library_dir = env_map.get("ECONPAPERS_LIBRARY_DIR", "").strip()
+    if custom_library_dir:
+        return Path(custom_library_dir)
+
+    custom_storage_dir = env_map.get("ECONPAPERS_STORAGE_DIR", "").strip()
+    if custom_storage_dir:
+        return Path(custom_storage_dir)
 
     sys_name = platform.system() if system is None else system
 

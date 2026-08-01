@@ -19,7 +19,9 @@ class SourceProvenance:
 
     source_path: str
     source_format: str
+    source_file_size: int
     content_checksum: str
+    markdown_path: str
     extraction_method: str
     created_at: str
 
@@ -27,7 +29,9 @@ class SourceProvenance:
         """Validate direct construction."""
         _validate_nonempty_text("source_path", self.source_path)
         _validate_nonempty_text("source_format", self.source_format)
+        _validate_positive_int("source_file_size", self.source_file_size)
         _validate_checksum(self.content_checksum)
+        _validate_nonempty_text("markdown_path", self.markdown_path)
         _validate_nonempty_text("extraction_method", self.extraction_method)
         _validate_nonempty_text("created_at", self.created_at)
 
@@ -41,7 +45,9 @@ class SourceProvenance:
         expected_fields = {
             "source_path",
             "source_format",
+            "source_file_size",
             "content_checksum",
+            "markdown_path",
             "extraction_method",
             "created_at",
         }
@@ -60,7 +66,9 @@ class SourceProvenance:
         return cls(
             source_path=cast(str, data["source_path"]),
             source_format=cast(str, data["source_format"]),
+            source_file_size=cast(int, data["source_file_size"]),
             content_checksum=cast(str, data["content_checksum"]),
+            markdown_path=cast(str, data["markdown_path"]),
             extraction_method=cast(str, data["extraction_method"]),
             created_at=cast(str, data["created_at"]),
         )
@@ -70,7 +78,9 @@ class SourceProvenance:
         return {
             "source_path": self.source_path,
             "source_format": self.source_format,
+            "source_file_size": self.source_file_size,
             "content_checksum": self.content_checksum,
+            "markdown_path": self.markdown_path,
             "extraction_method": self.extraction_method,
             "created_at": self.created_at,
         }
@@ -403,12 +413,16 @@ def _validate_nonempty_text(field: str, value: object) -> None:
 
 
 def _validate_checksum(value: object) -> None:
-    if (
-        not isinstance(value, str)
-        or _SHA256_HEX_PATTERN.fullmatch(value.lower()) is None
-    ):
+    if not isinstance(value, str) or _SHA256_HEX_PATTERN.fullmatch(value) is None:
         raise StorageRecordValidationError(
             "content_checksum must be a 64-character lowercase hex string."
+        )
+
+
+def _validate_positive_int(field: str, value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise StorageRecordValidationError(
+            f"{field} must be a positive integer (>= 1)."
         )
 
 

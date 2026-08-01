@@ -49,7 +49,9 @@ def sample_provenance() -> SourceProvenance:
     return SourceProvenance(
         source_path="/papers/2024/w12345.pdf",
         source_format="pdf",
+        source_file_size=1024567,
         content_checksum=VALID_CHECKSUM,
+        markdown_path="/papers/2024/w12345.md",
         extraction_method="pdfplumber-v1",
         created_at="2026-07-31T20:00:00Z",
     )
@@ -107,17 +109,36 @@ def test_source_provenance_validation() -> None:
     prov = SourceProvenance(
         source_path="/path/doc.pdf",
         source_format="pdf",
+        source_file_size=2048,
         content_checksum="b" * 64,
+        markdown_path="/path/doc.md",
         extraction_method="test",
         created_at="2026-07-31T20:00:00Z",
     )
     assert prov.content_checksum == "b" * 64
+    assert prov.source_file_size == 2048
+    assert prov.markdown_path == "/path/doc.md"
 
+    # Uppercase hex checksum must be rejected
     with pytest.raises(StorageRecordValidationError, match="content_checksum"):
         SourceProvenance(
             source_path="/path/doc.pdf",
             source_format="pdf",
-            content_checksum="invalid_hex",
+            source_file_size=2048,
+            content_checksum="A" * 64,  # Uppercase hex
+            markdown_path="/path/doc.md",
+            extraction_method="test",
+            created_at="2026-07-31T20:00:00Z",
+        )
+
+    # Invalid source_file_size
+    with pytest.raises(StorageRecordValidationError, match="source_file_size"):
+        SourceProvenance(
+            source_path="/path/doc.pdf",
+            source_format="pdf",
+            source_file_size=0,
+            content_checksum="b" * 64,
+            markdown_path="/path/doc.md",
             extraction_method="test",
             created_at="2026-07-31T20:00:00Z",
         )

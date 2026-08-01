@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from econ_paper_cli.adapters.storage_paths import get_default_db_path
+from econ_paper_cli.domain.corpora import Corpus
 from econ_paper_cli.domain.papers import Paper
 from econ_paper_cli.domain.passages import Passage
 from econ_paper_cli.domain.storage import (
@@ -19,6 +20,7 @@ from econ_paper_cli.protocols.storage import (
     ChecksumConflictError,
     StorageBackend,
     StorageConnectionError,
+    StorageIncompatibleSchemaError,
     StorageMigrationError,
     StorageTransactionError,
     StorageValidationError,
@@ -45,7 +47,7 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 source_name TEXT NOT NULL,
                 source_identifier TEXT NOT NULL,
                 source_url TEXT,
-                content_checksum TEXT NOT NULL UNIQUE,
+                content_checksum TEXT NOT NULL UNIQUE COLLATE NOCASE,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );""",
@@ -54,7 +56,9 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 paper_id TEXT PRIMARY KEY,
                 source_path TEXT NOT NULL,
                 source_format TEXT NOT NULL,
-                content_checksum TEXT NOT NULL,
+                source_file_size INTEGER NOT NULL,
+                content_checksum TEXT NOT NULL COLLATE NOCASE,
+                markdown_path TEXT NOT NULL,
                 extraction_method TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE
@@ -74,7 +78,8 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 page_start INTEGER,
                 page_end INTEGER,
                 ordinal_position INTEGER NOT NULL,
-                FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE
+                FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE,
+                CONSTRAINT uq_paper_ordinal UNIQUE(paper_id, ordinal_position)
             );""",
             "CREATE INDEX IF NOT EXISTS idx_passages_paper_ordinal ON passages(paper_id, ordinal_position);",
             """CREATE TABLE IF NOT EXISTS ingestion_warnings (
@@ -188,21 +193,30 @@ class SQLiteStorage(StorageBackend):
 
         current_version = self.get_schema_version()
 
+        if current_version > CURRENT_SCHEMA_VERSION and custom_migrations is None:
+            raise StorageIncompatibleSchemaError(
+                f"Database schema version {current_version} is newer than maximum supported version {CURRENT_SCHEMA_VERSION}."
+            )
+
         for version, description, statements in migrations:
             if version > current_version:
                 try:
-                    with conn:
-                        for stmt in statements:
-                            conn.execute(stmt)
-                        now_str = datetime.now(timezone.utc).isoformat()
-                        conn.execute(
-                            "INSERT INTO schema_migrations (version, applied_at, description) VALUES (?, ?, ?)",
-                            (version, now_str, description),
-                        )
-                except sqlite3.Error as err:
-                    raise StorageMigrationError(
-                        f"Migration to schema version {version} failed: {err}."
-                    ) from err
+                    conn.execute("BEGIN IMMEDIATE")
+                    for stmt in statements:
+                        conn.execute(stmt)
+                    now_str = datetime.now(timezone.utc).isoformat()
+                    conn.execute(
+                        "INSERT INTO schema_migrations (version, applied_at, description) VALUES (?, ?, ?)",
+                        (version, now_str, description),
+                    )
+                    conn.commit()
+                except Exception as err:
+                    conn.rollback()
+                    if isinstance(err, sqlite3.Error):
+                        raise StorageMigrationError(
+                            f"Migration to schema version {version} failed: {err}."
+                        ) from err
+                    raise
 
     def save_paper_record(self, record: PaperRecord) -> None:
         """Persist or replace a paper record in a single atomic transaction."""
@@ -213,10 +227,10 @@ class SQLiteStorage(StorageBackend):
         sett = record.conversion_settings
         comp = record.completion
 
-        # Check for checksum conflict under a different paper_id
+        # Check for checksum conflict under a different paper_id (case-insensitive)
         try:
             cursor = conn.execute(
-                "SELECT paper_id FROM papers WHERE content_checksum = ?",
+                "SELECT paper_id FROM papers WHERE LOWER(content_checksum) = LOWER(?)",
                 (prov.content_checksum,),
             )
             existing_row = cursor.fetchone()
@@ -233,112 +247,120 @@ class SQLiteStorage(StorageBackend):
         now_str = datetime.now(timezone.utc).isoformat()
 
         try:
-            with conn:
-                # Delete existing record if updating (cascades to related tables)
-                conn.execute("DELETE FROM papers WHERE paper_id = ?", (paper.paper_id,))
+            conn.execute("BEGIN IMMEDIATE")
 
-                # Insert into papers
+            # Delete existing record if updating (cascades to related tables)
+            conn.execute("DELETE FROM papers WHERE paper_id = ?", (paper.paper_id,))
+
+            # Insert into papers
+            conn.execute(
+                """INSERT INTO papers (
+                    paper_id, title, authors_json, year, abstract,
+                    source_name, source_identifier, source_url,
+                    content_checksum, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    paper.paper_id,
+                    paper.title,
+                    json.dumps(list(paper.authors)),
+                    paper.year,
+                    paper.abstract,
+                    paper.source_name,
+                    paper.source_identifier,
+                    paper.source_url,
+                    prov.content_checksum.lower(),
+                    prov.created_at,
+                    now_str,
+                ),
+            )
+
+            # Insert into source_provenance
+            conn.execute(
+                """INSERT INTO source_provenance (
+                    paper_id, source_path, source_format, source_file_size,
+                    content_checksum, markdown_path, extraction_method, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    paper.paper_id,
+                    prov.source_path,
+                    prov.source_format,
+                    prov.source_file_size,
+                    prov.content_checksum.lower(),
+                    prov.markdown_path,
+                    prov.extraction_method,
+                    prov.created_at,
+                ),
+            )
+
+            # Insert into conversion_settings
+            conn.execute(
+                """INSERT INTO conversion_settings (
+                    paper_id, conversion_version, ocr_enabled, parameters_json
+                ) VALUES (?, ?, ?, ?)""",
+                (
+                    paper.paper_id,
+                    sett.conversion_version,
+                    1 if sett.ocr_enabled else 0,
+                    json.dumps(sett.parameters),
+                ),
+            )
+
+            # Insert into passages
+            for passage in record.passages:
                 conn.execute(
-                    """INSERT INTO papers (
-                        paper_id, title, authors_json, year, abstract,
-                        source_name, source_identifier, source_url,
-                        content_checksum, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    """INSERT INTO passages (
+                        passage_id, paper_id, text, section_heading,
+                        page_start, page_end, ordinal_position
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (
-                        paper.paper_id,
-                        paper.title,
-                        json.dumps(list(paper.authors)),
-                        paper.year,
-                        paper.abstract,
-                        paper.source_name,
-                        paper.source_identifier,
-                        paper.source_url,
-                        prov.content_checksum,
-                        prov.created_at,
-                        now_str,
+                        passage.passage_id,
+                        passage.paper_id,
+                        passage.text,
+                        passage.section_heading,
+                        passage.page_start,
+                        passage.page_end,
+                        passage.ordinal_position,
                     ),
                 )
 
-                # Insert into source_provenance
+            # Insert into ingestion_warnings
+            for warning in record.warnings:
                 conn.execute(
-                    """INSERT INTO source_provenance (
-                        paper_id, source_path, source_format, content_checksum,
-                        extraction_method, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)""",
-                    (
-                        paper.paper_id,
-                        prov.source_path,
-                        prov.source_format,
-                        prov.content_checksum,
-                        prov.extraction_method,
-                        prov.created_at,
-                    ),
-                )
-
-                # Insert into conversion_settings
-                conn.execute(
-                    """INSERT INTO conversion_settings (
-                        paper_id, conversion_version, ocr_enabled, parameters_json
+                    """INSERT INTO ingestion_warnings (
+                        paper_id, warning_code, message, created_at
                     ) VALUES (?, ?, ?, ?)""",
                     (
                         paper.paper_id,
-                        sett.conversion_version,
-                        1 if sett.ocr_enabled else 0,
-                        json.dumps(sett.parameters),
+                        warning.warning_code,
+                        warning.message,
+                        warning.created_at or now_str,
                     ),
                 )
 
-                # Insert into passages
-                for passage in record.passages:
-                    conn.execute(
-                        """INSERT INTO passages (
-                            passage_id, paper_id, text, section_heading,
-                            page_start, page_end, ordinal_position
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                        (
-                            passage.passage_id,
-                            passage.paper_id,
-                            passage.text,
-                            passage.section_heading,
-                            passage.page_start,
-                            passage.page_end,
-                            passage.ordinal_position,
-                        ),
-                    )
+            # Insert into ingestion_completions
+            conn.execute(
+                """INSERT INTO ingestion_completions (
+                    paper_id, status, completed_at, passage_count,
+                    warning_count, error_message
+                ) VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    paper.paper_id,
+                    comp.status,
+                    comp.completed_at,
+                    comp.passage_count,
+                    comp.warning_count,
+                    comp.error_message,
+                ),
+            )
 
-                # Insert into ingestion_warnings
-                for warning in record.warnings:
-                    conn.execute(
-                        """INSERT INTO ingestion_warnings (
-                            paper_id, warning_code, message, created_at
-                        ) VALUES (?, ?, ?, ?)""",
-                        (
-                            paper.paper_id,
-                            warning.warning_code,
-                            warning.message,
-                            warning.created_at or now_str,
-                        ),
-                    )
-
-                # Insert into ingestion_completions
-                conn.execute(
-                    """INSERT INTO ingestion_completions (
-                        paper_id, status, completed_at, passage_count,
-                        warning_count, error_message
-                    ) VALUES (?, ?, ?, ?, ?, ?)""",
-                    (
-                        paper.paper_id,
-                        comp.status,
-                        comp.completed_at,
-                        comp.passage_count,
-                        comp.warning_count,
-                        comp.error_message,
-                    ),
-                )
-        except sqlite3.Error as err:
-            raise StorageTransactionError(
-                f"Failed to save paper record '{paper.paper_id}': {err}."
-            ) from err
+            conn.commit()
+        except Exception as err:
+            conn.rollback()
+            if isinstance(err, sqlite3.Error):
+                raise StorageTransactionError(
+                    f"Failed to save paper record '{paper.paper_id}': {err}."
+                ) from err
+            raise
 
     def get_paper_record(self, paper_id: str) -> PaperRecord | None:
         """Retrieve a full PaperRecord by paper_id."""
@@ -360,7 +382,9 @@ class SQLiteStorage(StorageBackend):
             prov = SourceProvenance(
                 source_path=prov_row["source_path"],
                 source_format=prov_row["source_format"],
+                source_file_size=prov_row["source_file_size"],
                 content_checksum=prov_row["content_checksum"],
+                markdown_path=prov_row["markdown_path"],
                 extraction_method=prov_row["extraction_method"],
                 created_at=prov_row["created_at"],
             )
@@ -434,7 +458,8 @@ class SQLiteStorage(StorageBackend):
         conn = self._ensure_initialized()
         try:
             cur = conn.execute(
-                "SELECT paper_id FROM papers WHERE content_checksum = ?", (checksum,)
+                "SELECT paper_id FROM papers WHERE LOWER(content_checksum) = LOWER(?)",
+                (checksum,),
             )
             row = cur.fetchone()
             if row is None:
@@ -496,6 +521,56 @@ class SQLiteStorage(StorageBackend):
                 f"Failed to load passages for paper_id '{paper_id}': {err}."
             ) from err
 
+    def load_corpus(self, corpus_id: str = "local-library") -> Corpus:
+        """Reconstruct and return a validated Corpus from stored paper and passage data."""
+        conn = self._ensure_initialized()
+        try:
+            papers_list = []
+            cur = conn.execute("SELECT * FROM papers ORDER BY paper_id ASC")
+            for row in cur.fetchall():
+                authors_list = json.loads(row["authors_json"])
+                papers_list.append(
+                    {
+                        "paper_id": row["paper_id"],
+                        "title": row["title"],
+                        "authors": authors_list,
+                        "year": row["year"],
+                        "abstract": row["abstract"],
+                        "source_name": row["source_name"],
+                        "source_identifier": row["source_identifier"],
+                        "source_url": row["source_url"],
+                    }
+                )
+
+            passages_list = []
+            cur = conn.execute(
+                "SELECT * FROM passages ORDER BY paper_id ASC, ordinal_position ASC"
+            )
+            for row in cur.fetchall():
+                passages_list.append(
+                    {
+                        "passage_id": row["passage_id"],
+                        "paper_id": row["paper_id"],
+                        "text": row["text"],
+                        "section_heading": row["section_heading"],
+                        "page_start": row["page_start"],
+                        "page_end": row["page_end"],
+                        "ordinal_position": row["ordinal_position"],
+                    }
+                )
+
+            mapping = {
+                "schema_version": 1,
+                "corpus_id": corpus_id,
+                "papers": papers_list,
+                "passages": passages_list,
+            }
+            return Corpus.from_mapping(mapping)
+        except (sqlite3.Error, json.JSONDecodeError, ValueError) as err:
+            raise StorageValidationError(
+                f"Failed to load Corpus from database: {err}."
+            ) from err
+
     def list_paper_ids(self) -> tuple[str, ...]:
         """Return a tuple of all stored paper_id identifiers sorted alphabetically."""
         conn = self._ensure_initialized()
@@ -520,13 +595,18 @@ class SQLiteStorage(StorageBackend):
         """Delete paper_id and all associated data in a single transaction."""
         conn = self._ensure_initialized()
         try:
-            with conn:
-                cur = conn.execute("DELETE FROM papers WHERE paper_id = ?", (paper_id,))
-                return cur.rowcount > 0
-        except sqlite3.Error as err:
-            raise StorageTransactionError(
-                f"Failed to delete paper_id '{paper_id}': {err}."
-            ) from err
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute("DELETE FROM papers WHERE paper_id = ?", (paper_id,))
+            deleted_count = cur.rowcount
+            conn.commit()
+            return deleted_count > 0
+        except Exception as err:
+            conn.rollback()
+            if isinstance(err, sqlite3.Error):
+                raise StorageTransactionError(
+                    f"Failed to delete paper_id '{paper_id}': {err}."
+                ) from err
+            raise
 
     def count_papers(self) -> int:
         """Return total count of stored papers."""
