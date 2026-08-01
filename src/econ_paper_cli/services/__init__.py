@@ -8,6 +8,13 @@ from econ_paper_cli.services.research_question_extraction import (
     extract_research_question,
 )
 from econ_paper_cli.services.single_paper_analysis import analyze_single_paper
+from econ_paper_cli.services.single_paper_analysis_storage import (
+    delete_single_paper_analysis_record,
+    get_single_paper_analysis_record,
+    get_single_paper_analysis_record_by_checksum,
+    list_single_paper_analysis_records,
+    save_single_paper_analysis_result,
+)
 
 __all__ = [
     "run_ingestion_preflight",
@@ -16,4 +23,9 @@ __all__ = [
     "detect_pdf_sections",
     "extract_research_question",
     "analyze_single_paper",
+    "save_single_paper_analysis_result",
+    "get_single_paper_analysis_record",
+    "get_single_paper_analysis_record_by_checksum",
+    "list_single_paper_analysis_records",
+    "delete_single_paper_analysis_record",
 ]

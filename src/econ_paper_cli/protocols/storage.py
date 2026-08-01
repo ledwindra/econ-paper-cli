@@ -5,6 +5,7 @@ from typing import Protocol, runtime_checkable
 from econ_paper_cli.domain.corpora import Corpus
 from econ_paper_cli.domain.papers import Paper
 from econ_paper_cli.domain.passages import Passage
+from econ_paper_cli.domain.single_paper_analysis import SinglePaperAnalysisRecord
 from econ_paper_cli.domain.storage import PaperRecord
 
 
@@ -94,4 +95,28 @@ class StorageBackend(Protocol):
 
     def count_passages(self) -> int:
         """Return total count of stored passages across all papers."""
+        ...
+
+    def save_single_paper_analysis(self, record: SinglePaperAnalysisRecord) -> None:
+        """Persist or replace a single-paper analysis record in a single transaction."""
+        ...
+
+    def get_single_paper_analysis(
+        self, analysis_id: str
+    ) -> SinglePaperAnalysisRecord | None:
+        """Retrieve a single-paper analysis record by analysis_id."""
+        ...
+
+    def get_single_paper_analysis_by_checksum(
+        self, checksum: str, settings_fingerprint: str | None = None
+    ) -> SinglePaperAnalysisRecord | None:
+        """Retrieve a single-paper analysis record by content checksum and optional settings fingerprint."""
+        ...
+
+    def list_single_paper_analyses(self) -> tuple[SinglePaperAnalysisRecord, ...]:
+        """Return all stored single-paper analysis records."""
+        ...
+
+    def delete_single_paper_analysis(self, analysis_id: str) -> bool:
+        """Delete a single-paper analysis record by analysis_id."""
         ...

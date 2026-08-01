@@ -1,6 +1,11 @@
 """Immutable domain contracts for single-paper research-question analysis."""
 
+import dataclasses
+import hashlib
+import json
+import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
@@ -31,6 +36,7 @@ from econ_paper_cli.domain.pdf_quality import (
 from econ_paper_cli.domain.pdf_sections import (
     DEFAULT_PDF_SECTION_SETTINGS,
     PDFSectionDetectionResult,
+    PDFSectionKind,
     PDFSectionSettings,
 )
 from econ_paper_cli.domain.research_question import (
@@ -39,6 +45,8 @@ from econ_paper_cli.domain.research_question import (
     ResearchQuestionResult,
     ResearchQuestionSettings,
 )
+
+_SHA256_HEX_PATTERN = re.compile(r"[a-f0-9]{64}")
 
 
 class SinglePaperAnalysisStage(str, Enum):
@@ -111,7 +119,8 @@ _WARNING_ORDER = {
 }
 
 _CANONICAL_SINGLE_PAPER_SETTINGS: dict[str, dict[str, object]] = {
-    "single-paper-analysis-v1": {}
+    "single-paper-analysis-v1": {},
+    "single-paper-analysis-v2": {},
 }
 
 # Canonical stage sequence
@@ -531,4 +540,420 @@ def _validate_nonempty_text(field_name: str, value: object) -> None:
         )
 
 
+def _validate_checksum(value: object) -> None:
+    if not isinstance(value, str) or _SHA256_HEX_PATTERN.fullmatch(value) is None:
+        raise SinglePaperAnalysisValidationError(
+            "content_checksum must be a 64-character lowercase hex string."
+        )
+
+
+def _validate_positive_int(field_name: str, value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise SinglePaperAnalysisValidationError(
+            f"{field_name} must be a positive integer (>= 1)."
+        )
+
+
+def _validate_nonnegative_int(field_name: str, value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise SinglePaperAnalysisValidationError(
+            f"{field_name} must be a non-negative integer."
+        )
+
+
 DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS = SinglePaperAnalysisSettings()
+
+
+def compute_settings_fingerprint(settings: SinglePaperAnalysisSettings) -> str:
+    """Compute a deterministic SHA-256 fingerprint of versioned analysis settings."""
+    raw = {
+        "policy_version": settings.policy_version,
+        "quality_settings": dataclasses.asdict(settings.quality_settings),
+        "section_settings": dataclasses.asdict(settings.section_settings),
+        "research_question_settings": dataclasses.asdict(
+            settings.research_question_settings
+        ),
+    }
+    canonical = json.dumps(raw, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def compute_analysis_id(
+    checksum: str | None,
+    settings: SinglePaperAnalysisSettings,
+    source_path: Path | str | None = None,
+) -> str:
+    """Compute a deterministic SHA-256 analysis identity hash."""
+    settings_fp = compute_settings_fingerprint(settings)
+    path_key = ""
+    if checksum is None and source_path is not None:
+        path_key = str(Path(source_path).resolve())
+    raw = {
+        "checksum": (checksum or "").lower(),
+        "policy_version": settings.policy_version,
+        "settings_fingerprint": settings_fp,
+        "source_path": path_key,
+    }
+    canonical = json.dumps(raw, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class SinglePaperAnalysisSectionRecord:
+    """Persisted section metadata with exact page and character offsets."""
+
+    section_kind: PDFSectionKind
+    heading_text: str
+    page_start: int
+    page_end: int
+    start_character_offset: int
+    end_character_offset: int
+    ordinal_position: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.section_kind, PDFSectionKind):
+            raise SinglePaperAnalysisValidationError(
+                "section_kind must be a PDFSectionKind instance."
+            )
+        _validate_nonempty_text("heading_text", self.heading_text)
+        _validate_positive_int("page_start", self.page_start)
+        _validate_positive_int("page_end", self.page_end)
+        if self.page_start > self.page_end:
+            raise SinglePaperAnalysisValidationError(
+                "page_start cannot exceed page_end."
+            )
+        _validate_nonnegative_int("start_character_offset", self.start_character_offset)
+        _validate_nonnegative_int("end_character_offset", self.end_character_offset)
+        if self.start_character_offset > self.end_character_offset:
+            raise SinglePaperAnalysisValidationError(
+                "start_character_offset cannot exceed end_character_offset."
+            )
+        _validate_nonnegative_int("ordinal_position", self.ordinal_position)
+
+
+@dataclass(frozen=True, slots=True)
+class SinglePaperAnalysisEvidenceRecord:
+    """Persisted research-question evidence excerpt with exact provenance."""
+
+    section_kind: PDFSectionKind
+    excerpt_text: str
+    page_number: int
+    start_character_offset: int
+    end_character_offset: int
+    ordinal_position: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.section_kind, PDFSectionKind):
+            raise SinglePaperAnalysisValidationError(
+                "section_kind must be a PDFSectionKind instance."
+            )
+        _validate_nonempty_text("excerpt_text", self.excerpt_text)
+        _validate_positive_int("page_number", self.page_number)
+        _validate_nonnegative_int("start_character_offset", self.start_character_offset)
+        _validate_nonnegative_int("end_character_offset", self.end_character_offset)
+        if self.start_character_offset > self.end_character_offset:
+            raise SinglePaperAnalysisValidationError(
+                "start_character_offset cannot exceed end_character_offset."
+            )
+        expected_len = self.end_character_offset - self.start_character_offset
+        if len(self.excerpt_text) != expected_len:
+            raise SinglePaperAnalysisValidationError(
+                f"excerpt_text length ({len(self.excerpt_text)}) does not match "
+                f"character offset span ({expected_len})."
+            )
+        _validate_nonnegative_int("ordinal_position", self.ordinal_position)
+
+
+@dataclass(frozen=True, slots=True)
+class SinglePaperAnalysisQuestionRecord:
+    """Persisted research-question output metadata."""
+
+    kind: ResearchQuestionKind
+    question_text: str | None
+    sections_used: tuple[PDFSectionKind, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, ResearchQuestionKind):
+            raise SinglePaperAnalysisValidationError(
+                "kind must be a ResearchQuestionKind instance."
+            )
+        if not isinstance(self.sections_used, tuple) or not all(
+            isinstance(sk, PDFSectionKind) for sk in self.sections_used
+        ):
+            raise SinglePaperAnalysisValidationError(
+                "sections_used must be a tuple of PDFSectionKind instances."
+            )
+        if self.kind is ResearchQuestionKind.UNAVAILABLE:
+            if self.question_text is not None:
+                raise SinglePaperAnalysisValidationError(
+                    "question_text must be None when kind is UNAVAILABLE."
+                )
+        else:
+            if self.question_text is None:
+                raise SinglePaperAnalysisValidationError(
+                    "question_text is required when kind is available."
+                )
+            _validate_nonempty_text("question_text", self.question_text)
+            if not self.sections_used:
+                raise SinglePaperAnalysisValidationError(
+                    "sections_used cannot be empty when question is available."
+                )
+
+
+@dataclass(frozen=True, slots=True)
+class SinglePaperAnalysisRecord:
+    """Immutable domain representation of a persisted single-paper analysis run."""
+
+    analysis_id: str
+    source_path: Path
+    content_checksum: str | None
+    status: SinglePaperAnalysisStatus
+    completed_stages: tuple[SinglePaperAnalysisStage, ...]
+    failed_stage: SinglePaperAnalysisStage | None
+    skipped_stages: tuple[SinglePaperAnalysisStage, ...]
+    failure_code: SinglePaperAnalysisFailureCode | None
+    error_message: str | None
+    quality_status: PDFQualityStatus | None
+    settings: SinglePaperAnalysisSettings
+    settings_fingerprint: str
+    warnings: tuple[SinglePaperAnalysisWarning, ...]
+    sections: tuple[SinglePaperAnalysisSectionRecord, ...]
+    research_question: SinglePaperAnalysisQuestionRecord | None
+    evidence: tuple[SinglePaperAnalysisEvidenceRecord, ...]
+    created_at: str
+    updated_at: str
+
+    def __post_init__(self) -> None:  # noqa: C901
+        _validate_nonempty_text("analysis_id", self.analysis_id)
+        if not isinstance(self.source_path, Path):
+            raise SinglePaperAnalysisValidationError("source_path must be a Path.")
+        if self.content_checksum is not None:
+            _validate_checksum(self.content_checksum)
+        if not isinstance(self.status, SinglePaperAnalysisStatus):
+            raise SinglePaperAnalysisValidationError(
+                "status must be a SinglePaperAnalysisStatus instance."
+            )
+        if not isinstance(self.completed_stages, tuple) or not all(
+            isinstance(s, SinglePaperAnalysisStage) for s in self.completed_stages
+        ):
+            raise SinglePaperAnalysisValidationError(
+                "completed_stages must be a tuple of SinglePaperAnalysisStage instances."
+            )
+        if self.failed_stage is not None and not isinstance(
+            self.failed_stage, SinglePaperAnalysisStage
+        ):
+            raise SinglePaperAnalysisValidationError(
+                "failed_stage must be a SinglePaperAnalysisStage instance or None."
+            )
+        if not isinstance(self.skipped_stages, tuple) or not all(
+            isinstance(s, SinglePaperAnalysisStage) for s in self.skipped_stages
+        ):
+            raise SinglePaperAnalysisValidationError(
+                "skipped_stages must be a tuple of SinglePaperAnalysisStage instances."
+            )
+        if self.failure_code is not None and not isinstance(
+            self.failure_code, SinglePaperAnalysisFailureCode
+        ):
+            raise SinglePaperAnalysisValidationError(
+                "failure_code must be a SinglePaperAnalysisFailureCode instance or None."
+            )
+        if self.error_message is not None:
+            _validate_nonempty_text("error_message", self.error_message)
+        if self.quality_status is not None and not isinstance(
+            self.quality_status, PDFQualityStatus
+        ):
+            raise SinglePaperAnalysisValidationError(
+                "quality_status must be a PDFQualityStatus instance or None."
+            )
+        if not isinstance(self.settings, SinglePaperAnalysisSettings):
+            raise SinglePaperAnalysisValidationError(
+                "settings must be a SinglePaperAnalysisSettings instance."
+            )
+        _validate_nonempty_text("settings_fingerprint", self.settings_fingerprint)
+        if not isinstance(self.warnings, tuple) or not all(
+            isinstance(w, SinglePaperAnalysisWarning) for w in self.warnings
+        ):
+            raise SinglePaperAnalysisValidationError(
+                "warnings must be a tuple of SinglePaperAnalysisWarning instances."
+            )
+        if not isinstance(self.sections, tuple) or not all(
+            isinstance(sec, SinglePaperAnalysisSectionRecord) for sec in self.sections
+        ):
+            raise SinglePaperAnalysisValidationError(
+                "sections must be a tuple of SinglePaperAnalysisSectionRecord instances."
+            )
+        for idx, sec in enumerate(self.sections):
+            if sec.ordinal_position != idx:
+                raise SinglePaperAnalysisValidationError(
+                    f"sections[{idx}] ordinal_position ({sec.ordinal_position}) "
+                    f"does not match index ({idx})."
+                )
+        if self.research_question is not None and not isinstance(
+            self.research_question, SinglePaperAnalysisQuestionRecord
+        ):
+            raise SinglePaperAnalysisValidationError(
+                "research_question must be a SinglePaperAnalysisQuestionRecord instance or None."
+            )
+        if not isinstance(self.evidence, tuple) or not all(
+            isinstance(ev, SinglePaperAnalysisEvidenceRecord) for ev in self.evidence
+        ):
+            raise SinglePaperAnalysisValidationError(
+                "evidence must be a tuple of SinglePaperAnalysisEvidenceRecord instances."
+            )
+        for idx, ev in enumerate(self.evidence):
+            if ev.ordinal_position != idx:
+                raise SinglePaperAnalysisValidationError(
+                    f"evidence[{idx}] ordinal_position ({ev.ordinal_position}) "
+                    f"does not match index ({idx})."
+                )
+        _validate_nonempty_text("created_at", self.created_at)
+        _validate_nonempty_text("updated_at", self.updated_at)
+
+        # Invariant validations
+        if self.status is SinglePaperAnalysisStatus.SUCCESS:
+            if not self.sections:
+                raise SinglePaperAnalysisValidationError(
+                    "SUCCESS status requires non-empty detected sections."
+                )
+            if (
+                self.research_question is None
+                or self.research_question.kind is ResearchQuestionKind.UNAVAILABLE
+            ):
+                raise SinglePaperAnalysisValidationError(
+                    "SUCCESS status requires an available research question."
+                )
+            if not self.evidence:
+                raise SinglePaperAnalysisValidationError(
+                    "SUCCESS status requires non-empty research-question evidence."
+                )
+
+        elif self.status is SinglePaperAnalysisStatus.QUALITY_HALTED:
+            if self.sections:
+                raise SinglePaperAnalysisValidationError(
+                    "QUALITY_HALTED status cannot contain stored sections."
+                )
+            if self.research_question is not None:
+                raise SinglePaperAnalysisValidationError(
+                    "QUALITY_HALTED status cannot contain stored research question."
+                )
+            if self.evidence:
+                raise SinglePaperAnalysisValidationError(
+                    "QUALITY_HALTED status cannot contain stored evidence."
+                )
+
+        elif self.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED:
+            if self.research_question is None or self.research_question.kind not in (
+                ResearchQuestionKind.UNAVAILABLE,
+            ):
+                raise SinglePaperAnalysisValidationError(
+                    "QUESTION_EXTRACTION_HALTED requires UNAVAILABLE research_question."
+                )
+            if self.evidence:
+                raise SinglePaperAnalysisValidationError(
+                    "UNAVAILABLE research question cannot contain evidence."
+                )
+
+        elif self.status in (
+            SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
+            SinglePaperAnalysisStatus.EXTRACTION_FAILED,
+        ):
+            if self.sections or self.research_question is not None or self.evidence:
+                raise SinglePaperAnalysisValidationError(
+                    "Failed statuses cannot contain sections, research questions, or evidence."
+                )
+
+        # Referential integrity checks
+        section_kinds = {sec.section_kind for sec in self.sections}
+        for ev in self.evidence:
+            if ev.section_kind not in section_kinds:
+                raise SinglePaperAnalysisValidationError(
+                    f"Evidence section_kind '{ev.section_kind}' does not match any detected section."
+                )
+        if (
+            self.research_question is not None
+            and self.research_question.kind is not ResearchQuestionKind.UNAVAILABLE
+        ):
+            evidence_section_kinds = {ev.section_kind for ev in self.evidence}
+            if set(self.research_question.sections_used) != evidence_section_kinds:
+                raise SinglePaperAnalysisValidationError(
+                    "research_question.sections_used must match the section_kinds in evidence."
+                )
+
+    @classmethod
+    def from_result(
+        cls,
+        result: SinglePaperAnalysisResult,
+        settings: SinglePaperAnalysisSettings = DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+        created_at: str | None = None,
+        updated_at: str | None = None,
+    ) -> "SinglePaperAnalysisRecord":
+        """Construct a SinglePaperAnalysisRecord from a SinglePaperAnalysisResult."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        c_at = created_at or now_str
+        u_at = updated_at or now_str
+
+        settings_fp = compute_settings_fingerprint(settings)
+        analysis_id = compute_analysis_id(result.checksum, settings, result.source_path)
+
+        sections: list[SinglePaperAnalysisSectionRecord] = []
+        if result.section_result is not None:
+            for idx, sec in enumerate(result.section_result.sections):
+                sections.append(
+                    SinglePaperAnalysisSectionRecord(
+                        section_kind=sec.kind,
+                        heading_text=sec.heading_text,
+                        page_start=sec.start_page_number,
+                        page_end=sec.end_page_number,
+                        start_character_offset=sec.spans[0].start_character_offset,
+                        end_character_offset=sec.spans[-1].end_character_offset,
+                        ordinal_position=idx,
+                    )
+                )
+
+        rq_record: SinglePaperAnalysisQuestionRecord | None = None
+        evidence_list: list[SinglePaperAnalysisEvidenceRecord] = []
+        if result.research_question_result is not None:
+            rq_res = result.research_question_result
+            rq_record = SinglePaperAnalysisQuestionRecord(
+                kind=rq_res.kind,
+                question_text=rq_res.question_text,
+                sections_used=rq_res.sections_used,
+            )
+            for idx, ev in enumerate(rq_res.evidence):
+                evidence_list.append(
+                    SinglePaperAnalysisEvidenceRecord(
+                        section_kind=ev.section_kind,
+                        excerpt_text=ev.excerpt_text,
+                        page_number=ev.page_number,
+                        start_character_offset=ev.start_character_offset,
+                        end_character_offset=ev.end_character_offset,
+                        ordinal_position=idx,
+                    )
+                )
+
+        quality_status = (
+            result.quality_assessment.status
+            if result.quality_assessment is not None
+            else None
+        )
+
+        return cls(
+            analysis_id=analysis_id,
+            source_path=result.source_path,
+            content_checksum=result.checksum,
+            status=result.status,
+            completed_stages=result.completed_stages,
+            failed_stage=result.failed_stage,
+            skipped_stages=result.skipped_stages,
+            failure_code=result.failure_code,
+            error_message=result.error_message,
+            quality_status=quality_status,
+            settings=settings,
+            settings_fingerprint=settings_fp,
+            warnings=result.warnings,
+            sections=tuple(sections),
+            research_question=rq_record,
+            evidence=tuple(evidence_list),
+            created_at=c_at,
+            updated_at=u_at,
+        )

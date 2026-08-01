@@ -1,5 +1,4 @@
-"""SQLite storage adapter implementing StorageBackend protocol."""
-
+import dataclasses
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -9,6 +8,24 @@ from econ_paper_cli.adapters.storage_paths import get_default_db_path
 from econ_paper_cli.domain.corpora import Corpus
 from econ_paper_cli.domain.papers import Paper
 from econ_paper_cli.domain.passages import Passage
+from econ_paper_cli.domain.pdf_quality import PDFQualitySettings, PDFQualityStatus
+from econ_paper_cli.domain.pdf_sections import PDFSectionKind, PDFSectionSettings
+from econ_paper_cli.domain.research_question import (
+    ResearchQuestionKind,
+    ResearchQuestionSettings,
+)
+from econ_paper_cli.domain.single_paper_analysis import (
+    SinglePaperAnalysisEvidenceRecord,
+    SinglePaperAnalysisFailureCode,
+    SinglePaperAnalysisQuestionRecord,
+    SinglePaperAnalysisRecord,
+    SinglePaperAnalysisSectionRecord,
+    SinglePaperAnalysisSettings,
+    SinglePaperAnalysisStage,
+    SinglePaperAnalysisStatus,
+    SinglePaperAnalysisWarning,
+    SinglePaperAnalysisWarningCode,
+)
 from econ_paper_cli.domain.storage import (
     ConversionSettings,
     IngestionCompletion,
@@ -26,7 +43,7 @@ from econ_paper_cli.protocols.storage import (
     StorageValidationError,
 )
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 _MIGRATIONS: list[tuple[int, str, list[str]]] = [
     (
@@ -169,6 +186,76 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "DROP TABLE passages;",
             "ALTER TABLE passages_v2 RENAME TO passages;",
             "CREATE INDEX IF NOT EXISTS idx_passages_paper_ordinal ON passages(paper_id, ordinal_position);",
+        ],
+    ),
+    (
+        3,
+        "Add single-paper research-question analysis storage tables",
+        [
+            """CREATE TABLE IF NOT EXISTS single_paper_analyses (
+                analysis_id TEXT PRIMARY KEY,
+                content_checksum TEXT COLLATE NOCASE,
+                source_path TEXT NOT NULL,
+                policy_version TEXT NOT NULL,
+                status TEXT NOT NULL,
+                failed_stage TEXT,
+                failure_code TEXT,
+                error_message TEXT,
+                completed_stages_json TEXT NOT NULL,
+                skipped_stages_json TEXT NOT NULL,
+                quality_status TEXT,
+                quality_settings_json TEXT NOT NULL,
+                section_settings_json TEXT NOT NULL,
+                research_question_settings_json TEXT NOT NULL,
+                settings_fingerprint TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );""",
+            "CREATE INDEX IF NOT EXISTS idx_analyses_checksum ON single_paper_analyses(content_checksum);",
+            """CREATE TABLE IF NOT EXISTS single_paper_analysis_warnings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                analysis_id TEXT NOT NULL,
+                warning_code TEXT NOT NULL,
+                details TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(analysis_id) REFERENCES single_paper_analyses(analysis_id) ON DELETE CASCADE
+            );""",
+            "CREATE INDEX IF NOT EXISTS idx_analysis_warnings_analysis_id ON single_paper_analysis_warnings(analysis_id);",
+            """CREATE TABLE IF NOT EXISTS single_paper_analysis_sections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                analysis_id TEXT NOT NULL,
+                content_checksum TEXT COLLATE NOCASE,
+                section_kind TEXT NOT NULL,
+                heading_text TEXT NOT NULL,
+                page_start INTEGER NOT NULL,
+                page_end INTEGER NOT NULL,
+                start_character_offset INTEGER NOT NULL,
+                end_character_offset INTEGER NOT NULL,
+                ordinal_position INTEGER NOT NULL,
+                FOREIGN KEY(analysis_id) REFERENCES single_paper_analyses(analysis_id) ON DELETE CASCADE,
+                CONSTRAINT uq_analysis_section_ordinal UNIQUE(analysis_id, ordinal_position)
+            );""",
+            "CREATE INDEX IF NOT EXISTS idx_analysis_sections_analysis_id ON single_paper_analysis_sections(analysis_id);",
+            """CREATE TABLE IF NOT EXISTS single_paper_analysis_questions (
+                analysis_id TEXT PRIMARY KEY,
+                question_text TEXT,
+                kind TEXT NOT NULL,
+                sections_used_json TEXT NOT NULL,
+                FOREIGN KEY(analysis_id) REFERENCES single_paper_analyses(analysis_id) ON DELETE CASCADE
+            );""",
+            """CREATE TABLE IF NOT EXISTS single_paper_analysis_evidence (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                analysis_id TEXT NOT NULL,
+                section_kind TEXT NOT NULL,
+                excerpt_text TEXT NOT NULL,
+                page_number INTEGER NOT NULL,
+                start_character_offset INTEGER NOT NULL,
+                end_character_offset INTEGER NOT NULL,
+                ordinal_position INTEGER NOT NULL,
+                FOREIGN KEY(analysis_id) REFERENCES single_paper_analyses(analysis_id) ON DELETE CASCADE,
+                CONSTRAINT uq_analysis_evidence_ordinal UNIQUE(analysis_id, ordinal_position)
+            );""",
+            "CREATE INDEX IF NOT EXISTS idx_analysis_evidence_analysis_id ON single_paper_analysis_evidence(analysis_id);",
         ],
     ),
 ]
@@ -761,3 +848,331 @@ class SQLiteStorage(StorageBackend):
             return int(row["c"]) if row else 0
         except sqlite3.Error as err:
             raise StorageConnectionError(f"Failed to count passages: {err}.") from err
+
+    def save_single_paper_analysis(self, record: SinglePaperAnalysisRecord) -> None:
+        """Persist or replace a single-paper analysis record in a single transaction."""
+        conn = self._ensure_initialized()
+
+        chk = record.content_checksum.lower() if record.content_checksum else None
+
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+
+            # Delete existing analysis record if updating (cascades to related child tables)
+            conn.execute(
+                "DELETE FROM single_paper_analyses WHERE analysis_id = ?",
+                (record.analysis_id,),
+            )
+
+            # Insert into single_paper_analyses
+            conn.execute(
+                """INSERT INTO single_paper_analyses (
+                    analysis_id, content_checksum, source_path, policy_version,
+                    status, failed_stage, failure_code, error_message,
+                    completed_stages_json, skipped_stages_json, quality_status,
+                    quality_settings_json, section_settings_json, research_question_settings_json,
+                    settings_fingerprint, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    record.analysis_id,
+                    chk,
+                    str(record.source_path),
+                    record.settings.policy_version,
+                    record.status.value,
+                    record.failed_stage.value if record.failed_stage else None,
+                    record.failure_code.value if record.failure_code else None,
+                    record.error_message,
+                    json.dumps([s.value for s in record.completed_stages]),
+                    json.dumps([s.value for s in record.skipped_stages]),
+                    record.quality_status.value if record.quality_status else None,
+                    json.dumps(dataclasses.asdict(record.settings.quality_settings)),
+                    json.dumps(dataclasses.asdict(record.settings.section_settings)),
+                    json.dumps(
+                        dataclasses.asdict(record.settings.research_question_settings)
+                    ),
+                    record.settings_fingerprint,
+                    record.created_at,
+                    record.updated_at,
+                ),
+            )
+
+            # Insert into single_paper_analysis_warnings
+            for warning in record.warnings:
+                conn.execute(
+                    """INSERT INTO single_paper_analysis_warnings (
+                        analysis_id, warning_code, details, created_at
+                    ) VALUES (?, ?, ?, ?)""",
+                    (
+                        record.analysis_id,
+                        warning.code.value,
+                        warning.details,
+                        record.created_at,
+                    ),
+                )
+
+            # Insert into single_paper_analysis_sections
+            for sec in record.sections:
+                conn.execute(
+                    """INSERT INTO single_paper_analysis_sections (
+                        analysis_id, content_checksum, section_kind, heading_text,
+                        page_start, page_end, start_character_offset, end_character_offset,
+                        ordinal_position
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        record.analysis_id,
+                        chk,
+                        sec.section_kind.value,
+                        sec.heading_text,
+                        sec.page_start,
+                        sec.page_end,
+                        sec.start_character_offset,
+                        sec.end_character_offset,
+                        sec.ordinal_position,
+                    ),
+                )
+
+            # Insert into single_paper_analysis_questions
+            if record.research_question is not None:
+                rq = record.research_question
+                conn.execute(
+                    """INSERT INTO single_paper_analysis_questions (
+                        analysis_id, question_text, kind, sections_used_json
+                    ) VALUES (?, ?, ?, ?)""",
+                    (
+                        record.analysis_id,
+                        rq.question_text,
+                        rq.kind.value,
+                        json.dumps([sk.value for sk in rq.sections_used]),
+                    ),
+                )
+
+            # Insert into single_paper_analysis_evidence
+            for ev in record.evidence:
+                conn.execute(
+                    """INSERT INTO single_paper_analysis_evidence (
+                        analysis_id, section_kind, excerpt_text, page_number,
+                        start_character_offset, end_character_offset, ordinal_position
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        record.analysis_id,
+                        ev.section_kind.value,
+                        ev.excerpt_text,
+                        ev.page_number,
+                        ev.start_character_offset,
+                        ev.end_character_offset,
+                        ev.ordinal_position,
+                    ),
+                )
+
+            conn.commit()
+        except Exception as err:
+            conn.rollback()
+            if isinstance(err, sqlite3.Error):
+                raise StorageTransactionError(
+                    f"Failed to save single paper analysis '{record.analysis_id}': {err}."
+                ) from err
+            raise
+
+    def get_single_paper_analysis(
+        self, analysis_id: str
+    ) -> SinglePaperAnalysisRecord | None:
+        """Retrieve a single-paper analysis record by analysis_id."""
+        conn = self._ensure_initialized()
+        try:
+            cur = conn.execute(
+                "SELECT * FROM single_paper_analyses WHERE analysis_id = ?",
+                (analysis_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+
+            completed_stages = tuple(
+                SinglePaperAnalysisStage(s)
+                for s in json.loads(row["completed_stages_json"])
+            )
+            skipped_stages = tuple(
+                SinglePaperAnalysisStage(s)
+                for s in json.loads(row["skipped_stages_json"])
+            )
+            failed_stage = (
+                SinglePaperAnalysisStage(row["failed_stage"])
+                if row["failed_stage"]
+                else None
+            )
+            failure_code = (
+                SinglePaperAnalysisFailureCode(row["failure_code"])
+                if row["failure_code"]
+                else None
+            )
+            quality_status = (
+                PDFQualityStatus(row["quality_status"])
+                if row["quality_status"]
+                else None
+            )
+
+            # Reconstruct settings
+            q_dict = json.loads(row["quality_settings_json"])
+            sec_dict = json.loads(row["section_settings_json"])
+            rq_dict = json.loads(row["research_question_settings_json"])
+
+            settings = SinglePaperAnalysisSettings(
+                policy_version=row["policy_version"],
+                quality_settings=PDFQualitySettings(**q_dict),
+                section_settings=PDFSectionSettings(**sec_dict),
+                research_question_settings=ResearchQuestionSettings(**rq_dict),
+            )
+
+            # Warnings
+            cur_w = conn.execute(
+                "SELECT * FROM single_paper_analysis_warnings WHERE analysis_id = ? ORDER BY id ASC",
+                (analysis_id,),
+            )
+            warnings = tuple(
+                SinglePaperAnalysisWarning(
+                    code=SinglePaperAnalysisWarningCode(w["warning_code"]),
+                    details=w["details"],
+                )
+                for w in cur_w.fetchall()
+            )
+
+            # Sections
+            cur_s = conn.execute(
+                "SELECT * FROM single_paper_analysis_sections WHERE analysis_id = ? ORDER BY ordinal_position ASC",
+                (analysis_id,),
+            )
+            sections = tuple(
+                SinglePaperAnalysisSectionRecord(
+                    section_kind=PDFSectionKind(s["section_kind"]),
+                    heading_text=s["heading_text"],
+                    page_start=s["page_start"],
+                    page_end=s["page_end"],
+                    start_character_offset=s["start_character_offset"],
+                    end_character_offset=s["end_character_offset"],
+                    ordinal_position=s["ordinal_position"],
+                )
+                for s in cur_s.fetchall()
+            )
+
+            # Question
+            cur_q = conn.execute(
+                "SELECT * FROM single_paper_analysis_questions WHERE analysis_id = ?",
+                (analysis_id,),
+            )
+            row_q = cur_q.fetchone()
+            rq_record: SinglePaperAnalysisQuestionRecord | None = None
+            if row_q is not None:
+                rq_record = SinglePaperAnalysisQuestionRecord(
+                    kind=ResearchQuestionKind(row_q["kind"]),
+                    question_text=row_q["question_text"],
+                    sections_used=tuple(
+                        PDFSectionKind(sk)
+                        for sk in json.loads(row_q["sections_used_json"])
+                    ),
+                )
+
+            # Evidence
+            cur_ev = conn.execute(
+                "SELECT * FROM single_paper_analysis_evidence WHERE analysis_id = ? ORDER BY ordinal_position ASC",
+                (analysis_id,),
+            )
+            evidence = tuple(
+                SinglePaperAnalysisEvidenceRecord(
+                    section_kind=PDFSectionKind(ev["section_kind"]),
+                    excerpt_text=ev["excerpt_text"],
+                    page_number=ev["page_number"],
+                    start_character_offset=ev["start_character_offset"],
+                    end_character_offset=ev["end_character_offset"],
+                    ordinal_position=ev["ordinal_position"],
+                )
+                for ev in cur_ev.fetchall()
+            )
+
+            return SinglePaperAnalysisRecord(
+                analysis_id=row["analysis_id"],
+                source_path=Path(row["source_path"]),
+                content_checksum=row["content_checksum"],
+                status=SinglePaperAnalysisStatus(row["status"]),
+                completed_stages=completed_stages,
+                failed_stage=failed_stage,
+                skipped_stages=skipped_stages,
+                failure_code=failure_code,
+                error_message=row["error_message"],
+                quality_status=quality_status,
+                settings=settings,
+                settings_fingerprint=row["settings_fingerprint"],
+                warnings=warnings,
+                sections=sections,
+                research_question=rq_record,
+                evidence=evidence,
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+            )
+        except (sqlite3.Error, json.JSONDecodeError, ValueError, KeyError) as err:
+            raise StorageValidationError(
+                f"Failed to load SinglePaperAnalysisRecord for '{analysis_id}': {err}."
+            ) from err
+
+    def get_single_paper_analysis_by_checksum(
+        self, checksum: str, settings_fingerprint: str | None = None
+    ) -> SinglePaperAnalysisRecord | None:
+        """Retrieve a single-paper analysis record by content checksum."""
+        conn = self._ensure_initialized()
+        try:
+            if settings_fingerprint is not None:
+                cur = conn.execute(
+                    "SELECT analysis_id FROM single_paper_analyses WHERE LOWER(content_checksum) = LOWER(?) AND settings_fingerprint = ? ORDER BY updated_at DESC",
+                    (checksum, settings_fingerprint),
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT analysis_id FROM single_paper_analyses WHERE LOWER(content_checksum) = LOWER(?) ORDER BY updated_at DESC",
+                    (checksum,),
+                )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return self.get_single_paper_analysis(row["analysis_id"])
+        except sqlite3.Error as err:
+            raise StorageValidationError(
+                f"Failed to query single paper analysis by checksum '{checksum}': {err}."
+            ) from err
+
+    def list_single_paper_analyses(self) -> tuple[SinglePaperAnalysisRecord, ...]:
+        """Return all stored single-paper analysis records ordered by analysis_id."""
+        conn = self._ensure_initialized()
+        try:
+            cur = conn.execute(
+                "SELECT analysis_id FROM single_paper_analyses ORDER BY analysis_id ASC"
+            )
+            rows = cur.fetchall()
+            records = []
+            for r in rows:
+                rec = self.get_single_paper_analysis(r["analysis_id"])
+                if rec is not None:
+                    records.append(rec)
+            return tuple(records)
+        except sqlite3.Error as err:
+            raise StorageConnectionError(
+                f"Failed to list single paper analyses: {err}."
+            ) from err
+
+    def delete_single_paper_analysis(self, analysis_id: str) -> bool:
+        """Delete single-paper analysis by analysis_id."""
+        conn = self._ensure_initialized()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "DELETE FROM single_paper_analyses WHERE analysis_id = ?",
+                (analysis_id,),
+            )
+            count = cur.rowcount
+            conn.commit()
+            return count > 0
+        except Exception as err:
+            conn.rollback()
+            if isinstance(err, sqlite3.Error):
+                raise StorageTransactionError(
+                    f"Failed to delete single paper analysis '{analysis_id}': {err}."
+                ) from err
+            raise
