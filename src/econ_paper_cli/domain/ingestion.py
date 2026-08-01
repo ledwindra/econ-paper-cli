@@ -53,6 +53,10 @@ class PreflightCandidate:
             raise IngestionValidationError(
                 "duplicate_of_path must be set when is_batch_duplicate is True."
             )
+        if not self.is_batch_duplicate and self.duplicate_of_path is not None:
+            raise IngestionValidationError(
+                "duplicate_of_path must be None when is_batch_duplicate is False."
+            )
 
 
 @dataclass(frozen=True, slots=True)

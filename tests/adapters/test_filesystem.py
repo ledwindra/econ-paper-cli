@@ -230,19 +230,21 @@ def test_verify_artifact_not_a_regular_file(tmp_path: Path) -> None:
 
 
 def test_verify_artifact_size_mismatch(tmp_path: Path) -> None:
-    """Test that size mismatch raises SizeMismatchError."""
+    """Test that size mismatch raises SizeMismatchError before computing hash."""
     manifest = ArtifactManifest.from_mapping(valid_manifest_dict())
     artifact_path = tmp_path / manifest.local_path
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     artifact_path.write_bytes(b"A" * 100)
 
-    with pytest.raises(SizeMismatchError) as exc_info:
-        verify_artifact(manifest, base_dir=tmp_path)
-    assert exc_info.value.path == artifact_path
-    assert exc_info.value.expected == 128
-    assert exc_info.value.actual == 100
-    assert "size mismatch" in str(exc_info.value)
-    assert isinstance(exc_info.value, VerificationError)
+    with patch("builtins.open") as mock_open:
+        with pytest.raises(SizeMismatchError) as exc_info:
+            verify_artifact(manifest, base_dir=tmp_path)
+        assert exc_info.value.path == artifact_path
+        assert exc_info.value.expected == 128
+        assert exc_info.value.actual == 100
+        assert "size mismatch" in str(exc_info.value)
+        assert isinstance(exc_info.value, VerificationError)
+        mock_open.assert_not_called()
 
 
 def test_verify_artifact_checksum_mismatch(tmp_path: Path) -> None:

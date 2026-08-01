@@ -90,6 +90,17 @@ def test_preflight_candidate_validation_errors() -> None:
             duplicate_of_path=None,
         )
 
+    # Unexpected duplicate_of_path when is_batch_duplicate is False
+    with pytest.raises(IngestionValidationError, match="duplicate_of_path"):
+        PreflightCandidate(
+            source_path=path,
+            file_size_bytes=1024,
+            content_checksum=CHECKSUM_1,
+            is_stored=False,
+            is_batch_duplicate=False,
+            duplicate_of_path=Path("/tmp/original.pdf"),
+        )
+
 
 def test_ingestion_preflight_result_construction() -> None:
     target = Path("/tmp/papers")

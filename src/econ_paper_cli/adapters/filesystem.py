@@ -163,6 +163,40 @@ class FileInspectionResult:
     sha256: str
 
 
+def _inspect_file_metadata(path: Path) -> tuple[Path, int]:
+    """Resolve a regular file and return its canonical path and size."""
+    try:
+        resolved_path = path.resolve()
+        if not resolved_path.exists():
+            raise ArtifactFileNotFoundError(resolved_path)
+        if not resolved_path.is_file():
+            raise ArtifactNotARegularFileError(resolved_path)
+        return resolved_path, resolved_path.stat().st_size
+    except (ArtifactFileNotFoundError, ArtifactNotARegularFileError):
+        raise
+    except PermissionError as error:
+        raise VerificationPermissionError(path, error) from error
+    except OSError as error:
+        raise VerificationReadError(path, error) from error
+
+
+def _compute_file_sha256(path: Path, chunk_size: int) -> str:
+    """Return the lowercase SHA-256 digest for a resolved regular file."""
+    hasher = hashlib.sha256()
+    try:
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                hasher.update(chunk)
+    except PermissionError as error:
+        raise VerificationPermissionError(path, error) from error
+    except OSError as error:
+        raise VerificationReadError(path, error) from error
+    return hasher.hexdigest().lower()
+
+
 def inspect_local_file(
     path: Path,
     chunk_size: int = 65536,
@@ -184,38 +218,13 @@ def inspect_local_file(
         VerificationReadError: If other OS errors occur during inspection.
     """
     validated_chunk_size = _validate_chunk_size(chunk_size)
-
-    try:
-        resolved_path = path.resolve()
-        if not resolved_path.exists():
-            raise ArtifactFileNotFoundError(resolved_path)
-        if not resolved_path.is_file():
-            raise ArtifactNotARegularFileError(resolved_path)
-        actual_size = resolved_path.stat().st_size
-    except (ArtifactFileNotFoundError, ArtifactNotARegularFileError):
-        raise
-    except PermissionError as error:
-        raise VerificationPermissionError(path, error) from error
-    except OSError as error:
-        raise VerificationReadError(path, error) from error
-
-    hasher = hashlib.sha256()
-    try:
-        with open(resolved_path, "rb") as f:
-            while True:
-                chunk = f.read(validated_chunk_size)
-                if not chunk:
-                    break
-                hasher.update(chunk)
-    except PermissionError as error:
-        raise VerificationPermissionError(resolved_path, error) from error
-    except OSError as error:
-        raise VerificationReadError(resolved_path, error) from error
+    resolved_path, actual_size = _inspect_file_metadata(path)
+    actual_sha256 = _compute_file_sha256(resolved_path, validated_chunk_size)
 
     return FileInspectionResult(
         file_path=resolved_path,
         size_bytes=actual_size,
-        sha256=hasher.hexdigest().lower(),
+        sha256=actual_sha256,
     )
 
 
@@ -311,22 +320,17 @@ def verify_local_file(
         VerificationPermissionError: If read permission is denied.
         VerificationReadError: If other OS errors occur during verification.
     """
-    # Delegate inspection and hashing to inspect_local_file; chunk_size validation
-    # happens inside inspect_local_file via _validate_chunk_size.
-    inspection = inspect_local_file(path, chunk_size=chunk_size)
+    validated_chunk_size = _validate_chunk_size(chunk_size)
+    resolved_path, actual_size = _inspect_file_metadata(path)
 
-    if inspection.size_bytes != expected_size_bytes:
-        raise SizeMismatchError(
-            inspection.file_path, expected_size_bytes, inspection.size_bytes
-        )
+    if actual_size != expected_size_bytes:
+        raise SizeMismatchError(resolved_path, expected_size_bytes, actual_size)
 
-    actual_sha256 = inspection.sha256
+    actual_sha256 = _compute_file_sha256(resolved_path, validated_chunk_size)
     if actual_sha256 != expected_sha256.lower():
-        raise ChecksumMismatchError(
-            inspection.file_path, expected_sha256, actual_sha256
-        )
+        raise ChecksumMismatchError(resolved_path, expected_sha256, actual_sha256)
 
-    return inspection.size_bytes, actual_sha256
+    return actual_size, actual_sha256
 
 
 def verify_artifact(
