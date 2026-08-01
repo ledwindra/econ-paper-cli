@@ -6,6 +6,7 @@ import pytest
 
 from econ_paper_cli.domain import (
     DEFAULT_PDF_SECTION_SETTINGS,
+    PDFHeadingCandidate,
     PDFSection,
     PDFSectionDetectionResult,
     PDFSectionKind,
@@ -34,6 +35,37 @@ def test_section_span_validation() -> None:
     with pytest.raises(PDFSectionValidationError, match="cannot exceed"):
         PDFSectionSpan(
             page_number=1, start_character_offset=20, end_character_offset=10
+        )
+
+
+def test_heading_candidate_validation() -> None:
+    candidate = PDFHeadingCandidate(
+        kind=PDFSectionKind.ABSTRACT,
+        heading_text="Abstract",
+        page_number=1,
+        start_character_offset=0,
+        end_character_offset=8,
+    )
+    assert candidate.kind is PDFSectionKind.ABSTRACT
+    assert candidate.start_character_offset == 0
+    assert candidate.end_character_offset == 8
+
+    with pytest.raises(PDFSectionValidationError, match="heading_text"):
+        PDFHeadingCandidate(
+            kind=PDFSectionKind.ABSTRACT,
+            heading_text="   ",
+            page_number=1,
+            start_character_offset=0,
+            end_character_offset=8,
+        )
+
+    with pytest.raises(PDFSectionValidationError, match="cannot exceed"):
+        PDFHeadingCandidate(
+            kind=PDFSectionKind.ABSTRACT,
+            heading_text="Abstract",
+            page_number=1,
+            start_character_offset=10,
+            end_character_offset=8,
         )
 
 
@@ -119,13 +151,22 @@ def test_section_detection_result_validation() -> None:
         spans=(intro_span,),
         text=text,
     )
+    candidate = PDFHeadingCandidate(
+        kind=PDFSectionKind.ABSTRACT,
+        heading_text="Abstract",
+        page_number=1,
+        start_character_offset=0,
+        end_character_offset=8,
+    )
 
     result = PDFSectionDetectionResult(
         policy_version="pdf-section-detection-v1",
         sections=(section, intro_section),
+        candidates=(candidate,),
         warnings=(),
     )
     assert len(result.sections) == 2
+    assert len(result.candidates) == 1
 
     with pytest.raises(
         PDFSectionValidationError, match="not a recognized policy version"
@@ -133,14 +174,8 @@ def test_section_detection_result_validation() -> None:
         PDFSectionDetectionResult(
             policy_version="unrecognized-v2",
             sections=(),
+            candidates=(),
             warnings=(PDFSectionWarning(PDFSectionWarningCode.NO_PAGES),),
-        )
-
-    with pytest.raises(PDFSectionValidationError, match="unique in sections"):
-        PDFSectionDetectionResult(
-            policy_version="pdf-section-detection-v1",
-            sections=(section, section),
-            warnings=(PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION),),
         )
 
     with pytest.raises(
@@ -149,30 +184,19 @@ def test_section_detection_result_validation() -> None:
         PDFSectionDetectionResult(
             policy_version="pdf-section-detection-v1",
             sections=(section, intro_section),
+            candidates=(),
             warnings=(PDFSectionWarning(PDFSectionWarningCode.MISSING_ABSTRACT),),
         )
 
     with pytest.raises(
-        PDFSectionValidationError, match="contradicts presence of sections"
+        PDFSectionValidationError,
+        match="AMBIGUOUS_ABSTRACT_CANDIDATES warning contradicts",
     ):
         PDFSectionDetectionResult(
             policy_version="pdf-section-detection-v1",
-            sections=(section,),
-            warnings=(PDFSectionWarning(PDFSectionWarningCode.NO_PAGES),),
-        )
-
-    with pytest.raises(
-        PDFSectionValidationError, match="must include MISSING_ABSTRACT"
-    ):
-        PDFSectionDetectionResult(
-            policy_version="pdf-section-detection-v1",
-            sections=(intro_section,),
-            warnings=(),
-        )
-
-    with pytest.raises(PDFSectionValidationError, match="ordered and non-overlapping"):
-        PDFSectionDetectionResult(
-            policy_version="pdf-section-detection-v1",
-            sections=(intro_section, section),
-            warnings=(),
+            sections=(section, intro_section),
+            candidates=(),
+            warnings=(
+                PDFSectionWarning(PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES),
+            ),
         )

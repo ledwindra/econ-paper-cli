@@ -126,12 +126,14 @@ def test_introduction_heading_variations(heading_text: str) -> None:
     assert "introduction text" in intro.text
 
 
-def test_numbered_prose_and_list_items_do_not_truncate_introduction() -> None:
+def test_noun_led_numbered_prose_and_list_items_do_not_truncate_introduction() -> None:
     p1 = (
         "1. Introduction\n"
         "2 million households received the transfer under the new social policy.\n"
         "2. We next estimate the empirical model across municipalities.\n"
-        "2. In this section we present the main policy background.\n"
+        "2 Results are shown in Table 1.\n"
+        "2 Robustness checks confirm the result.\n"
+        "2 Households respond strongly to the policy.\n"
         "Further introduction prose continues here.\n\n"
         "2. Data\n"
         "We describe the data sources.\n"
@@ -141,8 +143,31 @@ def test_numbered_prose_and_list_items_do_not_truncate_introduction() -> None:
     intro = next(s for s in result.sections if s.kind is PDFSectionKind.INTRODUCTION)
     assert "2 million households received" in intro.text
     assert "2. We next estimate" in intro.text
-    assert "2. In this section we present" in intro.text
+    assert "2 Results are shown in Table 1." in intro.text
+    assert "2 Robustness checks confirm the result." in intro.text
+    assert "2 Households respond strongly" in intro.text
     assert "2. Data" not in intro.text
+
+
+def test_candidate_traceability_on_same_page_ambiguity() -> None:
+    p1 = "Abstract\nFirst abstract text.\n\nAbstract\nSecond abstract text.\n"
+    result = detect_pdf_sections(_extraction(p1), settings=DEFAULT_PDF_SECTION_SETTINGS)
+
+    assert len(result.sections) == 0
+    assert PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES in [
+        w.code for w in result.warnings
+    ]
+
+    # Verify candidates preserve exact offset provenance on the same page
+    abstract_candidates = tuple(
+        c for c in result.candidates if c.kind is PDFSectionKind.ABSTRACT
+    )
+    assert len(abstract_candidates) == 2
+    c1, c2 = abstract_candidates
+    assert c1.page_number == 1 and c2.page_number == 1
+    assert c1.start_character_offset == 0
+    assert c2.start_character_offset > c1.end_character_offset
+    assert c1.heading_text == "Abstract" and c2.heading_text == "Abstract"
 
 
 def test_multipage_section_content_preserves_page_boundaries_and_offsets() -> None:
@@ -202,7 +227,6 @@ def test_toc_lines_and_running_headers_ignored_for_body_heading_selection() -> N
     p1 = "Table of Contents\nAbstract ............................ 2\n1. Introduction .................... 3\n\nAbstract\nActual abstract text.\n"
     p2 = "Abstract\n1. Introduction\nActual intro text.\n\n2. Data\nData text.\n"
 
-    # p2 line "Abstract" at top of page 2 is a running header appearing on multiple pages
     result = detect_pdf_sections(
         _extraction(p1, p2), settings=DEFAULT_PDF_SECTION_SETTINGS
     )
@@ -233,6 +257,7 @@ def test_ambiguous_abstract_and_introduction_candidates_emit_warning_and_omit_se
     assert PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES in codes
     assert PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES in codes
     assert len(result.sections) == 0
+    assert len(result.candidates) == 4
 
 
 def test_empty_pages_and_zero_page_results() -> None:

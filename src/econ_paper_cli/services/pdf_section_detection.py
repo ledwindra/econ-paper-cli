@@ -5,6 +5,7 @@ import re
 from econ_paper_cli.domain.pdf_extraction import PDFExtractionResult
 from econ_paper_cli.domain.pdf_sections import (
     _WARNING_ORDER,
+    PDFHeadingCandidate,
     PDFSection,
     PDFSectionDetectionResult,
     PDFSectionKind,
@@ -28,69 +29,6 @@ _NEXT_SECTION_TITLE_RE = re.compile(
     re.IGNORECASE,
 )
 _TOC_DOT_LEADERS_RE = re.compile(r"\.{4,}")
-
-_PROSE_FIRST_WORDS = frozenset(
-    {
-        "we",
-        "they",
-        "i",
-        "he",
-        "she",
-        "it",
-        "you",
-        "our",
-        "their",
-        "my",
-        "your",
-        "this",
-        "these",
-        "that",
-        "those",
-        "in",
-        "on",
-        "at",
-        "for",
-        "with",
-        "by",
-        "is",
-        "are",
-        "was",
-        "were",
-        "be",
-        "been",
-        "being",
-        "have",
-        "has",
-        "had",
-        "do",
-        "does",
-        "did",
-        "million",
-        "billion",
-        "thousand",
-        "percent",
-        "pct",
-        "show",
-        "shows",
-        "showed",
-        "estimate",
-        "estimates",
-        "estimated",
-        "find",
-        "finds",
-        "found",
-        "present",
-        "presents",
-        "presented",
-        "next",
-        "first",
-        "second",
-        "third",
-        "finally",
-        "moreover",
-        "however",
-    }
-)
 
 
 class _LineInfo:
@@ -121,12 +59,24 @@ class _LineInfo:
 
 
 class _CandidateMatch:
-    __slots__ = ("line_index", "line", "score")
+    __slots__ = ("kind", "line_index", "line", "score")
 
-    def __init__(self, line_index: int, line: _LineInfo, score: int) -> None:
+    def __init__(
+        self, kind: PDFSectionKind, line_index: int, line: _LineInfo, score: int
+    ) -> None:
+        self.kind = kind
         self.line_index = line_index
         self.line = line
         self.score = score
+
+    def to_domain_candidate(self) -> PDFHeadingCandidate:
+        return PDFHeadingCandidate(
+            kind=self.kind,
+            heading_text=self.line.trimmed,
+            page_number=self.line.page_number,
+            start_character_offset=self.line.start_offset,
+            end_character_offset=self.line.end_offset,
+        )
 
 
 def detect_pdf_sections(
@@ -144,6 +94,7 @@ def detect_pdf_sections(
         return PDFSectionDetectionResult(
             policy_version=settings.policy_version,
             sections=(),
+            candidates=(),
             warnings=(PDFSectionWarning(PDFSectionWarningCode.NO_PAGES),),
         )
 
@@ -153,6 +104,7 @@ def detect_pdf_sections(
         return PDFSectionDetectionResult(
             policy_version=settings.policy_version,
             sections=(),
+            candidates=(),
             warnings=(
                 PDFSectionWarning(
                     PDFSectionWarningCode.ALL_PAGES_EMPTY,
@@ -166,10 +118,13 @@ def detect_pdf_sections(
     running_headers = _detect_running_headers(all_lines, extraction.page_count)
 
     abstract_candidates = _find_heading_candidates(
-        all_lines, _ABSTRACT_HEADING_RE, running_headers
+        all_lines, _ABSTRACT_HEADING_RE, PDFSectionKind.ABSTRACT, running_headers
     )
     intro_candidates = _find_heading_candidates(
-        all_lines, _INTRODUCTION_HEADING_RE, running_headers
+        all_lines,
+        _INTRODUCTION_HEADING_RE,
+        PDFSectionKind.INTRODUCTION,
+        running_headers,
     )
 
     warnings_list: list[PDFSectionWarning] = []
@@ -187,29 +142,7 @@ def detect_pdf_sections(
         warnings_list,
     )
 
-    if selected_abstract is None and not any(
-        w.code
-        in {
-            PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES,
-            PDFSectionWarningCode.DUPLICATE_ABSTRACT_CANDIDATES,
-        }
-        for w in warnings_list
-    ):
-        warnings_list.append(PDFSectionWarning(PDFSectionWarningCode.MISSING_ABSTRACT))
-
-    if selected_intro is None and not any(
-        w.code
-        in {
-            PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES,
-            PDFSectionWarningCode.DUPLICATE_INTRODUCTION_CANDIDATES,
-        }
-        for w in warnings_list
-    ):
-        warnings_list.append(
-            PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION)
-        )
-
-    # Determine Abstract section boundaries
+    # Build Abstract section
     if selected_abstract is not None:
         end_line_index = (
             selected_intro.line_index if selected_intro is not None else len(all_lines)
@@ -224,12 +157,12 @@ def detect_pdf_sections(
         )
         if abstract_section is not None:
             sections_list.append(abstract_section)
-        elif selected_abstract is not None:
+        else:
             warnings_list.append(
                 PDFSectionWarning(PDFSectionWarningCode.MISSING_ABSTRACT)
             )
 
-    # Determine Introduction section boundaries
+    # Build Introduction section
     if selected_intro is not None:
         next_section_candidate = _find_next_section_candidate(
             all_lines,
@@ -254,24 +187,43 @@ def detect_pdf_sections(
         )
         if intro_section is not None:
             sections_list.append(intro_section)
-        elif selected_intro is not None:
+        else:
             warnings_list.append(
                 PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION)
             )
 
-    # Handle cross-field required missing warnings when section was not formed
+    # Cross-field required missing warnings
     sec_kinds = {s.kind for s in sections_list}
-    if PDFSectionKind.ABSTRACT not in sec_kinds and not any(
-        w.code is PDFSectionWarningCode.MISSING_ABSTRACT for w in warnings_list
+    if (
+        PDFSectionKind.ABSTRACT not in sec_kinds
+        and not any(
+            w.code is PDFSectionWarningCode.MISSING_ABSTRACT for w in warnings_list
+        )
+        and not any(
+            w.code is PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES
+            for w in warnings_list
+        )
     ):
         warnings_list.append(PDFSectionWarning(PDFSectionWarningCode.MISSING_ABSTRACT))
 
-    if PDFSectionKind.INTRODUCTION not in sec_kinds and not any(
-        w.code is PDFSectionWarningCode.MISSING_INTRODUCTION for w in warnings_list
+    if (
+        PDFSectionKind.INTRODUCTION not in sec_kinds
+        and not any(
+            w.code is PDFSectionWarningCode.MISSING_INTRODUCTION for w in warnings_list
+        )
+        and not any(
+            w.code is PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES
+            for w in warnings_list
+        )
     ):
         warnings_list.append(
             PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION)
         )
+
+    # Collect all candidates for domain result provenance
+    all_domain_candidates = tuple(
+        c.to_domain_candidate() for c in (abstract_candidates + intro_candidates)
+    )
 
     # Sort warnings canonically
     warnings_list = _deduplicate_and_sort_warnings(warnings_list)
@@ -279,6 +231,7 @@ def detect_pdf_sections(
     return PDFSectionDetectionResult(
         policy_version=settings.policy_version,
         sections=tuple(sections_list),
+        candidates=all_domain_candidates,
         warnings=tuple(warnings_list),
     )
 
@@ -337,6 +290,7 @@ def _detect_running_headers(lines: list[_LineInfo], page_count: int) -> set[str]
 def _find_heading_candidates(
     lines: list[_LineInfo],
     pattern: re.Pattern[str],
+    kind: PDFSectionKind,
     running_headers: set[str],
 ) -> list[_CandidateMatch]:
     candidates: list[_CandidateMatch] = []
@@ -349,12 +303,11 @@ def _find_heading_candidates(
             score = 2
             if line.trimmed in running_headers:
                 score = 0
-            # Check context: isolated line / blank surrounding lines
             prev_blank = idx == 0 or not lines[idx - 1].trimmed
             next_blank = idx == len(lines) - 1 or not lines[idx + 1].trimmed
             if prev_blank or next_blank:
                 score += 1
-            candidates.append(_CandidateMatch(idx, line, score))
+            candidates.append(_CandidateMatch(kind, idx, line, score))
     return candidates
 
 
@@ -371,38 +324,52 @@ def _find_next_section_candidate(
             continue
         if _TOC_DOT_LEADERS_RE.search(line.text):
             continue
-        if _is_genuine_next_top_level_heading(line):
-            return _CandidateMatch(idx, line, 2)
+        prev_blank = idx == start_index or not lines[idx - 1].trimmed
+        next_blank = idx == len(lines) - 1 or not lines[idx + 1].trimmed
+        if _is_genuine_next_top_level_heading(line, prev_blank, next_blank):
+            return _CandidateMatch(PDFSectionKind.INTRODUCTION, idx, line, 2)
     return None
 
 
-def _is_genuine_next_top_level_heading(line: _LineInfo) -> bool:
+def _is_genuine_next_top_level_heading(
+    line: _LineInfo, prev_blank: bool, next_blank: bool
+) -> bool:
     match = _NEXT_SECTION_TITLE_RE.match(line.trimmed)
     if not match:
         return False
 
     title_part = match.group(1).strip()
-    if not title_part:
+    if not title_part or len(title_part) > 60:
         return False
 
-    # Check words in title
-    words = title_part.split()
-    if len(words) > 8:
-        return False
-
-    first_word = words[0].rstrip(".:,;").lower()
-    if first_word in _PROSE_FIRST_WORDS:
-        return False
-
-    # Ensure title starts with a capital letter or number
-    if not (title_part[0].isupper() or title_part[0].isdigit()):
-        return False
-
-    # Check if line ends with a period and contains full prose sentence
-    if line.trimmed.endswith(".") and len(words) > 4:
-        # Check if last word is a verb/clause ending
-        if first_word in {"we", "they", "this", "our", "there"}:
+    if title_part.endswith("."):
+        title_without_period = title_part[:-1].strip()
+        words_without_period = title_without_period.split()
+        if len(words_without_period) > 3:
             return False
+        title_part = title_without_period
+
+    words = title_part.split()
+    if not words or len(words) > 6:
+        return False
+
+    # Check structural heading evidence: Title Case or ALL CAPS
+    is_all_caps = title_part.isupper()
+    has_lowercase_content_words = any(
+        w.islower()
+        for w in words
+        if not (
+            len(w) <= 3
+            and w.lower() in {"and", "of", "in", "the", "on", "to", "for", "a", "an"}
+        )
+    )
+
+    if has_lowercase_content_words and not is_all_caps:
+        return False
+
+    # Must have structural heading context (preceded or followed by blank line/boundary)
+    if not (prev_blank or next_blank):
+        return False
 
     return True
 
@@ -417,16 +384,13 @@ def _select_candidate(
 
     all_pages = tuple(sorted(set(c.line.page_number for c in candidates)))
 
-    # Filter out weak/running-header candidates if strong candidates exist
     max_score = max(c.score for c in candidates)
     top_candidates = [c for c in candidates if c.score == max_score]
 
     if max_score == 0:
-        # All candidates are running headers / weak candidates
         return None
 
     if len(top_candidates) > 1:
-        # Ambiguous: top candidates tie in score
         if kind == PDFSectionKind.ABSTRACT:
             warnings.append(
                 PDFSectionWarning(
@@ -441,7 +405,6 @@ def _select_candidate(
             )
         return None
 
-    # Exactly one clear top candidate
     if len(candidates) > 1:
         if kind == PDFSectionKind.ABSTRACT:
             warnings.append(
@@ -474,7 +437,6 @@ def _build_section(
     if not lines_slice:
         return None
 
-    # Group lines by page
     spans_by_page: dict[int, list[tuple[int, int]]] = {}
     for line in lines_slice:
         p_num = line.page_number

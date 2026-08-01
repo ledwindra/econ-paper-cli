@@ -105,6 +105,29 @@ class PDFSectionSpan:
 
 
 @dataclass(frozen=True, slots=True)
+class PDFHeadingCandidate:
+    """Observed heading candidate location and text for provenance and traceability."""
+
+    kind: PDFSectionKind
+    heading_text: str
+    page_number: int
+    start_character_offset: int
+    end_character_offset: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, PDFSectionKind):
+            raise PDFSectionValidationError("kind must be a PDFSectionKind instance.")
+        _validate_nonempty_text("heading_text", self.heading_text)
+        _validate_positive_int("page_number", self.page_number)
+        _validate_nonnegative_int("start_character_offset", self.start_character_offset)
+        _validate_nonnegative_int("end_character_offset", self.end_character_offset)
+        if self.start_character_offset > self.end_character_offset:
+            raise PDFSectionValidationError(
+                "start_character_offset cannot exceed end_character_offset."
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class PDFSection:
     """Detected section with page span provenance and text."""
 
@@ -203,6 +226,7 @@ class PDFSectionDetectionResult:
 
     policy_version: str
     sections: tuple[PDFSection, ...]
+    candidates: tuple[PDFHeadingCandidate, ...]
     warnings: tuple[PDFSectionWarning, ...]
 
     def __post_init__(self) -> None:
@@ -216,6 +240,12 @@ class PDFSectionDetectionResult:
         ):
             raise PDFSectionValidationError(
                 "sections must be a tuple of PDFSection instances."
+            )
+        if not isinstance(self.candidates, tuple) or not all(
+            isinstance(candidate, PDFHeadingCandidate) for candidate in self.candidates
+        ):
+            raise PDFSectionValidationError(
+                "candidates must be a tuple of PDFHeadingCandidate instances."
             )
         if not isinstance(self.warnings, tuple) or not all(
             isinstance(warning, PDFSectionWarning) for warning in self.warnings
@@ -252,6 +282,18 @@ class PDFSectionDetectionResult:
                 "ALL_PAGES_EMPTY warning contradicts presence of sections."
             )
 
+        if PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES in warning_code_set:
+            if PDFSectionKind.ABSTRACT in section_kinds_set:
+                raise PDFSectionValidationError(
+                    "AMBIGUOUS_ABSTRACT_CANDIDATES warning contradicts presence of Abstract section."
+                )
+
+        if PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES in warning_code_set:
+            if PDFSectionKind.INTRODUCTION in section_kinds_set:
+                raise PDFSectionValidationError(
+                    "AMBIGUOUS_INTRODUCTION_CANDIDATES warning contradicts presence of Introduction section."
+                )
+
         if PDFSectionKind.ABSTRACT in section_kinds_set:
             if PDFSectionWarningCode.MISSING_ABSTRACT in warning_code_set:
                 raise PDFSectionValidationError(
@@ -260,6 +302,8 @@ class PDFSectionDetectionResult:
         elif (
             PDFSectionWarningCode.NO_PAGES not in warning_code_set
             and PDFSectionWarningCode.ALL_PAGES_EMPTY not in warning_code_set
+            and PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES
+            not in warning_code_set
         ):
             if PDFSectionWarningCode.MISSING_ABSTRACT not in warning_code_set:
                 raise PDFSectionValidationError(
@@ -274,6 +318,8 @@ class PDFSectionDetectionResult:
         elif (
             PDFSectionWarningCode.NO_PAGES not in warning_code_set
             and PDFSectionWarningCode.ALL_PAGES_EMPTY not in warning_code_set
+            and PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES
+            not in warning_code_set
         ):
             if PDFSectionWarningCode.MISSING_INTRODUCTION not in warning_code_set:
                 raise PDFSectionValidationError(

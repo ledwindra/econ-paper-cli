@@ -51,6 +51,7 @@ from econ_paper_cli.domain.pdf_quality import (
 )
 from econ_paper_cli.domain.pdf_sections import (
     DEFAULT_PDF_SECTION_SETTINGS,
+    PDFHeadingCandidate,
     PDFSection,
     PDFSectionDetectionResult,
     PDFSectionKind,
@@ -107,6 +108,7 @@ __all__ = [
     "PDFQualityWarning",
     "PDFQualityWarningCode",
     "DEFAULT_PDF_QUALITY_SETTINGS",
+    "PDFHeadingCandidate",
     "PDFSection",
     "PDFSectionDetectionResult",
     "PDFSectionKind",
