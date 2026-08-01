@@ -30,8 +30,9 @@ Concatenating span text slices reproduces the section's exact extracted body tex
 Missing, ambiguous, or malformed section boundaries emit stable warning codes in canonical order:
 - `no_pages`: The extraction result contains zero pages.
 - `all_pages_empty`: No extractable text was found on any page.
-- `missing_abstract`: No Abstract heading was detected.
-- `missing_introduction`: No Introduction heading was detected.
+- `MISSING_ABSTRACT`: No Abstract heading candidate was detected.
+- `UNRESOLVED_ABSTRACT_BOUNDARY`: An Abstract heading candidate was detected, but no subsequent top-level section boundary was found to delimit its end.
+- `MISSING_INTRODUCTION`: No Introduction heading candidate was detected.
 - `missing_next_section_boundary`: Introduction heading was found, but no subsequent top-level section heading was detected. Introduction extends to the end of the extracted text.
 - `duplicate_abstract_candidates`: Multiple Abstract heading candidates were detected.
 - `duplicate_introduction_candidates`: Multiple Introduction heading candidates were detected.

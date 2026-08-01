@@ -19,6 +19,7 @@ class PDFSectionWarningCode(str, Enum):
     NO_PAGES = "no_pages"
     ALL_PAGES_EMPTY = "all_pages_empty"
     MISSING_ABSTRACT = "missing_abstract"
+    UNRESOLVED_ABSTRACT_BOUNDARY = "unresolved_abstract_boundary"
     MISSING_INTRODUCTION = "missing_introduction"
     MISSING_NEXT_SECTION_BOUNDARY = "missing_next_section_boundary"
     DUPLICATE_ABSTRACT_CANDIDATES = "duplicate_abstract_candidates"
@@ -38,6 +39,10 @@ _WARNING_MESSAGES = {
     ),
     PDFSectionWarningCode.MISSING_ABSTRACT: (
         "No Abstract heading candidate was detected in the document text."
+    ),
+    PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY: (
+        "Abstract heading candidate was detected, but its end boundary could not be "
+        "resolved."
     ),
     PDFSectionWarningCode.MISSING_INTRODUCTION: (
         "No Introduction heading candidate was detected in the document text."
@@ -288,6 +293,16 @@ class PDFSectionDetectionResult:
                     "AMBIGUOUS_ABSTRACT_CANDIDATES warning contradicts presence of Abstract section."
                 )
 
+        if PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY in warning_code_set:
+            if PDFSectionKind.ABSTRACT in section_kinds_set:
+                raise PDFSectionValidationError(
+                    "UNRESOLVED_ABSTRACT_BOUNDARY warning contradicts presence of Abstract section."
+                )
+            if PDFSectionWarningCode.MISSING_ABSTRACT in warning_code_set:
+                raise PDFSectionValidationError(
+                    "UNRESOLVED_ABSTRACT_BOUNDARY warning contradicts MISSING_ABSTRACT warning."
+                )
+
         if PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES in warning_code_set:
             if PDFSectionKind.INTRODUCTION in section_kinds_set:
                 raise PDFSectionValidationError(
@@ -351,6 +366,8 @@ class PDFSectionDetectionResult:
             PDFSectionWarningCode.NO_PAGES not in warning_code_set
             and PDFSectionWarningCode.ALL_PAGES_EMPTY not in warning_code_set
             and PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES
+            not in warning_code_set
+            and PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY
             not in warning_code_set
         ):
             if PDFSectionWarningCode.MISSING_ABSTRACT not in warning_code_set:

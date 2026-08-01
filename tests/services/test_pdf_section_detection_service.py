@@ -216,7 +216,7 @@ def test_missing_abstract_and_missing_next_section_warnings() -> None:
 
 
 def test_missing_introduction_warning() -> None:
-    p1 = "Abstract\nOnly abstract exists in this document.\n"
+    p1 = "Abstract\nOnly abstract exists in this document.\n\n2. Data\nData text.\n"
     result = detect_pdf_sections(_extraction(p1), settings=DEFAULT_PDF_SECTION_SETTINGS)
 
     assert len(result.sections) == 1
@@ -280,8 +280,8 @@ def test_abstract_omitted_when_introduction_is_ambiguous() -> None:
     )
 
     codes = [w.code for w in result.warnings]
+    assert PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY in codes
     assert PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES in codes
-    assert PDFSectionWarningCode.MISSING_ABSTRACT in codes
     assert len(result.sections) == 0
 
 

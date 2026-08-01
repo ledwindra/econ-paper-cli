@@ -181,6 +181,7 @@ def test_section_detection_result_validation_and_distinct_candidate_grounding() 
             sections=(),
             candidates=(c1, c1),
             warnings=(
+                PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION),
                 PDFSectionWarning(
                     PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES,
                     page_numbers=(1,),
@@ -220,4 +221,195 @@ def test_section_detection_result_validation_and_distinct_candidate_grounding() 
                     page_numbers=(1,),
                 ),
             ),
+        )
+
+
+def test_result_rejects_unrecognized_policy_version() -> None:
+    with pytest.raises(
+        PDFSectionValidationError, match="not a recognized policy version"
+    ):
+        PDFSectionDetectionResult(
+            policy_version="unrecognized-policy-v99",
+            sections=(),
+            candidates=(),
+            warnings=(PDFSectionWarning(PDFSectionWarningCode.NO_PAGES),),
+        )
+
+
+def test_result_rejects_duplicate_section_kinds() -> None:
+    text = "Sample text 40 chars long string here..."
+    span1 = PDFSectionSpan(
+        page_number=1, start_character_offset=0, end_character_offset=len(text)
+    )
+    sec1 = PDFSection(
+        kind=PDFSectionKind.ABSTRACT,
+        heading_text="Abstract 1",
+        start_page_number=1,
+        end_page_number=1,
+        spans=(span1,),
+        text=text,
+    )
+    span2 = PDFSectionSpan(
+        page_number=2, start_character_offset=0, end_character_offset=len(text)
+    )
+    sec2 = PDFSection(
+        kind=PDFSectionKind.ABSTRACT,
+        heading_text="Abstract 2",
+        start_page_number=2,
+        end_page_number=2,
+        spans=(span2,),
+        text=text,
+    )
+
+    with pytest.raises(PDFSectionValidationError, match="unique in sections"):
+        PDFSectionDetectionResult(
+            policy_version="pdf-section-detection-v1",
+            sections=(sec1, sec2),
+            candidates=(),
+            warnings=(PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION),),
+        )
+
+
+def test_result_rejects_non_canonical_warning_ordering() -> None:
+    with pytest.raises(
+        PDFSectionValidationError, match="warnings must use canonical code order"
+    ):
+        PDFSectionDetectionResult(
+            policy_version="pdf-section-detection-v1",
+            sections=(),
+            candidates=(),
+            warnings=(
+                PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION),
+                PDFSectionWarning(PDFSectionWarningCode.MISSING_ABSTRACT),
+            ),
+        )
+
+
+def test_result_rejects_contradictory_no_pages_or_all_empty_with_sections() -> None:
+    text = "Sample text 40 chars long string here..."
+    span = PDFSectionSpan(
+        page_number=1, start_character_offset=0, end_character_offset=len(text)
+    )
+    sec = PDFSection(
+        kind=PDFSectionKind.ABSTRACT,
+        heading_text="Abstract",
+        start_page_number=1,
+        end_page_number=1,
+        spans=(span,),
+        text=text,
+    )
+
+    with pytest.raises(PDFSectionValidationError, match="NO_PAGES warning contradicts"):
+        PDFSectionDetectionResult(
+            policy_version="pdf-section-detection-v1",
+            sections=(sec,),
+            candidates=(),
+            warnings=(
+                PDFSectionWarning(PDFSectionWarningCode.NO_PAGES),
+                PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION),
+            ),
+        )
+
+    with pytest.raises(
+        PDFSectionValidationError, match="ALL_PAGES_EMPTY warning contradicts"
+    ):
+        PDFSectionDetectionResult(
+            policy_version="pdf-section-detection-v1",
+            sections=(sec,),
+            candidates=(),
+            warnings=(
+                PDFSectionWarning(
+                    PDFSectionWarningCode.ALL_PAGES_EMPTY, page_numbers=(1,)
+                ),
+                PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION),
+            ),
+        )
+
+
+def test_result_rejects_missing_section_without_corresponding_warning() -> None:
+    text = "Sample text 40 chars long string here..."
+    span = PDFSectionSpan(
+        page_number=1, start_character_offset=0, end_character_offset=len(text)
+    )
+    sec = PDFSection(
+        kind=PDFSectionKind.ABSTRACT,
+        heading_text="Abstract",
+        start_page_number=1,
+        end_page_number=1,
+        spans=(span,),
+        text=text,
+    )
+
+    with pytest.raises(PDFSectionValidationError, match="MISSING_INTRODUCTION warning"):
+        PDFSectionDetectionResult(
+            policy_version="pdf-section-detection-v1",
+            sections=(sec,),
+            candidates=(),
+            warnings=(),
+        )
+
+
+def test_result_rejects_contradictory_missing_warning_with_section() -> None:
+    text = "Sample text 40 chars long string here..."
+    span = PDFSectionSpan(
+        page_number=1, start_character_offset=0, end_character_offset=len(text)
+    )
+    sec = PDFSection(
+        kind=PDFSectionKind.ABSTRACT,
+        heading_text="Abstract",
+        start_page_number=1,
+        end_page_number=1,
+        spans=(span,),
+        text=text,
+    )
+
+    with pytest.raises(
+        PDFSectionValidationError, match="MISSING_ABSTRACT warning contradicts"
+    ):
+        PDFSectionDetectionResult(
+            policy_version="pdf-section-detection-v1",
+            sections=(sec,),
+            candidates=(),
+            warnings=(
+                PDFSectionWarning(PDFSectionWarningCode.MISSING_ABSTRACT),
+                PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION),
+            ),
+        )
+
+
+def test_result_rejects_overlapping_or_out_of_order_sections() -> None:
+    text1 = "Sample abstract text 40 chars string..."
+    span1 = PDFSectionSpan(
+        page_number=1, start_character_offset=0, end_character_offset=len(text1)
+    )
+    sec1 = PDFSection(
+        kind=PDFSectionKind.ABSTRACT,
+        heading_text="Abstract",
+        start_page_number=1,
+        end_page_number=1,
+        spans=(span1,),
+        text=text1,
+    )
+
+    text2 = "Sample intro text 40 chars string here."
+    span2 = PDFSectionSpan(
+        page_number=1, start_character_offset=10, end_character_offset=10 + len(text2)
+    )
+    sec2 = PDFSection(
+        kind=PDFSectionKind.INTRODUCTION,
+        heading_text="Introduction",
+        start_page_number=1,
+        end_page_number=1,
+        spans=(span2,),
+        text=text2,
+    )
+
+    with pytest.raises(
+        PDFSectionValidationError, match="sections on the same page cannot overlap"
+    ):
+        PDFSectionDetectionResult(
+            policy_version="pdf-section-detection-v1",
+            sections=(sec1, sec2),
+            candidates=(),
+            warnings=(),
         )

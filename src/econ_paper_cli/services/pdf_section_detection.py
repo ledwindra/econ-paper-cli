@@ -143,28 +143,51 @@ def detect_pdf_sections(
     )
 
     # Determine Abstract section boundaries
-    is_intro_ambiguous = any(
-        w.code is PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES
-        for w in warnings_list
-    )
+    if selected_abstract is not None:
+        abstract_end_line_index: int | None = None
 
-    if selected_abstract is not None and not is_intro_ambiguous:
-        end_line_index = (
-            selected_intro.line_index if selected_intro is not None else len(all_lines)
+        is_intro_ambiguous = any(
+            w.code is PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES
+            for w in warnings_list
         )
-        abstract_section = _build_section(
-            kind=PDFSectionKind.ABSTRACT,
-            heading_line=all_lines[selected_abstract.line_index],
-            start_line_index=selected_abstract.line_index + 1,
-            end_line_index=end_line_index,
-            all_lines=all_lines,
-            extraction=extraction,
-        )
-        if abstract_section is not None:
-            sections_list.append(abstract_section)
+
+        if not is_intro_ambiguous:
+            if selected_intro is not None:
+                abstract_end_line_index = selected_intro.line_index
+            else:
+                # Look for any next top-level section candidate to bound the Abstract
+                next_sec_candidate = _find_next_section_candidate(
+                    all_lines,
+                    start_index=selected_abstract.line_index + 1,
+                    running_headers=running_headers,
+                )
+                if next_sec_candidate is not None:
+                    abstract_end_line_index = next_sec_candidate.line_index
+
+        if abstract_end_line_index is not None:
+            abstract_section = _build_section(
+                kind=PDFSectionKind.ABSTRACT,
+                heading_line=all_lines[selected_abstract.line_index],
+                start_line_index=selected_abstract.line_index + 1,
+                end_line_index=abstract_end_line_index,
+                all_lines=all_lines,
+                extraction=extraction,
+            )
+            if abstract_section is not None:
+                sections_list.append(abstract_section)
+            else:
+                warnings_list.append(
+                    PDFSectionWarning(
+                        PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY,
+                        (all_lines[selected_abstract.line_index].page_number,),
+                    )
+                )
         else:
             warnings_list.append(
-                PDFSectionWarning(PDFSectionWarningCode.MISSING_ABSTRACT)
+                PDFSectionWarning(
+                    PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY,
+                    (all_lines[selected_abstract.line_index].page_number,),
+                )
             )
 
     # Determine Introduction section boundaries
@@ -206,6 +229,10 @@ def detect_pdf_sections(
         )
         and not any(
             w.code is PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES
+            for w in warnings_list
+        )
+        and not any(
+            w.code is PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY
             for w in warnings_list
         )
     ):
