@@ -123,7 +123,6 @@ _WARNING_ORDER = {
 
 _CANONICAL_SINGLE_PAPER_SETTINGS: dict[str, dict[str, object]] = {
     "single-paper-analysis-v1": {},
-    "single-paper-analysis-v2": {},
 }
 
 # Canonical stage sequence
@@ -671,6 +670,17 @@ class SinglePaperAnalysisSectionRecord:
             raise SinglePaperAnalysisValidationError(
                 "spans must be a non-empty tuple of SinglePaperAnalysisSectionSpanRecord."
             )
+        if self.spans[0].page_number != self.page_start:
+            raise SinglePaperAnalysisValidationError(
+                "page_start must match the first span's page_number."
+            )
+        if self.spans[-1].page_number != self.page_end:
+            raise SinglePaperAnalysisValidationError(
+                "page_end must match the last span's page_number."
+            )
+
+        previous_page = 0
+        previous_end_offset = 0
         for idx, span in enumerate(self.spans):
             if not isinstance(span, SinglePaperAnalysisSectionSpanRecord):
                 raise SinglePaperAnalysisValidationError(
@@ -680,10 +690,19 @@ class SinglePaperAnalysisSectionRecord:
                 raise SinglePaperAnalysisValidationError(
                     f"span[{idx}] ordinal_position ({span.ordinal_position}) does not match index ({idx})."
                 )
-            if span.page_number < self.page_start or span.page_number > self.page_end:
+            if span.page_number < previous_page:
                 raise SinglePaperAnalysisValidationError(
-                    f"span page_number {span.page_number} lies outside section range [{self.page_start}, {self.page_end}]."
+                    "spans must be ordered by page_number and offset."
                 )
+            if (
+                span.page_number == previous_page
+                and span.start_character_offset < previous_end_offset
+            ):
+                raise SinglePaperAnalysisValidationError(
+                    "spans on the same page cannot overlap or be out of order."
+                )
+            previous_page = span.page_number
+            previous_end_offset = span.end_character_offset
         _validate_nonnegative_int("ordinal_position", self.ordinal_position)
 
 

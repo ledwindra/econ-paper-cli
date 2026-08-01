@@ -214,3 +214,78 @@ def test_record_non_canonical_source_path_rejected(tmp_path: Path) -> None:
             created_at="2026-08-01T20:00:00Z",
             updated_at="2026-08-01T20:00:00Z",
         )
+
+
+def test_section_span_ordering_and_bounds_validation() -> None:
+    span_p1 = SinglePaperAnalysisSectionSpanRecord(
+        page_number=1,
+        start_character_offset=0,
+        end_character_offset=50,
+        ordinal_position=0,
+    )
+    span_p2 = SinglePaperAnalysisSectionSpanRecord(
+        page_number=2,
+        start_character_offset=0,
+        end_character_offset=100,
+        ordinal_position=1,
+    )
+
+    # 1. page_start mismatch
+    with pytest.raises(
+        SinglePaperAnalysisValidationError,
+        match="page_start must match the first span's page_number",
+    ):
+        SinglePaperAnalysisSectionRecord(
+            section_kind=PDFSectionKind.INTRODUCTION,
+            heading_text="1. Introduction",
+            page_start=2,  # Should be 1
+            page_end=2,
+            spans=(span_p1, span_p2),
+            ordinal_position=0,
+        )
+
+    # 2. page_end mismatch
+    with pytest.raises(
+        SinglePaperAnalysisValidationError,
+        match="page_end must match the last span's page_number",
+    ):
+        SinglePaperAnalysisSectionRecord(
+            section_kind=PDFSectionKind.INTRODUCTION,
+            heading_text="1. Introduction",
+            page_start=1,
+            page_end=3,  # Should be 2
+            spans=(span_p1, span_p2),
+            ordinal_position=0,
+        )
+
+    # 3. Out of order span pages (page 2 between page 1 spans)
+    with pytest.raises(
+        SinglePaperAnalysisValidationError, match="spans must be ordered by page_number"
+    ):
+        SinglePaperAnalysisSectionRecord(
+            section_kind=PDFSectionKind.INTRODUCTION,
+            heading_text="1. Introduction",
+            page_start=1,
+            page_end=1,
+            spans=(
+                SinglePaperAnalysisSectionSpanRecord(
+                    page_number=1,
+                    start_character_offset=0,
+                    end_character_offset=50,
+                    ordinal_position=0,
+                ),
+                SinglePaperAnalysisSectionSpanRecord(
+                    page_number=2,
+                    start_character_offset=0,
+                    end_character_offset=50,
+                    ordinal_position=1,
+                ),
+                SinglePaperAnalysisSectionSpanRecord(
+                    page_number=1,
+                    start_character_offset=60,
+                    end_character_offset=100,
+                    ordinal_position=2,
+                ),
+            ),
+            ordinal_position=0,
+        )

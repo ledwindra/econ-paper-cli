@@ -239,7 +239,6 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "CREATE INDEX IF NOT EXISTS idx_analysis_warnings_analysis_id ON single_paper_analysis_warnings(analysis_id);",
             """CREATE TABLE IF NOT EXISTS single_paper_analysis_sections (
                 analysis_id TEXT NOT NULL,
-                content_checksum TEXT COLLATE NOCASE,
                 section_kind TEXT NOT NULL,
                 heading_text TEXT NOT NULL,
                 page_start INTEGER NOT NULL,
@@ -965,8 +964,10 @@ class SQLiteStorage(StorageBackend):
                         record.analysis_id,
                         "section",
                         warning.code.value,
-                        warning.message,
                         None,
+                        json.dumps(warning.page_numbers)
+                        if warning.page_numbers
+                        else None,
                         c_at,
                     ),
                 )
@@ -979,7 +980,7 @@ class SQLiteStorage(StorageBackend):
                         record.analysis_id,
                         "research_question",
                         warning.code.value,
-                        warning.message,
+                        warning.details,
                         None,
                         c_at,
                     ),
@@ -1003,12 +1004,11 @@ class SQLiteStorage(StorageBackend):
             for sec in record.sections:
                 conn.execute(
                     """INSERT INTO single_paper_analysis_sections (
-                        analysis_id, content_checksum, section_kind, heading_text,
+                        analysis_id, section_kind, heading_text,
                         page_start, page_end, ordinal_position
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    ) VALUES (?, ?, ?, ?, ?, ?)""",
                     (
                         record.analysis_id,
-                        chk,
                         sec.section_kind.value,
                         sec.heading_text,
                         sec.page_start,
@@ -1149,13 +1149,21 @@ class SQLiteStorage(StorageBackend):
                         )
                     )
                 elif domain == "section":
+                    pgs = (
+                        tuple(json.loads(w["page_numbers_json"]))
+                        if w["page_numbers_json"]
+                        else ()
+                    )
                     s_warnings.append(
-                        PDFSectionWarning(code=PDFSectionWarningCode(code_val))
+                        PDFSectionWarning(
+                            code=PDFSectionWarningCode(code_val), page_numbers=pgs
+                        )
                     )
                 elif domain == "research_question":
                     rq_warnings.append(
                         ResearchQuestionWarning(
-                            code=ResearchQuestionWarningCode(code_val)
+                            code=ResearchQuestionWarningCode(code_val),
+                            details=w["details"],
                         )
                     )
                 elif domain == "orchestration":

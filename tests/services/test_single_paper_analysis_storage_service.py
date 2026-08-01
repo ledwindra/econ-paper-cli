@@ -8,7 +8,6 @@ from econ_paper_cli.domain import (
     DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     PDFDocumentMetadata,
     PDFExtractionResult,
-    ResearchQuestionKind,
     ResearchQuestionWarningCode,
     SinglePaperAnalysisStatus,
 )
@@ -211,26 +210,114 @@ def test_end_to_end_question_extraction_halted_terminal_causes(
     storage = SQLiteStorage(":memory:")
     storage.initialize()
 
-    # 1. MODEL_ABSTAINED cause
-    analysis_res = analyze_single_paper(
+    # 1. NO_USABLE_SECTIONS cause
+    res_no_sections = analyze_single_paper(
+        pdf_path,
+        FakePDFExtractor(
+            pages_text=["Just raw text without any abstract or intro headings."]
+        ),
+        FakeGenerator(),
+        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+    )
+    assert (
+        res_no_sections.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
+    )
+    rec_no_sections = save_single_paper_analysis_result(storage, res_no_sections)
+    ret_no_sections = get_single_paper_analysis_record(
+        storage, rec_no_sections.analysis_id
+    )
+    assert ret_no_sections is not None
+    assert (
+        ret_no_sections.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
+    )
+    assert any(
+        w.code is ResearchQuestionWarningCode.NO_USABLE_SECTIONS
+        for w in ret_no_sections.research_question_warnings
+    )
+
+    # 2. MODEL_ABSTAINED cause
+    res_abstained = analyze_single_paper(
         pdf_path,
         FakePDFExtractor(),
         FakeGenerator(response_text="", abstained=True),
         settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     )
-    assert analysis_res.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
+    assert res_abstained.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
+    rec_abstained = save_single_paper_analysis_result(storage, res_abstained)
+    ret_abstained = get_single_paper_analysis_record(storage, rec_abstained.analysis_id)
+    assert ret_abstained is not None
+    assert ret_abstained.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
+    assert any(
+        w.code is ResearchQuestionWarningCode.MODEL_ABSTAINED
+        for w in ret_abstained.research_question_warnings
+    )
 
-    record = save_single_paper_analysis_result(storage, analysis_res)
-    retrieved = get_single_paper_analysis_record(storage, record.analysis_id)
+    # 3. MALFORMED_STRUCTURED_RESPONSE cause
+    res_malformed = analyze_single_paper(
+        pdf_path,
+        FakePDFExtractor(),
+        FakeGenerator(response_text="INVALID JSON {", abstained=False),
+        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+    )
+    assert res_malformed.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
+    rec_malformed = save_single_paper_analysis_result(storage, res_malformed)
+    ret_malformed = get_single_paper_analysis_record(storage, rec_malformed.analysis_id)
+    assert ret_malformed is not None
+    assert ret_malformed.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
+    assert any(
+        w.code is ResearchQuestionWarningCode.MALFORMED_STRUCTURED_RESPONSE
+        for w in ret_malformed.research_question_warnings
+    )
 
-    assert retrieved is not None
-    assert retrieved.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
-    assert retrieved.research_question is not None
-    assert retrieved.research_question.kind is ResearchQuestionKind.UNAVAILABLE
-    assert len(retrieved.research_question_warnings) == 1
-    assert (
-        retrieved.research_question_warnings[0].code
-        is ResearchQuestionWarningCode.MODEL_ABSTAINED
+    # 4. UNGROUNDED_EVIDENCE cause
+    ungrounded_json = json.dumps(
+        {
+            "research_question": "Unused question",
+            "kind": "explicit",
+            "evidence": [
+                {
+                    "section_kind": "abstract",
+                    "excerpt_text": "Excerpt that does not exist in source PDF text!",
+                    "page_number": 1,
+                    "start_character_offset": 0,
+                    "end_character_offset": 46,
+                }
+            ],
+        }
+    )
+    res_ungrounded = analyze_single_paper(
+        pdf_path,
+        FakePDFExtractor(),
+        FakeGenerator(response_text=ungrounded_json, abstained=False),
+        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+    )
+    assert res_ungrounded.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
+    rec_ungrounded = save_single_paper_analysis_result(storage, res_ungrounded)
+    ret_ungrounded = get_single_paper_analysis_record(
+        storage, rec_ungrounded.analysis_id
+    )
+    assert ret_ungrounded is not None
+    assert ret_ungrounded.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
+    assert any(
+        w.code is ResearchQuestionWarningCode.UNGROUNDED_EVIDENCE
+        for w in ret_ungrounded.research_question_warnings
+    )
+
+    # 5. GENERATION_FAILED cause
+    res_failed = analyze_single_paper(
+        pdf_path,
+        FakePDFExtractor(),
+        FakeGenerator(raise_error=RuntimeError("LLM execution error")),
+        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+    )
+    assert res_failed.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
+    rec_failed = save_single_paper_analysis_result(storage, res_failed)
+    ret_failed = get_single_paper_analysis_record(storage, rec_failed.analysis_id)
+    assert ret_failed is not None
+    assert ret_failed.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
+    assert any(
+        w.code is ResearchQuestionWarningCode.GENERATION_FAILED
+        for w in ret_failed.research_question_warnings
     )
 
     storage.close()
