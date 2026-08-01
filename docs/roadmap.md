@@ -112,15 +112,15 @@ Completed:
 - Explicitly deferred the initial default because neither candidate passed the
   mechanical gate; no semantic scoring was applicable
 
-## 8. Local library storage foundation
+## 8. Local library storage foundation (Issue 24 implemented)
 
-- Define the narrow, database-independent storage or repository protocol
-- Design and implement the SQLite schema using standard-library `sqlite3`
-- Add schema versions, forward migrations, transactional writes, and
-  actionable recovery behavior
-- Configure a portable library location outside the source repository
-- Preserve stable compatibility with existing paper and passage identities
-- Keep source-derived records distinct from unique user state
+- Define the narrow, database-independent storage protocol (`StorageBackend`) (implemented)
+- Design and implement the SQLite schema using standard-library `sqlite3` (`SQLiteStorage`) (implemented)
+- Add schema versions, forward migrations, transactional writes, and actionable recovery behavior (implemented)
+- Configure portable library location outside the source repository for Windows, macOS, and Linux (implemented)
+- Preserve stable compatibility with existing paper and passage identities (implemented)
+- Keep source-derived records distinct from unique user state (implemented)
+
 
 ## 9. Automatic PDF ingestion
 

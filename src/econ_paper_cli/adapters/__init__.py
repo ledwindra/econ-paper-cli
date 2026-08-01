@@ -56,6 +56,11 @@ from econ_paper_cli.adapters.llama_cpp import (
     SubprocessRunner,
     render_generation_prompt,
 )
+from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
+from econ_paper_cli.adapters.storage_paths import (
+    get_default_db_path,
+    get_default_storage_dir,
+)
 
 __all__ = [
     "ArtifactFileNotFoundError",
@@ -85,7 +90,6 @@ __all__ = [
     "LlamaCppProcessError",
     "LlamaCppReadinessError",
     "LlamaCppTimeoutError",
-    "OUTPUT_GRAMMAR_SHA256",
     "ManifestEncodingError",
     "ManifestFileNotFoundError",
     "ManifestInvalidJsonError",
@@ -93,14 +97,18 @@ __all__ = [
     "ManifestPermissionError",
     "ManifestReadError",
     "ManifestValidationError",
-    "SizeMismatchError",
+    "OUTPUT_GRAMMAR_SHA256",
     "ProcessResult",
     "ProcessRunner",
+    "SQLiteStorage",
+    "SizeMismatchError",
     "SubprocessRunner",
     "VerificationError",
     "VerificationPermissionError",
     "VerificationReadError",
     "VerificationResult",
+    "get_default_db_path",
+    "get_default_storage_dir",
     "load_corpus_from_file",
     "load_manifest_from_file",
     "render_generation_prompt",

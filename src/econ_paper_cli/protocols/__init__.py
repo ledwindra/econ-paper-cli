@@ -19,9 +19,19 @@ from econ_paper_cli.protocols.retrieval import (
     Retriever,
     validate_retrieval_results,
 )
+from econ_paper_cli.protocols.storage import (
+    ChecksumConflictError,
+    StorageBackend,
+    StorageConnectionError,
+    StorageError,
+    StorageMigrationError,
+    StorageTransactionError,
+    StorageValidationError,
+)
 
 __all__ = [
     "AbstentionReason",
+    "ChecksumConflictError",
     "FindingKind",
     "GenerationContractError",
     "GenerationRequest",
@@ -34,6 +44,12 @@ __all__ = [
     "RetrievalRequestValidationError",
     "RetrievalResultValidationError",
     "Retriever",
+    "StorageBackend",
+    "StorageConnectionError",
+    "StorageError",
+    "StorageMigrationError",
+    "StorageTransactionError",
+    "StorageValidationError",
     "validate_generation_response",
     "validate_retrieval_results",
 ]
