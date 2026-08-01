@@ -225,6 +225,7 @@ The coding agent:
 - preserves architecture and constraints;
 - adds tests;
 - reports uncertainty;
-- avoids making product decisions by implication.
+- avoids making product decisions by implication;
+- automatically schedules background monitoring for open PR reviews when requested, without requiring explicit user scheduling prompts or slash commands.
 
 When requirements are incomplete, prefer clarification over architectural invention.
