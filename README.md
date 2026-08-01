@@ -168,12 +168,23 @@ Markdown, databases, and indexes remain private user data and must not be
 committed or redistributed.
 
 Ordinary ingestion will run locally without network access. Future metadata
-enrichment would require separate approval and explicit opt-in. The MVP will
-use Python's standard-library `sqlite3` behind a replaceable storage boundary;
-it will not require PostgreSQL, a database server, Docker, a cloud database, or
-a vector database.
+enrichment would require separate approval and explicit opt-in. The MVP uses
+Python's standard-library `sqlite3` behind a replaceable storage boundary
+(`StorageBackend` protocol and `SQLiteStorage` adapter); it does not require
+PostgreSQL, a database server, Docker, a cloud database, or a vector database.
+
+### Local storage foundation (Issue 24 implemented)
+
+The storage layer is implemented as a database-independent protocol (`StorageBackend`) with a standard-library `sqlite3` adapter (`SQLiteStorage`):
+
+- **Data persisted:** paper metadata, passages, source provenance, conversion settings, warnings, and completion metadata.
+- **Transactions & rollback:** all writes for a paper record execute within a single atomic SQLite transaction (`BEGIN IMMEDIATE`), with full rollback on failure.
+- **Deduplication & idempotency:** deterministic replacement and checksum-aware duplicate detection (`content_checksum`), raising `ChecksumConflictError` on conflicting paper identifiers.
+- **Versioning & migrations:** schema version tracking with forward migrations (`schema_migrations` table) and transaction rollback on migration failure.
+- **Cross-platform paths:** automatic data directory and database path resolution for Windows (`%LOCALAPPDATA%`), macOS (`~/Library/Application Support`), and Linux (`${XDG_DATA_HOME:-~/.local/share}`), with `ECONPAPERS_STORAGE_DIR` and `ECONPAPERS_DB_PATH` environment variable overrides.
 
 ## Repository direction
+
 
 The repository is growing toward this structure as later scoped issues add the
 remaining layers:

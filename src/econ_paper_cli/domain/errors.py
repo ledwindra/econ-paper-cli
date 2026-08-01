@@ -19,3 +19,7 @@ class EvidenceValidationError(DomainError):
 
 class CitationValidationError(DomainError):
     """Raised when a Citation domain object fails validation."""
+
+
+class StorageRecordValidationError(DomainError):
+    """Raised when a storage paper record or its metadata fails validation."""

@@ -264,5 +264,31 @@ applicable. No default generation adapter configuration is approved. The
 backend-independent generation boundary and replaceable adapter architecture
 remain unchanged.
 
+Issue 24 implements the local SQLite storage foundation behind a
+database-independent storage protocol. `econ_paper_cli.protocols.storage.StorageBackend`
+defines the replaceable interface for persistent library data, including full paper
+storage records, passages, provenance, conversion settings, warnings, and completion
+metadata. `econ_paper_cli.domain.storage` defines the immutable `PaperRecord`,
+`SourceProvenance`, `ConversionSettings`, `IngestionWarning`, and `IngestionCompletion`
+domain objects with full JSON-compatible mapping conversion and validation.
+
+`econ_paper_cli.adapters.sqlite_storage.SQLiteStorage` is the first concrete
+adapter implementation. It uses Python's standard-library `sqlite3` and enforces
+foreign-key constraints (`PRAGMA foreign_keys = ON;`), schema versioning, and forward
+migrations (`schema_migrations` table). All writes for a paper record execute within a
+single atomic SQLite transaction, ensuring complete rollback on failure. Duplicate
+detection and re-ingestion are deterministic and checksum-aware (`content_checksum`),
+with `ChecksumConflictError` raised if a checksum belongs to another `paper_id`.
+Cascading deletes (`ON DELETE CASCADE`) maintain referential integrity across paper,
+passage, provenance, settings, warnings, and completion tables.
+
+`econ_paper_cli.adapters.storage_paths` provides cross-platform user data directory
+and database path resolution for Windows (`%LOCALAPPDATA%` / `%APPDATA%`), macOS
+(`~/Library/Application Support`), and Linux (`${XDG_DATA_HOME:-~/.local/share}`),
+with explicit `ECONPAPERS_STORAGE_DIR` and `ECONPAPERS_DB_PATH` environment variable
+overrides. PDF ingestion, OCR, Markdown conversion, retrieval-index persistence, and
+cloud storage remain unimplemented.
+
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.
+

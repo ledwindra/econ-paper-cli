@@ -14,10 +14,18 @@ from econ_paper_cli.domain.errors import (
     EvidenceValidationError,
     PaperValidationError,
     PassageValidationError,
+    StorageRecordValidationError,
 )
 from econ_paper_cli.domain.evidence import RetrievalEvidence
 from econ_paper_cli.domain.papers import Paper
 from econ_paper_cli.domain.passages import Passage
+from econ_paper_cli.domain.storage import (
+    ConversionSettings,
+    IngestionCompletion,
+    IngestionWarning,
+    PaperRecord,
+    SourceProvenance,
+)
 
 __all__ = [
     "ArtifactKind",
@@ -25,14 +33,20 @@ __all__ = [
     "ArtifactManifestError",
     "Citation",
     "CitationValidationError",
+    "ConversionSettings",
     "Corpus",
     "CorpusValidationError",
     "DomainError",
     "EvidenceValidationError",
+    "IngestionCompletion",
+    "IngestionWarning",
     "Paper",
+    "PaperRecord",
     "PaperValidationError",
     "Passage",
     "PassageValidationError",
     "RedistributionStatus",
     "RetrievalEvidence",
+    "SourceProvenance",
+    "StorageRecordValidationError",
 ]
