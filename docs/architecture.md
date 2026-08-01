@@ -269,26 +269,32 @@ database-independent storage protocol. `econ_paper_cli.protocols.storage.Storage
 defines the replaceable interface for persistent library data, including full paper
 storage records, passages, provenance, conversion settings, warnings, and completion
 metadata. `econ_paper_cli.domain.storage` defines the immutable `PaperRecord`,
-`SourceProvenance`, `ConversionSettings`, `IngestionWarning`, and `IngestionCompletion`
-domain objects with full JSON-compatible mapping conversion and validation.
+`SourceProvenance` (including `source_file_size` and `markdown_path`), `ConversionSettings`,
+`IngestionWarning`, and `IngestionCompletion` domain objects with full JSON-compatible
+mapping conversion and validation.
 
 `econ_paper_cli.adapters.sqlite_storage.SQLiteStorage` is the first concrete
 adapter implementation. It uses Python's standard-library `sqlite3` and enforces
 foreign-key constraints (`PRAGMA foreign_keys = ON;`), schema versioning, and forward
-migrations (`schema_migrations` table). All writes for a paper record execute within a
-single atomic SQLite transaction, ensuring complete rollback on failure. Duplicate
-detection and re-ingestion are deterministic and checksum-aware (`content_checksum`),
-with `ChecksumConflictError` raised if a checksum belongs to another `paper_id`.
+migrations (`schema_migrations` table). Opening a database with a schema version newer
+than supported raises `StorageIncompatibleSchemaError` without modifying the database.
+All writes for a paper record execute within an explicit atomic SQLite transaction
+(`BEGIN IMMEDIATE` / `COMMIT`), ensuring complete rollback on failure. Duplicate
+detection and re-ingestion are deterministic and checksum-aware (`content_checksum` with
+`COLLATE NOCASE`), with `ChecksumConflictError` raised if a checksum belongs to another
+`paper_id`. Passages enforce unique ordinal positions per paper (`UNIQUE(paper_id, ordinal_position)`),
+and the backend supports reconstructing a validated `Corpus` domain object (`load_corpus()`).
 Cascading deletes (`ON DELETE CASCADE`) maintain referential integrity across paper,
 passage, provenance, settings, warnings, and completion tables.
 
 `econ_paper_cli.adapters.storage_paths` provides cross-platform user data directory
 and database path resolution for Windows (`%LOCALAPPDATA%` / `%APPDATA%`), macOS
 (`~/Library/Application Support`), and Linux (`${XDG_DATA_HOME:-~/.local/share}`),
-with explicit `ECONPAPERS_STORAGE_DIR` and `ECONPAPERS_DB_PATH` environment variable
-overrides. PDF ingestion, OCR, Markdown conversion, retrieval-index persistence, and
-cloud storage remain unimplemented.
+with explicit `ECONPAPERS_LIBRARY_DIR`, `ECONPAPERS_STORAGE_DIR`, and `ECONPAPERS_DB_PATH`
+environment variable overrides. PDF ingestion, OCR, Markdown conversion, retrieval-index
+persistence, and cloud storage remain unimplemented.
 
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.
+
 

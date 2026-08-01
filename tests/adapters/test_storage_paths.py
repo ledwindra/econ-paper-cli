@@ -46,10 +46,16 @@ def test_storage_dir_linux_default_fallback() -> None:
     assert path == expected
 
 
-def test_storage_dir_env_override() -> None:
-    env = {"ECONPAPERS_STORAGE_DIR": "/override/dir"}
+def test_storage_dir_library_dir_override() -> None:
+    env = {"ECONPAPERS_LIBRARY_DIR": "/override/library/path"}
     path = get_default_storage_dir(env=env, system="Linux")
-    assert path == Path("/override/dir")
+    assert path == Path("/override/library/path")
+
+
+def test_storage_dir_legacy_storage_dir_override() -> None:
+    env = {"ECONPAPERS_STORAGE_DIR": "/legacy/storage/path"}
+    path = get_default_storage_dir(env=env, system="Linux")
+    assert path == Path("/legacy/storage/path")
 
 
 def test_db_path_resolution() -> None:

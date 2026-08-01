@@ -181,10 +181,9 @@ The storage layer is implemented as a database-independent protocol (`StorageBac
 - **Transactions & rollback:** all writes for a paper record execute within a single atomic SQLite transaction (`BEGIN IMMEDIATE`), with full rollback on failure.
 - **Deduplication & idempotency:** deterministic replacement and checksum-aware duplicate detection (`content_checksum`), raising `ChecksumConflictError` on conflicting paper identifiers.
 - **Versioning & migrations:** schema version tracking with forward migrations (`schema_migrations` table) and transaction rollback on migration failure.
-- **Cross-platform paths:** automatic data directory and database path resolution for Windows (`%LOCALAPPDATA%`), macOS (`~/Library/Application Support`), and Linux (`${XDG_DATA_HOME:-~/.local/share}`), with `ECONPAPERS_STORAGE_DIR` and `ECONPAPERS_DB_PATH` environment variable overrides.
+- **Cross-platform paths:** automatic data directory and database path resolution for Windows (`%LOCALAPPDATA%`), macOS (`~/Library/Application Support`), and Linux (`${XDG_DATA_HOME:-~/.local/share}`), with `ECONPAPERS_LIBRARY_DIR`, `ECONPAPERS_STORAGE_DIR`, and `ECONPAPERS_DB_PATH` environment variable overrides.
 
 ## Repository direction
-
 
 The repository is growing toward this structure as later scoped issues add the
 remaining layers:
@@ -253,23 +252,27 @@ for loading local manifests and verifying file checksums, pure domain
 contracts for papers, passages, retrieval evidence, citations, and corpora,
 a synthetic CC0 fixture corpus with a local corpus loader adapter, a
 backend-independent retrieval protocol (`Retriever`, `RetrievalRequest`,
-`validate_retrieval_results`), and a pure-Python BM25 baseline adapter
-(`BM25Retriever`) selected as the initial replaceable retrieval backend. It also
-defines a backend-independent generation protocol with structured requests,
-responses, citations, and explicit abstention validation; a concrete,
-configurable local `llama-completion` adapter; and a fingerprinted CC0 synthetic
-generation benchmark with opt-in evaluation tooling. Issue 13 explicitly
+`validate_retrieval_results`), a pure-Python BM25 baseline adapter
+(`BM25Retriever`) selected as the initial replaceable retrieval backend, and a
+database-independent local storage protocol (`StorageBackend`) with a standard-library
+`sqlite3` adapter (`SQLiteStorage`) supporting schema versioning, forward migrations,
+atomic transactions (`BEGIN IMMEDIATE`), case-insensitive checksum uniqueness,
+unique passage ordinals, full `Corpus` reconstruction (`load_corpus`), and cross-platform
+path resolution. It also defines a backend-independent generation protocol with
+structured requests, responses, citations, and explicit abstention validation; a
+concrete, configurable local `llama-completion` adapter; and a fingerprinted CC0
+synthetic generation benchmark with opt-in evaluation tooling. Issue 13 explicitly
 deferred the default after both eligible candidates failed the first mechanical
 run, and generation is not connected to retrieval or the CLI.
-PDF/document ingestion, passage segmentation, Markdown generation, SQLite
-storage, and conversational execution remain unimplemented.
+PDF/document ingestion, passage segmentation, Markdown generation, and conversational
+execution remain unimplemented.
 
 The immediate priorities are:
 
-1. add the database-independent storage foundation and SQLite adapter;
-2. implement automatic local PDF ingestion; and
-3. connect the approved library, retrieval, and generation components through
+1. implement automatic local PDF ingestion; and
+2. connect the approved library, retrieval, and generation components through
    end-to-end application services.
+
 
 ## Contributing
 

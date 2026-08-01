@@ -2,6 +2,7 @@
 
 from typing import Protocol, runtime_checkable
 
+from econ_paper_cli.domain.corpora import Corpus
 from econ_paper_cli.domain.papers import Paper
 from econ_paper_cli.domain.passages import Passage
 from econ_paper_cli.domain.storage import PaperRecord
@@ -21,6 +22,10 @@ class StorageTransactionError(StorageError):
 
 class StorageMigrationError(StorageError):
     """Raised when database schema versioning or migration fails."""
+
+
+class StorageIncompatibleSchemaError(StorageMigrationError):
+    """Raised when opening a database with a schema version newer than supported."""
 
 
 class StorageValidationError(StorageError):
@@ -65,6 +70,10 @@ class StorageBackend(Protocol):
 
     def get_passages(self, paper_id: str) -> tuple[Passage, ...]:
         """Retrieve all Passages for paper_id ordered by ordinal position."""
+        ...
+
+    def load_corpus(self, corpus_id: str = "local-library") -> Corpus:
+        """Reconstruct and return a validated Corpus from stored paper and passage data."""
         ...
 
     def list_paper_ids(self) -> tuple[str, ...]:
