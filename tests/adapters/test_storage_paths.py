@@ -52,19 +52,16 @@ def test_storage_dir_library_dir_override() -> None:
     assert path == Path("/override/library/path")
 
 
-def test_storage_dir_legacy_storage_dir_override() -> None:
-    env = {"ECONPAPERS_STORAGE_DIR": "/legacy/storage/path"}
-    path = get_default_storage_dir(env=env, system="Linux")
-    assert path == Path("/legacy/storage/path")
-
-
-def test_db_path_resolution() -> None:
-    env = {"XDG_DATA_HOME": "/custom/share"}
+def test_db_path_resolution_with_library_dir() -> None:
+    env = {"ECONPAPERS_LIBRARY_DIR": "/override/library/path"}
     db_path = get_default_db_path(env=env, system="Linux")
-    assert db_path == Path("/custom/share/econpapers/econpapers.db")
+    assert db_path == Path("/override/library/path/econpapers.db")
 
 
-def test_db_path_env_override() -> None:
-    env = {"ECONPAPERS_DB_PATH": "/custom/path/my_database.db"}
-    db_path = get_default_db_path(env=env, system="Linux")
-    assert db_path == Path("/custom/path/my_database.db")
+def test_explicit_path_precedence_over_library_dir(monkeypatch) -> None:
+    monkeypatch.setenv("ECONPAPERS_LIBRARY_DIR", "/env/library/path")
+    from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
+
+    explicit_path = Path("/explicit/custom.db")
+    storage = SQLiteStorage(db_path=explicit_path)
+    assert storage.db_path == explicit_path

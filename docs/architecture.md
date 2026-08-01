@@ -290,9 +290,8 @@ passage, provenance, settings, warnings, and completion tables.
 `econ_paper_cli.adapters.storage_paths` provides cross-platform user data directory
 and database path resolution for Windows (`%LOCALAPPDATA%` / `%APPDATA%`), macOS
 (`~/Library/Application Support`), and Linux (`${XDG_DATA_HOME:-~/.local/share}`),
-with explicit `ECONPAPERS_LIBRARY_DIR`, `ECONPAPERS_STORAGE_DIR`, and `ECONPAPERS_DB_PATH`
-environment variable overrides. PDF ingestion, OCR, Markdown conversion, retrieval-index
-persistence, and cloud storage remain unimplemented.
+with explicit `ECONPAPERS_LIBRARY_DIR` environment variable override. PDF ingestion, OCR,
+Markdown conversion, retrieval-index persistence, and cloud storage remain unimplemented.
 
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.

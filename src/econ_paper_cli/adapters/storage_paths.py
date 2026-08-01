@@ -17,19 +17,14 @@ def get_default_storage_dir(
 
     Resolution order:
     1. ECONPAPERS_LIBRARY_DIR environment variable (if non-empty)
-    2. ECONPAPERS_STORAGE_DIR environment variable (if non-empty)
-    3. Windows: %LOCALAPPDATA% / app_name -> %APPDATA% / app_name -> ~/AppData/Local/app_name
-    4. macOS: ~/Library/Application Support / app_name
-    5. Linux/POSIX: ${XDG_DATA_HOME:-~/.local/share} / app_name
+    2. Windows: %LOCALAPPDATA% / app_name -> %APPDATA% / app_name -> ~/AppData/Local/app_name
+    3. macOS: ~/Library/Application Support / app_name
+    4. Linux/POSIX: ${XDG_DATA_HOME:-~/.local/share} / app_name
     """
     env_map = os.environ if env is None else env
     custom_library_dir = env_map.get("ECONPAPERS_LIBRARY_DIR", "").strip()
     if custom_library_dir:
         return Path(custom_library_dir)
-
-    custom_storage_dir = env_map.get("ECONPAPERS_STORAGE_DIR", "").strip()
-    if custom_storage_dir:
-        return Path(custom_storage_dir)
 
     sys_name = platform.system() if system is None else system
 
@@ -62,14 +57,8 @@ def get_default_db_path(
     """Resolve the canonical cross-platform database file path.
 
     Resolution order:
-    1. ECONPAPERS_DB_PATH environment variable (if non-empty)
-    2. get_default_storage_dir(...) / db_filename
+    1. get_default_storage_dir(...) / db_filename (respecting ECONPAPERS_LIBRARY_DIR if set)
     """
-    env_map = os.environ if env is None else env
-    custom_db = env_map.get("ECONPAPERS_DB_PATH", "").strip()
-    if custom_db:
-        return Path(custom_db)
-
     return (
         get_default_storage_dir(app_name=app_name, env=env, system=system) / db_filename
     )
