@@ -124,10 +124,19 @@ Completed:
 
 ## 9. Automatic PDF ingestion
 
+Completed:
+
 - Discover selected PDFs and directories without assuming `/papers/`
-- Compute checksums and implement deterministic duplicate and re-ingestion
-  behavior
-- Extract text and available metadata locally
+- Compute checksums, deduplicate content within a discovery batch, and classify
+  previously stored checksums through the storage protocol
+- Extract ordered page text and available raw document metadata locally through
+  a replaceable parser protocol
+- Preserve canonical source paths, page boundaries, parser provenance, and typed
+  failures for missing, unreadable, malformed, and password-encrypted PDFs
+
+Not yet implemented:
+
+- Connect preflight eligibility decisions to extraction orchestration
 - Add supported OCR, extraction-quality reporting, and actionable failures
 - Generate inspectable Markdown and stable passages with complete provenance
 - Populate SQLite through the storage protocol and refresh rebuildable

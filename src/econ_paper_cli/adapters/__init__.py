@@ -58,6 +58,7 @@ from econ_paper_cli.adapters.llama_cpp import (
     SubprocessRunner,
     render_generation_prompt,
 )
+from econ_paper_cli.adapters.pypdf_extractor import PyPDFExtractor
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.adapters.storage_paths import (
     get_default_db_path,
@@ -103,6 +104,7 @@ __all__ = [
     "OUTPUT_GRAMMAR_SHA256",
     "ProcessResult",
     "ProcessRunner",
+    "PyPDFExtractor",
     "SQLiteStorage",
     "SizeMismatchError",
     "SubprocessRunner",
