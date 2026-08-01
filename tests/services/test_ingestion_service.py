@@ -243,16 +243,30 @@ def test_empty_directory_raises_empty_directory_error(tmp_path: Path) -> None:
 
 def test_existing_path_that_is_neither_file_nor_directory_raises_invalid_path_error(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import os
+    invalid_path = tmp_path / "invalid.pdf"
+    invalid_path.write_bytes(b"synthetic content")
+    resolved_path = invalid_path.resolve()
+    path_type = type(resolved_path)
+    original_is_file = path_type.is_file
+    original_is_dir = path_type.is_dir
 
-    fifo_path = tmp_path / "test.fifo"
-    os.mkfifo(fifo_path)
+    monkeypatch.setattr(
+        path_type,
+        "is_file",
+        lambda path: False if path == resolved_path else original_is_file(path),
+    )
+    monkeypatch.setattr(
+        path_type,
+        "is_dir",
+        lambda path: False if path == resolved_path else original_is_dir(path),
+    )
 
     with pytest.raises(
         IngestionInvalidPathError, match="is not a regular file or directory"
     ):
-        run_ingestion_preflight(fifo_path)
+        run_ingestion_preflight(invalid_path)
 
 
 def test_batch_duplicate_files_with_identical_bytes(tmp_path: Path) -> None:
