@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import socket
 from pathlib import Path
 
 import pytest
@@ -26,9 +27,14 @@ from econ_paper_cli.protocols.pdf_extraction import (
     PDFExtractor,
     PDFParserError,
 )
+from econ_paper_cli.protocols.storage import (
+    StorageConnectionError,
+    StorageMigrationError,
+)
 from econ_paper_cli.services.single_paper_analysis_cli import (
     AnalyzeCommandOptions,
     CLIExitCode,
+    format_analysis_record_output,
     run_single_paper_analysis_command,
 )
 
@@ -127,7 +133,6 @@ class ModifyingStorageWrapper(SQLiteStorage):
         record = super().get_single_paper_analysis(analysis_id)
         if record is None:
             return None
-        # Mutate research question text in read-back record
         new_rq = (
             SinglePaperAnalysisQuestionRecord(
                 kind=record.research_question.kind,
@@ -169,6 +174,20 @@ class MissingReadBackStorageWrapper(SQLiteStorage):
         self, analysis_id: str
     ) -> SinglePaperAnalysisRecord | None:
         return None
+
+
+class FailingConnectionStorageWrapper(SQLiteStorage):
+    """Storage double that raises StorageConnectionError on initialize."""
+
+    def initialize(self) -> None:
+        raise StorageConnectionError("Database path unwritable or connection failed.")
+
+
+class FailingMigrationStorageWrapper(SQLiteStorage):
+    """Storage double that raises StorageMigrationError on initialize."""
+
+    def initialize(self) -> None:
+        raise StorageMigrationError("Migration v3 failed due to schema corruption.")
 
 
 def _create_valid_pdf_file(tmp_path: Path, filename: str = "paper.pdf") -> Path:
@@ -223,7 +242,7 @@ def _make_success_response_json(abs_text: str, exc: str) -> str:
     )
 
 
-def test_run_single_paper_analysis_command_success(
+def test_run_single_paper_analysis_command_success_exact_rendering(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     pdf_path = _create_valid_pdf_file(tmp_path)
@@ -245,31 +264,21 @@ def test_run_single_paper_analysis_command_success(
 
     assert exit_code == CLIExitCode.SUCCESS
     out = capsys.readouterr().out
-    assert "=== Single-Paper Analysis Record ===" in out
-    assert "Status: success" in out
-    assert f"Database Path: {db_path}" in out
-    assert "What is the impact of trade policy?" in out
-    assert "[0] section=abstract, page=1, span=[9, 34]" in out
-    assert '  Excerpt: "We evaluate trade policy."' in out
-
-    # Verify data in storage
-    record = storage.list_single_paper_analyses()[0]
-    assert record.status.value == "success"
-    assert record.research_question is not None
-    assert (
-        record.research_question.question_text == "What is the impact of trade policy?"
-    )
+    durable_rec = storage.list_single_paper_analyses()[0]
+    expected_exact_output = format_analysis_record_output(durable_rec, db_path) + "\n"
+    assert out == expected_exact_output
 
 
-def test_run_single_paper_analysis_command_quality_halted(
+def test_run_single_paper_analysis_command_quality_halted_exact_rendering(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     pdf_path = _create_valid_pdf_file(tmp_path)
-    opts = _make_options(pdf_path, tmp_path)
+    db_path = tmp_path / "quality_halted.db"
+    opts = _make_options(pdf_path, tmp_path, db_path=db_path)
 
     extractor = FakePDFExtractor(pages_text=["", "   \n  "])
     generator = FakeGenerator()
-    storage = SQLiteStorage(":memory:")
+    storage = SQLiteStorage(db_path)
     storage.initialize()
 
     exit_code = run_single_paper_analysis_command(
@@ -278,19 +287,21 @@ def test_run_single_paper_analysis_command_quality_halted(
 
     assert exit_code == CLIExitCode.HALTED_OR_UNAVAILABLE
     out = capsys.readouterr().out
-    assert "Status: quality_halted" in out
-    assert "[quality]" in out
+    durable_rec = storage.list_single_paper_analyses()[0]
+    expected_exact_output = format_analysis_record_output(durable_rec, db_path) + "\n"
+    assert out == expected_exact_output
 
 
-def test_run_single_paper_analysis_command_question_extraction_halted(
+def test_run_single_paper_analysis_command_question_extraction_halted_exact_rendering(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     pdf_path = _create_valid_pdf_file(tmp_path)
-    opts = _make_options(pdf_path, tmp_path)
+    db_path = tmp_path / "question_halted.db"
+    opts = _make_options(pdf_path, tmp_path, db_path=db_path)
 
     extractor = FakePDFExtractor()
     generator = FakeGenerator(response_text="", abstained=True)
-    storage = SQLiteStorage(":memory:")
+    storage = SQLiteStorage(db_path)
     storage.initialize()
 
     exit_code = run_single_paper_analysis_command(
@@ -299,17 +310,19 @@ def test_run_single_paper_analysis_command_question_extraction_halted(
 
     assert exit_code == CLIExitCode.HALTED_OR_UNAVAILABLE
     out = capsys.readouterr().out
-    assert "Status: question_extraction_halted" in out
-    assert "[research_question] model_abstained" in out
+    durable_rec = storage.list_single_paper_analyses()[0]
+    expected_exact_output = format_analysis_record_output(durable_rec, db_path) + "\n"
+    assert out == expected_exact_output
 
 
-def test_run_single_paper_analysis_command_preflight_failed(
+def test_run_single_paper_analysis_command_preflight_failed_exact_rendering(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     non_existent_pdf = tmp_path / "non_existent.pdf"
-    opts = _make_options(non_existent_pdf, tmp_path)
+    db_path = tmp_path / "preflight_failed.db"
+    opts = _make_options(non_existent_pdf, tmp_path, db_path=db_path)
 
-    storage = SQLiteStorage(":memory:")
+    storage = SQLiteStorage(db_path)
     storage.initialize()
 
     exit_code = run_single_paper_analysis_command(
@@ -321,17 +334,19 @@ def test_run_single_paper_analysis_command_preflight_failed(
 
     assert exit_code == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
     out = capsys.readouterr().out
-    assert "Status: preflight_failed" in out
-    assert "Failure Code: path_not_found" in out
+    durable_rec = storage.list_single_paper_analyses()[0]
+    expected_exact_output = format_analysis_record_output(durable_rec, db_path) + "\n"
+    assert out == expected_exact_output
 
 
-def test_run_single_paper_analysis_command_extraction_failed(
+def test_run_single_paper_analysis_command_extraction_failed_exact_rendering(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     pdf_path = _create_valid_pdf_file(tmp_path)
-    opts = _make_options(pdf_path, tmp_path)
+    db_path = tmp_path / "extraction_failed.db"
+    opts = _make_options(pdf_path, tmp_path, db_path=db_path)
 
-    storage = SQLiteStorage(":memory:")
+    storage = SQLiteStorage(db_path)
     storage.initialize()
 
     exit_code = run_single_paper_analysis_command(
@@ -343,9 +358,50 @@ def test_run_single_paper_analysis_command_extraction_failed(
 
     assert exit_code == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
     out = capsys.readouterr().out
-    assert "Status: extraction_failed" in out
-    assert "Failure Code: pdf_parser_error" in out
-    assert "PDF parser failed for" in out
+    durable_rec = storage.list_single_paper_analyses()[0]
+    expected_exact_output = format_analysis_record_output(durable_rec, db_path) + "\n"
+    assert out == expected_exact_output
+
+
+def test_database_connection_error_returns_code_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    opts = _make_options(pdf_path, tmp_path)
+
+    storage = FailingConnectionStorageWrapper(":memory:")
+
+    exit_code = run_single_paper_analysis_command(
+        opts,
+        extractor=FakePDFExtractor(),
+        generator=FakeGenerator(),
+        storage=storage,
+    )
+
+    assert exit_code == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    err = capsys.readouterr().err
+    assert "Database connection error:" in err
+
+
+def test_database_migration_error_returns_code_3(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    opts = _make_options(pdf_path, tmp_path)
+
+    storage = FailingMigrationStorageWrapper(":memory:")
+
+    exit_code = run_single_paper_analysis_command(
+        opts,
+        extractor=FakePDFExtractor(),
+        generator=FakeGenerator(),
+        storage=storage,
+    )
+
+    assert exit_code == CLIExitCode.UNEXPECTED_ERROR
+    err = capsys.readouterr().err
+    assert "Unexpected internal error:" in err
+    assert "Migration v3 failed" in err
 
 
 def test_run_single_paper_analysis_command_uses_read_back_record(
@@ -526,7 +582,7 @@ def test_invalid_model_size_returns_code_2(
         executable_path=exe_file,
         model_path=model_file,
         model_id="test-model",
-        model_bytes=99999,  # Mismatched size
+        model_bytes=99999,
         model_checksum="a" * 64,
     )
 
@@ -554,7 +610,7 @@ def test_invalid_model_checksum_returns_code_2(
         model_path=model_file,
         model_id="test-model",
         model_bytes=len(model_content),
-        model_checksum="f" * 64,  # Wrong SHA-256
+        model_checksum="f" * 64,
     )
 
     assert (
@@ -565,15 +621,22 @@ def test_invalid_model_checksum_returns_code_2(
     assert "Configuration or readiness error:" in err
 
 
-def test_default_db_path_vs_explicit_override(tmp_path: Path) -> None:
+def test_command_execution_uses_default_db_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     pdf_path = _create_valid_pdf_file(tmp_path)
+    mock_default_db = tmp_path / "mock_default.db"
+    monkeypatch.setattr(
+        "econ_paper_cli.services.single_paper_analysis_cli.get_default_db_path",
+        lambda: mock_default_db,
+    )
+
     exe_file = tmp_path / "llama-cli"
     exe_file.write_bytes(b"dummy")
     model_file = tmp_path / "model.gguf"
     model_file.write_bytes(b"dummy")
 
-    # 1. Default DB path
-    opts_default = AnalyzeCommandOptions(
+    opts = AnalyzeCommandOptions(
         pdf_path=pdf_path,
         executable_path=exe_file,
         model_path=model_file,
@@ -582,26 +645,56 @@ def test_default_db_path_vs_explicit_override(tmp_path: Path) -> None:
         model_checksum="a" * 64,
         db_path=None,
     )
-    # Target path must equal get_default_db_path()
-    assert opts_default.db_path is None
 
-    # 2. Explicit DB path
-    custom_db = tmp_path / "custom.db"
-    opts_explicit = AnalyzeCommandOptions(
-        pdf_path=pdf_path,
-        executable_path=exe_file,
-        model_path=model_file,
-        model_id="test-model",
-        model_bytes=5,
-        model_checksum="a" * 64,
-        db_path=custom_db,
+    abs_text = "Abstract\nWe evaluate trade policy."
+    exc = "We evaluate trade policy."
+    resp_json = _make_success_response_json(abs_text, exc)
+
+    extractor = FakePDFExtractor()
+    generator = FakeGenerator(response_text=resp_json)
+
+    exit_code = run_single_paper_analysis_command(
+        opts, extractor=extractor, generator=generator
     )
-    assert opts_explicit.db_path == custom_db
+
+    assert exit_code == CLIExitCode.SUCCESS
+    assert mock_default_db.exists()
+    out = capsys.readouterr().out
+    assert f"Database Path: {mock_default_db}" in out
 
 
-def test_command_runs_fully_offline_without_modifying_or_deleting_pdf(
+def test_command_execution_uses_explicit_db_path_override(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    custom_db = tmp_path / "explicit_override.db"
+    opts = _make_options(pdf_path, tmp_path, db_path=custom_db)
+
+    abs_text = "Abstract\nWe evaluate trade policy."
+    exc = "We evaluate trade policy."
+    resp_json = _make_success_response_json(abs_text, exc)
+
+    extractor = FakePDFExtractor()
+    generator = FakeGenerator(response_text=resp_json)
+
+    exit_code = run_single_paper_analysis_command(
+        opts, extractor=extractor, generator=generator
+    )
+
+    assert exit_code == CLIExitCode.SUCCESS
+    assert custom_db.exists()
+    out = capsys.readouterr().out
+    assert f"Database Path: {custom_db}" in out
+
+
+def test_command_runs_fully_offline_without_network_or_pdf_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def forbidden_socket(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("Network socket call forbidden during offline analysis!")
+
+    monkeypatch.setattr(socket, "socket", forbidden_socket)
+
     pdf_path = _create_valid_pdf_file(tmp_path, "authoritative.pdf")
     initial_bytes = pdf_path.read_bytes()
     initial_hash = hashlib.sha256(initial_bytes).hexdigest()
@@ -613,16 +706,12 @@ def test_command_runs_fully_offline_without_modifying_or_deleting_pdf(
 
     extractor = FakePDFExtractor()
     generator = FakeGenerator(response_text=resp_json)
-    storage = SQLiteStorage(":memory:")
-    storage.initialize()
 
     exit_code = run_single_paper_analysis_command(
-        opts, extractor=extractor, generator=generator, storage=storage
+        opts, extractor=extractor, generator=generator
     )
 
     assert exit_code == CLIExitCode.SUCCESS
-
-    # Verify source PDF was not modified or deleted
     assert pdf_path.exists()
     final_bytes = pdf_path.read_bytes()
     assert final_bytes == initial_bytes

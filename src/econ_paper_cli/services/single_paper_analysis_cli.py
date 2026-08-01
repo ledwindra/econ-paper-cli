@@ -1,6 +1,5 @@
 """Application service and output rendering for the offline single-paper analysis CLI command."""
 
-import sqlite3
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,7 +29,7 @@ from econ_paper_cli.domain import (
 )
 from econ_paper_cli.protocols.generation import Generator
 from econ_paper_cli.protocols.pdf_extraction import PDFExtractor
-from econ_paper_cli.protocols.storage import StorageBackend
+from econ_paper_cli.protocols.storage import StorageBackend, StorageConnectionError
 from econ_paper_cli.services.single_paper_analysis import analyze_single_paper
 from econ_paper_cli.services.single_paper_analysis_storage import (
     save_single_paper_analysis_result,
@@ -193,13 +192,17 @@ def run_single_paper_analysis_command(
             db_adapter = SQLiteStorage(target_db_path)
             try:
                 db_adapter.initialize()
-            except (sqlite3.Error, OSError) as err:
-                sys.stderr.write(f"Database initialization failed: {err}\n")
+            except StorageConnectionError as err:
+                sys.stderr.write(f"Database connection error: {err}\n")
                 return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
             storage = db_adapter
         else:
             if hasattr(storage, "initialize"):
-                storage.initialize()
+                try:
+                    storage.initialize()
+                except StorageConnectionError as err:
+                    sys.stderr.write(f"Database connection error: {err}\n")
+                    return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
 
         # 3. Generator setup & readiness check
         if generator is None:
