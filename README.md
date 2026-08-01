@@ -258,14 +258,20 @@ database-independent local storage protocol (`StorageBackend`) with a standard-l
 `sqlite3` adapter (`SQLiteStorage`) supporting schema versioning, forward migrations,
 atomic transactions (`BEGIN IMMEDIATE`), case-insensitive checksum uniqueness,
 unique passage ordinals, full `Corpus` reconstruction (`load_corpus`), and cross-platform
-path resolution. It also defines a backend-independent generation protocol with
+path resolution. Deterministic ingestion preflight discovers PDFs, computes checksums,
+deduplicates batch content, and classifies stored checksums without writing records.
+The replaceable `PDFExtractor` boundary and fully local `PyPDFExtractor` preserve
+ordered page boundaries, optional raw document metadata, parser provenance, and
+actionable extraction failures without modifying source PDFs. It also defines a
+backend-independent generation protocol with
 structured requests, responses, citations, and explicit abstention validation; a
 concrete, configurable local `llama-completion` adapter; and a fingerprinted CC0
 synthetic generation benchmark with opt-in evaluation tooling. Issue 13 explicitly
 deferred the default after both eligible candidates failed the first mechanical
 run, and generation is not connected to retrieval or the CLI.
-PDF/document ingestion, passage segmentation, Markdown generation, and conversational
-execution remain unimplemented.
+End-to-end ingestion orchestration, OCR, quality assessment, passage segmentation,
+Markdown generation, database writes, index refresh, and conversational execution
+remain unimplemented.
 
 The immediate priorities are:
 

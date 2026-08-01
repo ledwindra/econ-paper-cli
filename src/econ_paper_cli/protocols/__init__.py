@@ -11,6 +11,17 @@ from econ_paper_cli.protocols.generation import (
     Generator,
     validate_generation_response,
 )
+from econ_paper_cli.protocols.pdf_extraction import (
+    PDFEncryptedError,
+    PDFExtractionError,
+    PDFExtractor,
+    PDFMalformedError,
+    PDFParserError,
+    PDFPermissionError,
+    PDFReadError,
+    PDFSourceNotFoundError,
+    PDFSourceNotRegularFileError,
+)
 from econ_paper_cli.protocols.retrieval import (
     RetrievalContractError,
     RetrievalRequest,
@@ -40,6 +51,15 @@ __all__ = [
     "GenerationResponse",
     "GenerationResponseValidationError",
     "Generator",
+    "PDFEncryptedError",
+    "PDFExtractionError",
+    "PDFExtractor",
+    "PDFMalformedError",
+    "PDFParserError",
+    "PDFPermissionError",
+    "PDFReadError",
+    "PDFSourceNotFoundError",
+    "PDFSourceNotRegularFileError",
     "RetrievalContractError",
     "RetrievalRequest",
     "RetrievalRequestValidationError",

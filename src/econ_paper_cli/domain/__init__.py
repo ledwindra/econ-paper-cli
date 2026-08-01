@@ -22,6 +22,7 @@ from econ_paper_cli.domain.errors import (
     IngestionValidationError,
     PaperValidationError,
     PassageValidationError,
+    PDFExtractionValidationError,
     StorageRecordValidationError,
 )
 from econ_paper_cli.domain.evidence import RetrievalEvidence
@@ -31,6 +32,11 @@ from econ_paper_cli.domain.ingestion import (
 )
 from econ_paper_cli.domain.papers import Paper
 from econ_paper_cli.domain.passages import Passage
+from econ_paper_cli.domain.pdf_extraction import (
+    ExtractedPDFPage,
+    PDFDocumentMetadata,
+    PDFExtractionResult,
+)
 from econ_paper_cli.domain.storage import (
     ConversionSettings,
     IngestionCompletion,
@@ -50,6 +56,7 @@ __all__ = [
     "CorpusValidationError",
     "DomainError",
     "EvidenceValidationError",
+    "ExtractedPDFPage",
     "IngestionCompletion",
     "IngestionEmptyDirectoryError",
     "IngestionError",
@@ -66,6 +73,9 @@ __all__ = [
     "PaperValidationError",
     "Passage",
     "PassageValidationError",
+    "PDFDocumentMetadata",
+    "PDFExtractionResult",
+    "PDFExtractionValidationError",
     "PreflightCandidate",
     "RedistributionStatus",
     "RetrievalEvidence",

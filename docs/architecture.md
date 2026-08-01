@@ -290,10 +290,26 @@ passage, provenance, settings, warnings, and completion tables.
 `econ_paper_cli.adapters.storage_paths` provides cross-platform user data directory
 and database path resolution for Windows (`%LOCALAPPDATA%` / `%APPDATA%`), macOS
 (`~/Library/Application Support`), and Linux (`${XDG_DATA_HOME:-~/.local/share}`),
-with explicit `ECONPAPERS_LIBRARY_DIR` environment variable override. PDF ingestion, OCR,
-Markdown conversion, retrieval-index persistence, and cloud storage remain unimplemented.
+with explicit `ECONPAPERS_LIBRARY_DIR` environment variable override. End-to-end PDF
+ingestion, OCR, Markdown conversion, retrieval-index persistence, and cloud storage
+remain unimplemented.
+
+Issue 28 implements deterministic PDF discovery and ingestion preflight through
+`econ_paper_cli.services.ingestion.run_ingestion_preflight`. It accepts an explicit PDF
+or directory, discovers case-insensitive `.pdf` paths in deterministic order, delegates
+canonical path, size, and SHA-256 inspection to the filesystem adapter, marks duplicate
+content within the batch, and classifies existing checksums through the replaceable
+`StorageBackend`. It performs no extraction, conversion, writes, or network access.
+
+Issue 30 implements the replaceable `PDFExtractor` protocol, immutable structured
+extraction models, and the fully local `PyPDFExtractor` adapter. Extraction preserves
+one ordered record per source page, including empty-text pages, plus optional raw PDF
+document-information strings and parser provenance. The adapter normalizes only line
+endings, translates filesystem, encryption, malformed-file, and parser failures into
+typed protocol errors, and never modifies the source. The application-facing
+`extract_pdf` service requires explicit extractor injection. OCR, quality assessment,
+bibliographic normalization, Markdown conversion, passage creation, database writes,
+index updates, CLI syntax, and network enrichment remain unimplemented.
 
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.
-
-

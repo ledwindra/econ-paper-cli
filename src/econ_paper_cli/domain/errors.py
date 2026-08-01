@@ -55,3 +55,7 @@ class IngestionPermissionError(IngestionError):
 
 class IngestionReadError(IngestionError):
     """Raised when OS read error occurs during file inspection or hashing."""
+
+
+class PDFExtractionValidationError(DomainError):
+    """Raised when a PDF extraction domain object fails validation."""
