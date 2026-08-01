@@ -1,8 +1,16 @@
 """Service layer for PDF discovery and ingestion preflight."""
 
-import hashlib
+from collections.abc import Callable
 from pathlib import Path
 
+from econ_paper_cli.adapters.filesystem import (
+    ArtifactFileNotFoundError,
+    ArtifactNotARegularFileError,
+    FileInspectionResult,
+    VerificationPermissionError,
+    VerificationReadError,
+    inspect_local_file,
+)
 from econ_paper_cli.domain.errors import (
     IngestionEmptyDirectoryError,
     IngestionInvalidPathError,
@@ -18,58 +26,17 @@ from econ_paper_cli.domain.ingestion import (
 from econ_paper_cli.protocols.storage import StorageBackend
 
 
-def compute_file_sha256(path: Path, chunk_size: int = 65536) -> tuple[int, str]:
-    """Calculate file size and lowercase SHA-256 hex digest for a file.
-
-    Args:
-        path: Resolved file path.
-        chunk_size: Size of read chunks in bytes.
-
-    Returns:
-        Tuple of (size_bytes, sha256_hex_str).
-
-    Raises:
-        IngestionPermissionError: If permission is denied.
-        IngestionReadError: If an OS read error occurs.
-    """
-    try:
-        size = path.stat().st_size
-    except PermissionError as err:
-        raise IngestionPermissionError(
-            f"Permission denied inspecting file '{path}': {err}."
-        ) from err
-    except OSError as err:
-        raise IngestionReadError(
-            f"Read error inspecting file '{path}': {err}."
-        ) from err
-
-    hasher = hashlib.sha256()
-    try:
-        with open(path, "rb") as f:
-            while True:
-                chunk = f.read(chunk_size)
-                if not chunk:
-                    break
-                hasher.update(chunk)
-    except PermissionError as err:
-        raise IngestionPermissionError(
-            f"Permission denied reading file '{path}': {err}."
-        ) from err
-    except OSError as err:
-        raise IngestionReadError(f"Read error reading file '{path}': {err}.") from err
-
-    return size, hasher.hexdigest().lower()
-
-
 def run_ingestion_preflight(
     target_path: str | Path,
     storage: StorageBackend | None = None,
+    file_inspector: Callable[[Path], FileInspectionResult] = inspect_local_file,
 ) -> IngestionPreflightResult:
     """Discover PDF files deterministically and compute preflight status.
 
     Args:
         target_path: Explicit path to a PDF file or directory.
         storage: Optional StorageBackend to check for existing stored records.
+        file_inspector: Callable adapter to inspect local file (path -> FileInspectionResult).
 
     Returns:
         An immutable IngestionPreflightResult.
@@ -136,7 +103,7 @@ def run_ingestion_preflight(
             f"Target path '{resolved_target}' is not a regular file or directory."
         )
 
-    # Process discovered PDF files and check batch deduplication & storage state
+    # Process discovered PDF files using file_inspector adapter
     candidates: list[PreflightCandidate] = []
     seen_checksums: dict[str, Path] = {}
 
@@ -145,7 +112,27 @@ def run_ingestion_preflight(
     batch_dup_count = 0
 
     for pdf_path in pdf_paths:
-        size_bytes, checksum = compute_file_sha256(pdf_path)
+        try:
+            inspection = file_inspector(pdf_path)
+        except ArtifactFileNotFoundError as err:
+            raise IngestionPathNotFoundError(
+                f"Candidate file does not exist: '{pdf_path}'."
+            ) from err
+        except ArtifactNotARegularFileError as err:
+            raise IngestionInvalidPathError(
+                f"Candidate path is not a regular file: '{pdf_path}'."
+            ) from err
+        except VerificationPermissionError as err:
+            raise IngestionPermissionError(
+                f"Permission denied reading candidate file '{pdf_path}': {err}."
+            ) from err
+        except VerificationReadError as err:
+            raise IngestionReadError(
+                f"Read error reading candidate file '{pdf_path}': {err}."
+            ) from err
+
+        size_bytes = inspection.size_bytes
+        checksum = inspection.sha256
 
         if checksum in seen_checksums:
             is_batch_dup = True
@@ -154,7 +141,7 @@ def run_ingestion_preflight(
         else:
             is_batch_dup = False
             dup_of = None
-            seen_checksums[checksum] = pdf_path
+            seen_checksums[checksum] = inspection.file_path
 
         is_stored = False
         if storage is not None:
@@ -174,7 +161,7 @@ def run_ingestion_preflight(
 
         candidates.append(
             PreflightCandidate(
-                source_path=pdf_path,
+                source_path=inspection.file_path,
                 file_size_bytes=size_bytes,
                 content_checksum=checksum,
                 is_stored=is_stored,

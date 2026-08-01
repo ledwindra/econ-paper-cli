@@ -76,18 +76,30 @@ class IngestionPreflightResult:
             raise IngestionValidationError(
                 "candidates must be a tuple of PreflightCandidate instances."
             )
-        for field_name, val in (
-            ("new_candidate_count", self.new_candidate_count),
-            ("stored_candidate_count", self.stored_candidate_count),
-            ("batch_duplicate_count", self.batch_duplicate_count),
-            ("total_candidate_count", self.total_candidate_count),
-        ):
-            if isinstance(val, bool) or not isinstance(val, int) or val < 0:
-                raise IngestionValidationError(
-                    f"{field_name} must be a non-negative integer."
-                )
+        expected_new = sum(
+            1 for c in self.candidates if not c.is_stored and not c.is_batch_duplicate
+        )
+        expected_stored = sum(1 for c in self.candidates if c.is_stored)
+        expected_batch_dup = sum(1 for c in self.candidates if c.is_batch_duplicate)
+        expected_total = len(self.candidates)
 
-        if self.total_candidate_count != len(self.candidates):
+        if self.new_candidate_count != expected_new:
             raise IngestionValidationError(
-                f"total_candidate_count ({self.total_candidate_count}) must match candidates length ({len(self.candidates)})."
+                f"new_candidate_count ({self.new_candidate_count}) does not match candidates "
+                f"flag count ({expected_new})."
+            )
+        if self.stored_candidate_count != expected_stored:
+            raise IngestionValidationError(
+                f"stored_candidate_count ({self.stored_candidate_count}) does not match candidates "
+                f"flag count ({expected_stored})."
+            )
+        if self.batch_duplicate_count != expected_batch_dup:
+            raise IngestionValidationError(
+                f"batch_duplicate_count ({self.batch_duplicate_count}) does not match candidates "
+                f"flag count ({expected_batch_dup})."
+            )
+        if self.total_candidate_count != expected_total:
+            raise IngestionValidationError(
+                f"total_candidate_count ({self.total_candidate_count}) does not match candidates "
+                f"length ({expected_total})."
             )

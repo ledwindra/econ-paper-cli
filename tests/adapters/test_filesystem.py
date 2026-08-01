@@ -1,5 +1,6 @@
 """Tests for local manifest loading and file checksum verification adapters."""
 
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -24,6 +25,7 @@ from econ_paper_cli.adapters.filesystem import (
     VerificationError,
     VerificationPermissionError,
     VerificationReadError,
+    inspect_local_file,
     load_manifest_from_file,
     verify_artifact,
     verify_local_file,
@@ -372,3 +374,27 @@ def test_verify_artifact_os_error(tmp_path: Path) -> None:
         # Verify inheritance hierarchy
         assert isinstance(exc_info.value, VerificationError)
         assert isinstance(exc_info.value, FilesystemReadError)
+
+
+def test_inspect_local_file_success(tmp_path: Path) -> None:
+    test_file = tmp_path / "sample.pdf"
+    content = b"Sample PDF bytes for inspection"
+    test_file.write_bytes(content)
+
+    result = inspect_local_file(test_file)
+    assert result.file_path == test_file.resolve()
+    assert result.size_bytes == len(content)
+    assert result.sha256 == hashlib.sha256(content).hexdigest().lower()
+
+
+def test_inspect_local_file_not_found(tmp_path: Path) -> None:
+    missing = tmp_path / "nonexistent.pdf"
+    with pytest.raises(ArtifactFileNotFoundError):
+        inspect_local_file(missing)
+
+
+def test_inspect_local_file_not_a_regular_file(tmp_path: Path) -> None:
+    dir_path = tmp_path / "a_dir"
+    dir_path.mkdir()
+    with pytest.raises(ArtifactNotARegularFileError):
+        inspect_local_file(dir_path)

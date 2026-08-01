@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from econ_paper_cli.adapters.filesystem import FileInspectionResult
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.domain import Paper, Passage
 from econ_paper_cli.domain.errors import (
@@ -18,23 +19,136 @@ from econ_paper_cli.domain.storage import (
     PaperRecord,
     SourceProvenance,
 )
-from econ_paper_cli.services.ingestion import (
-    compute_file_sha256,
-    run_ingestion_preflight,
-)
+from econ_paper_cli.protocols.storage import StorageBackend
+from econ_paper_cli.services.ingestion import run_ingestion_preflight
 
 
-def test_compute_file_sha256(tmp_path: Path) -> None:
-    test_file = tmp_path / "test.pdf"
-    content = b"Sample PDF content bytes"
-    test_file.write_bytes(content)
+class FakeStorageBackend(StorageBackend):
+    """Minimal fake StorageBackend implementation for unit testing preflight classification."""
 
-    expected_sha256 = hashlib.sha256(content).hexdigest().lower()
-    expected_size = len(content)
+    def __init__(self, stored_checksums: set[str] | None = None) -> None:
+        self.stored_checksums = stored_checksums or set()
+        self.queried_checksums: list[str] = []
 
-    size, sha256 = compute_file_sha256(test_file)
-    assert size == expected_size
-    assert sha256 == expected_sha256
+    def get_paper_record_by_checksum(self, checksum: str) -> PaperRecord | None:
+        self.queried_checksums.append(checksum)
+        if checksum in self.stored_checksums:
+            dummy_paper = Paper(
+                paper_id="fake.1",
+                title="Fake Paper",
+                authors=("Fake Author",),
+                year=2024,
+                abstract="Fake abstract.",
+                source_name="FakeSource",
+                source_identifier="f1",
+                source_url=None,
+            )
+            dummy_prov = SourceProvenance(
+                source_path="/fake/path.pdf",
+                source_format="pdf",
+                source_file_size=1024,
+                content_checksum=checksum,
+                markdown_path="/fake/path.md",
+                extraction_method="fake",
+                created_at="2026-07-31T20:00:00Z",
+            )
+            return PaperRecord(
+                paper=dummy_paper,
+                passages=(),
+                source_provenance=dummy_prov,
+                conversion_settings=ConversionSettings("1.0", False, {}),
+                warnings=(),
+                completion=IngestionCompletion(
+                    "completed", "2026-07-31T20:00:00Z", 0, 0
+                ),
+            )
+        return None
+
+    def initialize(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    def get_schema_version(self) -> int:
+        return 1
+
+    def save_paper_record(self, record: PaperRecord) -> None:
+        pass
+
+    def get_paper_record(self, paper_id: str) -> PaperRecord | None:
+        return None
+
+    def get_paper(self, paper_id: str) -> Paper | None:
+        return None
+
+    def get_passages(self, paper_id: str) -> tuple[Passage, ...]:
+        return ()
+
+    def list_paper_ids(self) -> tuple[str, ...]:
+        return ()
+
+    def list_paper_records(self) -> tuple[PaperRecord, ...]:
+        return ()
+
+    def delete_paper_record(self, paper_id: str) -> bool:
+        return False
+
+    def count_papers(self) -> int:
+        return len(self.stored_checksums)
+
+    def count_passages(self) -> int:
+        return 0
+
+
+def test_existing_checksum_classification_with_fake_storage(tmp_path: Path) -> None:
+    folder = tmp_path / "fake_test_folder"
+    folder.mkdir()
+
+    file_new = folder / "new.pdf"
+    file_stored = folder / "stored.pdf"
+    file_new.write_bytes(b"New PDF content")
+    file_stored.write_bytes(b"Stored PDF content")
+
+    checksum_stored = hashlib.sha256(b"Stored PDF content").hexdigest().lower()
+    checksum_new = hashlib.sha256(b"New PDF content").hexdigest().lower()
+
+    fake_storage = FakeStorageBackend(stored_checksums={checksum_stored})
+
+    result = run_ingestion_preflight(folder, storage=fake_storage)
+
+    assert fake_storage.queried_checksums == [checksum_new, checksum_stored]
+    assert result.total_candidate_count == 2
+    assert result.new_candidate_count == 1
+    assert result.stored_candidate_count == 1
+    assert result.batch_duplicate_count == 0
+
+    candidate_new = next(
+        c for c in result.candidates if c.source_path == file_new.resolve()
+    )
+    candidate_stored = next(
+        c for c in result.candidates if c.source_path == file_stored.resolve()
+    )
+
+    assert candidate_new.is_stored is False
+    assert candidate_stored.is_stored is True
+
+
+def test_file_inspector_dependency_injection(tmp_path: Path) -> None:
+    pdf_file = tmp_path / "custom_inspect.pdf"
+    pdf_file.write_bytes(b"Custom bytes")
+
+    mock_sha256 = "c" * 64
+
+    def custom_inspector(path: Path) -> FileInspectionResult:
+        return FileInspectionResult(
+            file_path=path.resolve(), size_bytes=999, sha256=mock_sha256
+        )
+
+    result = run_ingestion_preflight(pdf_file, file_inspector=custom_inspector)
+    assert result.total_candidate_count == 1
+    assert result.candidates[0].file_size_bytes == 999
+    assert result.candidates[0].content_checksum == mock_sha256
 
 
 def test_explicit_single_pdf_file_input(tmp_path: Path) -> None:

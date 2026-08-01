@@ -134,3 +134,36 @@ def test_ingestion_preflight_result_validation_errors() -> None:
             batch_duplicate_count=0,
             total_candidate_count=5,
         )
+
+    # Mismatched new_candidate_count
+    with pytest.raises(IngestionValidationError, match="new_candidate_count"):
+        IngestionPreflightResult(
+            target_path=target,
+            candidates=(candidate,),
+            new_candidate_count=0,
+            stored_candidate_count=0,
+            batch_duplicate_count=0,
+            total_candidate_count=1,
+        )
+
+    # Mismatched stored_candidate_count
+    with pytest.raises(IngestionValidationError, match="stored_candidate_count"):
+        IngestionPreflightResult(
+            target_path=target,
+            candidates=(candidate,),
+            new_candidate_count=1,
+            stored_candidate_count=1,
+            batch_duplicate_count=0,
+            total_candidate_count=1,
+        )
+
+    # Mismatched batch_duplicate_count
+    with pytest.raises(IngestionValidationError, match="batch_duplicate_count"):
+        IngestionPreflightResult(
+            target_path=target,
+            candidates=(candidate,),
+            new_candidate_count=1,
+            stored_candidate_count=0,
+            batch_duplicate_count=1,
+            total_candidate_count=1,
+        )
