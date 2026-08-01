@@ -8,7 +8,6 @@ from econ_paper_cli.domain import (
     DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     PDFDocumentMetadata,
     PDFExtractionResult,
-    ResearchQuestionWarningCode,
     SinglePaperAnalysisStatus,
 )
 from econ_paper_cli.domain.pdf_extraction import ExtractedPDFPage
@@ -230,9 +229,9 @@ def test_end_to_end_question_extraction_halted_terminal_causes(
     assert (
         ret_no_sections.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
     )
-    assert any(
-        w.code is ResearchQuestionWarningCode.NO_USABLE_SECTIONS
-        for w in ret_no_sections.research_question_warnings
+    assert (
+        ret_no_sections.research_question_warnings
+        == res_no_sections.research_question_result.warnings
     )
 
     # 2. MODEL_ABSTAINED cause
@@ -247,9 +246,9 @@ def test_end_to_end_question_extraction_halted_terminal_causes(
     ret_abstained = get_single_paper_analysis_record(storage, rec_abstained.analysis_id)
     assert ret_abstained is not None
     assert ret_abstained.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
-    assert any(
-        w.code is ResearchQuestionWarningCode.MODEL_ABSTAINED
-        for w in ret_abstained.research_question_warnings
+    assert (
+        ret_abstained.research_question_warnings
+        == res_abstained.research_question_result.warnings
     )
 
     # 3. MALFORMED_STRUCTURED_RESPONSE cause
@@ -264,9 +263,9 @@ def test_end_to_end_question_extraction_halted_terminal_causes(
     ret_malformed = get_single_paper_analysis_record(storage, rec_malformed.analysis_id)
     assert ret_malformed is not None
     assert ret_malformed.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
-    assert any(
-        w.code is ResearchQuestionWarningCode.MALFORMED_STRUCTURED_RESPONSE
-        for w in ret_malformed.research_question_warnings
+    assert (
+        ret_malformed.research_question_warnings
+        == res_malformed.research_question_result.warnings
     )
 
     # 4. UNGROUNDED_EVIDENCE cause
@@ -298,9 +297,9 @@ def test_end_to_end_question_extraction_halted_terminal_causes(
     )
     assert ret_ungrounded is not None
     assert ret_ungrounded.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
-    assert any(
-        w.code is ResearchQuestionWarningCode.UNGROUNDED_EVIDENCE
-        for w in ret_ungrounded.research_question_warnings
+    assert (
+        ret_ungrounded.research_question_warnings
+        == res_ungrounded.research_question_result.warnings
     )
 
     # 5. GENERATION_FAILED cause
@@ -315,9 +314,13 @@ def test_end_to_end_question_extraction_halted_terminal_causes(
     ret_failed = get_single_paper_analysis_record(storage, rec_failed.analysis_id)
     assert ret_failed is not None
     assert ret_failed.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
-    assert any(
-        w.code is ResearchQuestionWarningCode.GENERATION_FAILED
-        for w in ret_failed.research_question_warnings
+    assert (
+        ret_failed.research_question_warnings
+        == res_failed.research_question_result.warnings
+    )
+    assert (
+        ret_failed.research_question_warnings[0].details
+        == "Model generation failed: LLM execution error"
     )
 
     storage.close()

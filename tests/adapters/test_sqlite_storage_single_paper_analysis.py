@@ -111,10 +111,16 @@ def _make_success_record(
             ),
         ),
         section_warnings=(
-            PDFSectionWarning(code=PDFSectionWarningCode.MISSING_NEXT_SECTION_BOUNDARY),
+            PDFSectionWarning(
+                code=PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY,
+                page_numbers=(1, 2),
+            ),
         ),
         research_question_warnings=(
-            ResearchQuestionWarning(code=ResearchQuestionWarningCode.MISSING_SECTION),
+            ResearchQuestionWarning(
+                code=ResearchQuestionWarningCode.MISSING_SECTION,
+                details="Only Abstract section was available.",
+            ),
         ),
         warnings=(),
         sections=(sec_abs, sec_intro),
@@ -265,13 +271,18 @@ def test_save_and_get_multi_page_section_and_typed_warnings(tmp_path: Path) -> N
     assert len(retrieved.section_warnings) == 1
     assert (
         retrieved.section_warnings[0].code
-        is PDFSectionWarningCode.MISSING_NEXT_SECTION_BOUNDARY
+        is PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY
     )
+    assert retrieved.section_warnings[0].page_numbers == (1, 2)
 
     assert len(retrieved.research_question_warnings) == 1
     assert (
         retrieved.research_question_warnings[0].code
         is ResearchQuestionWarningCode.MISSING_SECTION
+    )
+    assert (
+        retrieved.research_question_warnings[0].details
+        == "Only Abstract section was available."
     )
 
     storage.close()
