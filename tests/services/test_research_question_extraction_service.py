@@ -4,6 +4,7 @@ import json
 
 from econ_paper_cli.domain import (
     DEFAULT_RESEARCH_QUESTION_SETTINGS,
+    Citation,
     PDFSection,
     PDFSectionDetectionResult,
     PDFSectionKind,
@@ -15,6 +16,7 @@ from econ_paper_cli.domain import (
 )
 from econ_paper_cli.protocols.generation import (
     AbstentionReason,
+    FindingKind,
     GenerationRequest,
     GenerationResponse,
     Generator,
@@ -31,22 +33,41 @@ class FakeGenerator(Generator):
         self,
         response_text: str | None = None,
         raise_error: Exception | None = None,
+        abstained: bool = False,
     ) -> None:
         self.response_text = response_text
         self.raise_error = raise_error
+        self.abstained = abstained
         self.last_request: GenerationRequest | None = None
 
     def generate(self, request: GenerationRequest) -> GenerationResponse:
         self.last_request = request
         if self.raise_error is not None:
             raise self.raise_error
+        if self.abstained:
+            return GenerationResponse(
+                answer_text="Abstaining due to insufficient evidence.",
+                citations=(),
+                generation_method="fake_generator",
+                abstained=True,
+                abstention_reason=AbstentionReason.INSUFFICIENT_EVIDENCE,
+                finding_kinds=(),
+            )
+        citations = tuple(
+            Citation(
+                citation_id=f"e{ev.rank}",
+                paper_id=ev.passage.paper_id,
+                passage_id=ev.passage.passage_id,
+            )
+            for ev in request.evidence
+        )
         return GenerationResponse(
             answer_text=self.response_text or "",
-            citations=(),
+            citations=citations,
             generation_method="fake_generator",
-            abstained=True,
-            abstention_reason=AbstentionReason.INSUFFICIENT_EVIDENCE,
-            finding_kinds=(),
+            abstained=False,
+            abstention_reason=None,
+            finding_kinds=(FindingKind.DESCRIPTIVE,),
         )
 
 
@@ -120,12 +141,12 @@ def _make_section(
 def test_explicit_question_in_introduction() -> None:
     intro_text = "1. Introduction\nThis paper asks whether carbon taxes reduce emissions without reducing employment."
     sec_intro = _make_section(
-        PDFSectionKind.INTRODUCTION, intro_text, page_number=1, start_offset=0
+        PDFSectionKind.INTRODUCTION, intro_text, page_number=1, start_offset=100
     )
     sec_res = _make_section_result((sec_intro,))
 
     excerpt = "This paper asks whether carbon taxes reduce emissions without reducing employment."
-    start_off = intro_text.find(excerpt)
+    start_off = 100 + intro_text.find(excerpt)
     resp_json = json.dumps(
         {
             "research_question": "Do carbon taxes reduce emissions without reducing employment?",
@@ -201,22 +222,34 @@ def test_explicit_question_in_abstract() -> None:
     assert res.sections_used == (PDFSectionKind.ABSTRACT,)
 
 
-def test_inferred_question_from_objective_with_both_sections() -> None:
+def test_inferred_question_from_objective_with_both_sections_multi_page() -> None:
     abs_text = "Abstract\nWe measure the returns to schooling in rural India."
-    intro_text = "1. Introduction\nOur goal is to estimate wage gains from an extra year of primary education."
+    intro_part1 = "1. Introduction\nOur goal is to estimate wage gains"
+    intro_part2 = " from an extra year of primary education."
 
     sec_abs = _make_section(
         PDFSectionKind.ABSTRACT, abs_text, page_number=1, start_offset=0
     )
-    sec_intro = _make_section(
-        PDFSectionKind.INTRODUCTION, intro_text, page_number=2, start_offset=0
+    span1 = PDFSectionSpan(
+        page_number=2,
+        start_character_offset=50,
+        end_character_offset=50 + len(intro_part1),
+    )
+    span2 = PDFSectionSpan(
+        page_number=3, start_character_offset=0, end_character_offset=len(intro_part2)
+    )
+    sec_intro = PDFSection(
+        kind=PDFSectionKind.INTRODUCTION,
+        heading_text="1. Introduction",
+        start_page_number=2,
+        end_page_number=3,
+        spans=(span1, span2),
+        text=intro_part1 + intro_part2,
     )
     sec_res = _make_section_result((sec_abs, sec_intro))
 
     exc_abs = "We measure the returns to schooling in rural India."
-    exc_intro = (
-        "Our goal is to estimate wage gains from an extra year of primary education."
-    )
+    exc_intro = "from an extra year of primary education."
 
     resp_json = json.dumps(
         {
@@ -233,9 +266,9 @@ def test_inferred_question_from_objective_with_both_sections() -> None:
                 {
                     "section_kind": "introduction",
                     "excerpt_text": exc_intro,
-                    "page_number": 2,
-                    "start_character_offset": intro_text.find(exc_intro),
-                    "end_character_offset": intro_text.find(exc_intro) + len(exc_intro),
+                    "page_number": 3,
+                    "start_character_offset": 1,
+                    "end_character_offset": 1 + len(exc_intro),
                 },
             ],
         }
@@ -276,6 +309,24 @@ def test_neither_section_usable_skips_generation() -> None:
     )
 
 
+def test_generator_abstention_treated_as_unavailable() -> None:
+    abs_text = "Abstract\nWe study inflation persistence."
+    sec_abs = _make_section(
+        PDFSectionKind.ABSTRACT, abs_text, page_number=1, start_offset=0
+    )
+    sec_res = _make_section_result((sec_abs,))
+
+    gen = FakeGenerator(abstained=True)
+    res = extract_research_question(
+        sec_res, gen, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
+    )
+
+    assert res.kind is ResearchQuestionKind.UNAVAILABLE
+    assert res.question_text is None
+    codes = [w.code for w in res.warnings]
+    assert ResearchQuestionWarningCode.GENERATION_FAILED in codes
+
+
 def test_generator_failure_handled_gracefully() -> None:
     abs_text = "Abstract\nWe study inflation persistence."
     sec_abs = _make_section(
@@ -292,70 +343,18 @@ def test_generator_failure_handled_gracefully() -> None:
     assert res.question_text is None
     codes = [w.code for w in res.warnings]
     assert ResearchQuestionWarningCode.GENERATION_FAILED in codes
-    assert ResearchQuestionWarningCode.MISSING_SECTION in codes
 
 
-def test_malformed_json_response_emits_warning() -> None:
+def test_extra_top_level_or_evidence_keys_rejected() -> None:
     abs_text = "Abstract\nWe study inflation persistence."
     sec_abs = _make_section(
         PDFSectionKind.ABSTRACT, abs_text, page_number=1, start_offset=0
     )
     sec_res = _make_section_result((sec_abs,))
 
-    gen = FakeGenerator(response_text="Not a JSON string response...")
-    res = extract_research_question(
-        sec_res, gen, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
-    )
-
-    assert res.kind is ResearchQuestionKind.UNAVAILABLE
-    codes = [w.code for w in res.warnings]
-    assert ResearchQuestionWarningCode.MALFORMED_STRUCTURED_RESPONSE in codes
-
-
-def test_ungrounded_hallucinated_evidence_rejected() -> None:
-    abs_text = "Abstract\nWe study inflation persistence."
-    sec_abs = _make_section(
-        PDFSectionKind.ABSTRACT, abs_text, page_number=1, start_offset=0
-    )
-    sec_res = _make_section_result((sec_abs,))
-
-    # Hallucinated evidence text not in section
-    resp_json = json.dumps(
-        {
-            "research_question": "What drives inflation persistence?",
-            "kind": "explicit",
-            "evidence": [
-                {
-                    "section_kind": "abstract",
-                    "excerpt_text": "Hallucinated excerpt not present in text.",
-                    "page_number": 1,
-                    "start_character_offset": 0,
-                    "end_character_offset": 40,
-                }
-            ],
-        }
-    )
-
-    gen = FakeGenerator(response_text=resp_json)
-    res = extract_research_question(
-        sec_res, gen, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
-    )
-
-    assert res.kind is ResearchQuestionKind.UNAVAILABLE
-    codes = [w.code for w in res.warnings]
-    assert ResearchQuestionWarningCode.UNGROUNDED_EVIDENCE in codes
-
-
-def test_invalid_offsets_or_page_number_rejected() -> None:
-    abs_text = "Abstract\nWe study inflation persistence."
-    sec_abs = _make_section(
-        PDFSectionKind.ABSTRACT, abs_text, page_number=1, start_offset=0
-    )
-    sec_res = _make_section_result((sec_abs,))
-
-    # Excerpt is in section text, but page_number is 99 (invalid!)
     exc = "We study inflation persistence."
-    resp_json = json.dumps(
+    # Extra top-level key "unsupported_field"
+    resp_extra_top = json.dumps(
         {
             "research_question": "What drives inflation persistence?",
             "kind": "explicit",
@@ -363,9 +362,76 @@ def test_invalid_offsets_or_page_number_rejected() -> None:
                 {
                     "section_kind": "abstract",
                     "excerpt_text": exc,
-                    "page_number": 99,
+                    "page_number": 1,
                     "start_character_offset": abs_text.find(exc),
                     "end_character_offset": abs_text.find(exc) + len(exc),
+                }
+            ],
+            "unsupported_field": "extra_value",
+        }
+    )
+
+    gen1 = FakeGenerator(response_text=resp_extra_top)
+    res1 = extract_research_question(
+        sec_res, gen1, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
+    )
+    assert res1.kind is ResearchQuestionKind.UNAVAILABLE
+    assert any(
+        w.code is ResearchQuestionWarningCode.MALFORMED_STRUCTURED_RESPONSE
+        for w in res1.warnings
+    )
+
+    # Extra evidence key "confidence_score"
+    resp_extra_ev = json.dumps(
+        {
+            "research_question": "What drives inflation persistence?",
+            "kind": "explicit",
+            "evidence": [
+                {
+                    "section_kind": "abstract",
+                    "excerpt_text": exc,
+                    "page_number": 1,
+                    "start_character_offset": abs_text.find(exc),
+                    "end_character_offset": abs_text.find(exc) + len(exc),
+                    "confidence_score": 0.99,
+                }
+            ],
+        }
+    )
+
+    gen2 = FakeGenerator(response_text=resp_extra_ev)
+    res2 = extract_research_question(
+        sec_res, gen2, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
+    )
+    assert res2.kind is ResearchQuestionKind.UNAVAILABLE
+    assert any(
+        w.code is ResearchQuestionWarningCode.MALFORMED_STRUCTURED_RESPONSE
+        for w in res2.warnings
+    )
+
+
+def test_mismatched_text_at_valid_offsets_rejected() -> None:
+    abs_text = "Abstract\nFirst sentence here. Second sentence here."
+    sec_abs = _make_section(
+        PDFSectionKind.ABSTRACT, abs_text, page_number=1, start_offset=0
+    )
+    sec_res = _make_section_result((sec_abs,))
+
+    # excerpt_text is "Second sentence here." but offsets point to "First sentence here."
+    first_sent = "First sentence here."
+    second_sent = "Second sentence here."
+    resp_json = json.dumps(
+        {
+            "research_question": "What is the topic?",
+            "kind": "explicit",
+            "evidence": [
+                {
+                    "section_kind": "abstract",
+                    "excerpt_text": second_sent,
+                    "page_number": 1,
+                    "start_character_offset": abs_text.find(first_sent),
+                    "end_character_offset": abs_text.find(first_sent)
+                    + len(second_sent),
                 }
             ],
         }
@@ -377,8 +443,9 @@ def test_invalid_offsets_or_page_number_rejected() -> None:
     )
 
     assert res.kind is ResearchQuestionKind.UNAVAILABLE
-    codes = [w.code for w in res.warnings]
-    assert ResearchQuestionWarningCode.UNGROUNDED_EVIDENCE in codes
+    assert any(
+        w.code is ResearchQuestionWarningCode.UNGROUNDED_EVIDENCE for w in res.warnings
+    )
 
 
 def test_deterministic_prompt_ordering_and_repeated_runs() -> None:

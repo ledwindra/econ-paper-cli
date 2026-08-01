@@ -20,7 +20,23 @@ from econ_paper_cli.domain.research_question import (
     ResearchQuestionWarning,
     ResearchQuestionWarningCode,
 )
-from econ_paper_cli.protocols.generation import GenerationRequest, Generator
+from econ_paper_cli.protocols.generation import (
+    GenerationRequest,
+    GenerationResponseValidationError,
+    Generator,
+    validate_generation_response,
+)
+
+_TOP_LEVEL_KEYS = frozenset({"research_question", "kind", "evidence"})
+_EVIDENCE_KEYS = frozenset(
+    {
+        "section_kind",
+        "excerpt_text",
+        "page_number",
+        "start_character_offset",
+        "end_character_offset",
+    }
+)
 
 
 def extract_research_question(
@@ -60,13 +76,31 @@ def extract_research_question(
     request = _build_generation_request(usable_sections)
 
     try:
-        response = generator.generate(request)
-    except Exception as error:
+        raw_response = generator.generate(request)
+        response = validate_generation_response(request, raw_response)
+    except (GenerationResponseValidationError, Exception) as error:
         warnings = list(initial_warnings)
         warnings.append(
             ResearchQuestionWarning(
                 ResearchQuestionWarningCode.GENERATION_FAILED,
                 f"Model generation failed: {error}",
+            )
+        )
+        return ResearchQuestionResult(
+            policy_version=settings.policy_version,
+            question_text=None,
+            kind=ResearchQuestionKind.UNAVAILABLE,
+            sections_used=(),
+            evidence=(),
+            warnings=_canonicalize_warnings(warnings),
+        )
+
+    if response.abstained:
+        warnings = list(initial_warnings)
+        warnings.append(
+            ResearchQuestionWarning(
+                ResearchQuestionWarningCode.GENERATION_FAILED,
+                "Model abstained from generating a response.",
             )
         )
         return ResearchQuestionResult(
@@ -183,6 +217,10 @@ def _build_generation_request(
         prompt_parts.append(
             f"[{sec.kind.value.capitalize()}] (Pages {sec.start_page_number}-{sec.end_page_number})"
         )
+        for span in sec.spans:
+            prompt_parts.append(
+                f"  Span Page {span.page_number} (Offsets {span.start_character_offset}-{span.end_character_offset})"
+            )
         prompt_parts.append(sec.text)
 
         passage = Passage(
@@ -227,6 +265,10 @@ def _parse_response_json(
     if not isinstance(data, dict):
         return None
 
+    # Strict key check for top-level JSON mapping
+    if set(data.keys()) != _TOP_LEVEL_KEYS:
+        return None
+
     question_text = data.get("research_question")
     if not isinstance(question_text, str) or not question_text.strip():
         return None
@@ -241,6 +283,9 @@ def _parse_response_json(
         return None
     for item in raw_evidence:
         if not isinstance(item, dict):
+            return None
+        # Strict key check for evidence mapping
+        if set(item.keys()) != _EVIDENCE_KEYS:
             return None
 
     return question_text.strip(), question_kind, raw_evidence
@@ -290,18 +335,26 @@ def _validate_and_build_evidence(
         if len(excerpt_text) != (end_offset - start_offset):
             return None
 
-        # Verify page_number and offset span exist within the section's spans
-        valid_span = False
+        # Verify page_number, offsets, and exact character slice match against sec.spans and sec.text
+        span_found = False
+        sec_text_offset = 0
+
         for span in sec.spans:
             if (
                 span.page_number == page_number
-                and start_offset >= span.start_character_offset
+                and span.start_character_offset <= start_offset
                 and end_offset <= span.end_character_offset
             ):
-                valid_span = True
+                span_found = True
+                offset_into_span = start_offset - span.start_character_offset
+                sec_text_start = sec_text_offset + offset_into_span
+                sec_text_end = sec_text_start + (end_offset - start_offset)
+                if sec.text[sec_text_start:sec_text_end] != excerpt_text:
+                    return None
                 break
+            sec_text_offset += span.character_count
 
-        if not valid_span:
+        if not span_found:
             return None
 
         try:
