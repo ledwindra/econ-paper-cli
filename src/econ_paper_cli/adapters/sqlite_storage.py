@@ -212,7 +212,7 @@ class SQLiteStorage(StorageBackend):
             self._conn = sqlite3.connect(conn_str)
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA foreign_keys = ON;")
-        except sqlite3.Error as err:
+        except (sqlite3.Error, OSError) as err:
             if self._conn is not None:
                 try:
                     self._conn.close()
@@ -294,6 +294,7 @@ class SQLiteStorage(StorageBackend):
             conn.execute("PRAGMA foreign_keys = OFF;")
             for version, description, statements in migrations:
                 if version > current_version:
+                    stmt_list = list(statements)
                     if version == 2 and custom_migrations is None:
                         # Check for existing records in papers for version 1 database
                         cur = conn.execute(
@@ -308,16 +309,32 @@ class SQLiteStorage(StorageBackend):
                                     f"Migration to schema version {version} failed: database contains legacy records with case-insensitive checksum conflicts. Please rebuild the database library."
                                 )
 
-                            cur = conn.execute("SELECT COUNT(*) AS c FROM papers")
-                            row = cur.fetchone()
-                            if row is not None and row["c"] > 0:
-                                raise StorageMigrationError(
-                                    f"Migration to schema version {version} failed: database contains {row['c']} existing paper record(s) missing required provenance metadata (source_file_size and markdown_path). Please rebuild the library database."
-                                )
+                            cur = conn.execute("PRAGMA table_info(source_provenance)")
+                            cols = {row["name"] for row in cur.fetchall()}
+                            has_provenance_cols = (
+                                "source_file_size" in cols and "markdown_path" in cols
+                            )
+
+                            if not has_provenance_cols:
+                                cur = conn.execute("SELECT COUNT(*) AS c FROM papers")
+                                row = cur.fetchone()
+                                if row is not None and row["c"] > 0:
+                                    raise StorageMigrationError(
+                                        f"Migration to schema version {version} failed: database contains {row['c']} existing paper record(s) missing required provenance metadata (source_file_size and markdown_path). Please rebuild the library database."
+                                    )
+                            else:
+                                # Preserve existing provenance columns in v2 copy statement
+                                stmt_list[6] = """INSERT INTO source_provenance_v2 (
+                                    paper_id, source_path, source_format, source_file_size,
+                                    content_checksum, markdown_path, extraction_method, created_at
+                                ) SELECT
+                                    paper_id, source_path, source_format, source_file_size,
+                                    LOWER(content_checksum), markdown_path, extraction_method, created_at
+                                FROM source_provenance;"""
 
                     try:
                         conn.execute("BEGIN IMMEDIATE")
-                        for stmt in statements:
+                        for stmt in stmt_list:
                             conn.execute(stmt)
                         now_str = datetime.now(timezone.utc).isoformat()
                         conn.execute(

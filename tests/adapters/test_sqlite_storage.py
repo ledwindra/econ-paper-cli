@@ -400,6 +400,21 @@ def test_invalid_db_path_raises_storage_connection_error(tmp_path: Path) -> None
     assert storage._conn is None
 
 
+def test_parent_dir_creation_failure_raises_storage_connection_error(
+    tmp_path: Path,
+) -> None:
+    occupied_file = tmp_path / "occupied_file.txt"
+    occupied_file.write_text("not a directory")
+    invalid_db_path = occupied_file / "sub_dir" / "my.db"
+
+    storage = SQLiteStorage(invalid_db_path)
+    with pytest.raises(StorageConnectionError) as exc_info:
+        storage.initialize()
+
+    assert isinstance(exc_info.value.__cause__, OSError)
+    assert storage._conn is None
+
+
 def test_v1_empty_database_migration(tmp_path: Path) -> None:
     db_file = tmp_path / "v1_empty.db"
     conn = sqlite3.connect(str(db_file))
@@ -541,6 +556,123 @@ def test_v1_populated_database_migration_rejection_prevents_fabricated_provenanc
     cur = conn.execute("SELECT MAX(version) FROM schema_migrations")
     assert cur.fetchone()[0] == 1
     conn.close()
+
+
+def test_v1_populated_database_with_provenance_migrates_successfully(
+    tmp_path: Path,
+) -> None:
+    db_file = tmp_path / "v1_valid_populated.db"
+    conn = sqlite3.connect(str(db_file))
+
+    # Create exact schema version 1 from base commit e9ffb8f (includes source_file_size & markdown_path)
+    conn.executescript(
+        """
+        CREATE TABLE schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL,
+            description TEXT NOT NULL
+        );
+        CREATE TABLE papers (
+            paper_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            authors_json TEXT NOT NULL,
+            year INTEGER,
+            abstract TEXT,
+            source_name TEXT NOT NULL,
+            source_identifier TEXT NOT NULL,
+            source_url TEXT,
+            content_checksum TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_papers_checksum ON papers(content_checksum);
+        CREATE TABLE source_provenance (
+            paper_id TEXT PRIMARY KEY,
+            source_path TEXT NOT NULL,
+            source_format TEXT NOT NULL,
+            source_file_size INTEGER NOT NULL,
+            content_checksum TEXT NOT NULL COLLATE NOCASE,
+            markdown_path TEXT NOT NULL,
+            extraction_method TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE
+        );
+        CREATE TABLE conversion_settings (
+            paper_id TEXT PRIMARY KEY,
+            conversion_version TEXT NOT NULL,
+            ocr_enabled INTEGER NOT NULL,
+            parameters_json TEXT NOT NULL,
+            FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE
+        );
+        CREATE TABLE passages (
+            passage_id TEXT PRIMARY KEY,
+            paper_id TEXT NOT NULL,
+            text TEXT NOT NULL,
+            section_heading TEXT,
+            page_start INTEGER,
+            page_end INTEGER,
+            ordinal_position INTEGER NOT NULL,
+            FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE,
+            CONSTRAINT uq_paper_ordinal UNIQUE(paper_id, ordinal_position)
+        );
+        CREATE INDEX idx_passages_paper_ordinal ON passages(paper_id, ordinal_position);
+        CREATE TABLE ingestion_warnings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            paper_id TEXT NOT NULL,
+            warning_code TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TEXT,
+            FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE
+        );
+        CREATE TABLE ingestion_completions (
+            paper_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            completed_at TEXT NOT NULL,
+            passage_count INTEGER NOT NULL,
+            warning_count INTEGER NOT NULL,
+            error_message TEXT,
+            FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE
+        );
+        """
+    )
+    ck = "a" * 64
+    conn.execute(
+        """INSERT INTO schema_migrations VALUES (1, '2026-07-31T20:00:00Z', 'Initial schema creation');"""
+    )
+    conn.execute(
+        """INSERT INTO papers VALUES ('paper.v1', 'V1 Valid Paper', '["Author 1"]', 2024, 'Abstract', 'NBER', '123', NULL, ?, '2026-07-31T20:00:00Z', '2026-07-31T20:00:00Z');""",
+        (ck,),
+    )
+    conn.execute(
+        """INSERT INTO source_provenance VALUES ('paper.v1', '/path/to/paper.pdf', 'pdf', 2048576, ?, '/path/to/paper.md', 'pdfplumber-v1', '2026-07-31T20:00:00Z');""",
+        (ck,),
+    )
+    conn.execute(
+        """INSERT INTO conversion_settings VALUES ('paper.v1', '1.0.0', 0, '{}');"""
+    )
+    conn.execute(
+        """INSERT INTO passages VALUES ('paper.v1:p0', 'paper.v1', 'Passage text', 'Intro', 1, 1, 0);"""
+    )
+    conn.execute(
+        """INSERT INTO ingestion_completions VALUES ('paper.v1', 'completed', '2026-07-31T20:00:00Z', 1, 0, NULL);"""
+    )
+    conn.commit()
+    conn.close()
+
+    storage = SQLiteStorage(db_file)
+    storage.initialize()
+    assert storage.get_schema_version() == 2
+
+    # Verify existing provenance values survived without alteration or error
+    rec = storage.get_paper_record("paper.v1")
+    assert rec is not None
+    assert rec.paper.title == "V1 Valid Paper"
+    assert rec.source_provenance.source_file_size == 2048576
+    assert rec.source_provenance.markdown_path == "/path/to/paper.md"
+    assert rec.source_provenance.content_checksum == ck
+    assert len(rec.passages) == 1
+    assert rec.passages[0].text == "Passage text"
+    storage.close()
 
 
 def test_v1_checksum_case_conflict_migration_rejection(tmp_path: Path) -> None:
