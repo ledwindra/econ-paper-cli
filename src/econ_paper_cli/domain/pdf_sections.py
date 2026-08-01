@@ -294,6 +294,49 @@ class PDFSectionDetectionResult:
                     "AMBIGUOUS_INTRODUCTION_CANDIDATES warning contradicts presence of Introduction section."
                 )
 
+        # Grounding checks for ambiguity and duplicate warnings
+        abstract_candidates = tuple(
+            c for c in self.candidates if c.kind is PDFSectionKind.ABSTRACT
+        )
+        intro_candidates = tuple(
+            c for c in self.candidates if c.kind is PDFSectionKind.INTRODUCTION
+        )
+
+        for warning in self.warnings:
+            if warning.code in {
+                PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES,
+                PDFSectionWarningCode.DUPLICATE_ABSTRACT_CANDIDATES,
+            }:
+                if len(abstract_candidates) < 2:
+                    raise PDFSectionValidationError(
+                        f"{warning.code.value} warning must be grounded by at least 2 Abstract candidates."
+                    )
+                expected_pages = tuple(
+                    sorted(set(c.page_number for c in abstract_candidates))
+                )
+                if warning.page_numbers != expected_pages:
+                    raise PDFSectionValidationError(
+                        f"{warning.code.value} page_numbers ({warning.page_numbers}) "
+                        f"do not match candidate page numbers ({expected_pages})."
+                    )
+
+            if warning.code in {
+                PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES,
+                PDFSectionWarningCode.DUPLICATE_INTRODUCTION_CANDIDATES,
+            }:
+                if len(intro_candidates) < 2:
+                    raise PDFSectionValidationError(
+                        f"{warning.code.value} warning must be grounded by at least 2 Introduction candidates."
+                    )
+                expected_pages = tuple(
+                    sorted(set(c.page_number for c in intro_candidates))
+                )
+                if warning.page_numbers != expected_pages:
+                    raise PDFSectionValidationError(
+                        f"{warning.code.value} page_numbers ({warning.page_numbers}) "
+                        f"do not match candidate page numbers ({expected_pages})."
+                    )
+
         if PDFSectionKind.ABSTRACT in section_kinds_set:
             if PDFSectionWarningCode.MISSING_ABSTRACT in warning_code_set:
                 raise PDFSectionValidationError(

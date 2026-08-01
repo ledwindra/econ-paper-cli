@@ -241,6 +241,40 @@ def test_toc_lines_and_running_headers_ignored_for_body_heading_selection() -> N
     assert "Actual intro text" in intro_sec.text
 
 
+def test_sentence_case_multiword_next_section_headings() -> None:
+    p1 = (
+        "1. Introduction\n"
+        "Intro text starts here.\n\n"
+        "2 Data and empirical strategy\n"
+        "Data and strategy text.\n"
+    )
+    result = detect_pdf_sections(_extraction(p1), settings=DEFAULT_PDF_SECTION_SETTINGS)
+
+    intro = next(s for s in result.sections if s.kind is PDFSectionKind.INTRODUCTION)
+    assert "Intro text starts here." in intro.text
+    assert "2 Data and empirical strategy" not in intro.text
+
+
+def test_abstract_bounded_by_earliest_ambiguous_introduction_candidate() -> None:
+    p1 = "Abstract\nAbstract content here.\n"
+    p2 = "\n1. Introduction\nFirst intro candidate.\n"
+    p3 = "\n1. Introduction\nSecond intro candidate.\n\n2. Data\nData text.\n"
+
+    result = detect_pdf_sections(
+        _extraction(p1, p2, p3), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+
+    assert PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES in [
+        w.code for w in result.warnings
+    ]
+    assert len(result.sections) == 1
+    abstract = result.sections[0]
+    assert abstract.kind is PDFSectionKind.ABSTRACT
+    assert "Abstract content here." in abstract.text
+    assert "First intro candidate" not in abstract.text
+    assert "Second intro candidate" not in abstract.text
+
+
 def test_ambiguous_abstract_and_introduction_candidates_emit_warning_and_omit_section() -> (
     None
 ):

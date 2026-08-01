@@ -142,11 +142,24 @@ def detect_pdf_sections(
         warnings_list,
     )
 
-    # Build Abstract section
+    # Determine Abstract section boundaries
     if selected_abstract is not None:
-        end_line_index = (
-            selected_intro.line_index if selected_intro is not None else len(all_lines)
-        )
+        if selected_intro is not None:
+            end_line_index = selected_intro.line_index
+        else:
+            # Check if intro candidates exist and tied (ambiguous intro)
+            top_intro_score = max((c.score for c in intro_candidates), default=0)
+            ambiguous_intro_lines = [
+                c.line_index
+                for c in intro_candidates
+                if c.score == top_intro_score and top_intro_score > 0
+            ]
+            if len(ambiguous_intro_lines) > 1:
+                # Abstract ends at the earliest ambiguous Introduction candidate line
+                end_line_index = min(ambiguous_intro_lines)
+            else:
+                end_line_index = len(all_lines)
+
         abstract_section = _build_section(
             kind=PDFSectionKind.ABSTRACT,
             heading_line=all_lines[selected_abstract.line_index],
@@ -162,7 +175,7 @@ def detect_pdf_sections(
                 PDFSectionWarning(PDFSectionWarningCode.MISSING_ABSTRACT)
             )
 
-    # Build Introduction section
+    # Determine Introduction section boundaries
     if selected_intro is not None:
         next_section_candidate = _find_next_section_candidate(
             all_lines,
@@ -331,6 +344,21 @@ def _find_next_section_candidate(
     return None
 
 
+_PROSE_VERB_PHRASES = (
+    "are shown",
+    "is shown",
+    "confirm the",
+    "confirms the",
+    "respond to",
+    "responds to",
+    "were collected",
+    "we estimate",
+    "they find",
+    "which shows",
+    "and we find",
+)
+
+
 def _is_genuine_next_top_level_heading(
     line: _LineInfo, prev_blank: bool, next_blank: bool
 ) -> bool:
@@ -342,6 +370,7 @@ def _is_genuine_next_top_level_heading(
     if not title_part or len(title_part) > 60:
         return False
 
+    # Check terminal period clause: prose sentences ending in a period with > 3 words
     if title_part.endswith("."):
         title_without_period = title_part[:-1].strip()
         words_without_period = title_without_period.split()
@@ -353,18 +382,13 @@ def _is_genuine_next_top_level_heading(
     if not words or len(words) > 6:
         return False
 
-    # Check structural heading evidence: Title Case or ALL CAPS
-    is_all_caps = title_part.isupper()
-    has_lowercase_content_words = any(
-        w.islower()
-        for w in words
-        if not (
-            len(w) <= 3
-            and w.lower() in {"and", "of", "in", "the", "on", "to", "for", "a", "an"}
-        )
-    )
+    # Title must start with a capital letter or digit
+    if not (title_part[0].isupper() or title_part[0].isdigit()):
+        return False
 
-    if has_lowercase_content_words and not is_all_caps:
+    # Check for prose verb phrases
+    title_lower = title_part.lower()
+    if any(phrase in title_lower for phrase in _PROSE_VERB_PHRASES):
         return False
 
     # Must have structural heading context (preceded or followed by blank line/boundary)
