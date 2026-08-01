@@ -83,6 +83,33 @@ def test_settings_reject_blank_version_and_contradictory_thresholds() -> None:
         )
 
 
+def test_settings_reject_reusing_policy_version_with_different_thresholds() -> None:
+    with pytest.raises(PDFQualityValidationError, match="already bound"):
+        PDFQualitySettings(
+            policy_version="pdf-extraction-quality-v1",
+            high_empty_page_ratio_threshold=0.75,
+        )
+
+    v2 = PDFQualitySettings(
+        policy_version="test-policy-v2",
+        high_empty_page_ratio_threshold=0.75,
+    )
+    assert v2.high_empty_page_ratio_threshold == 0.75
+
+    # Re-instantiating with identical thresholds succeeds
+    v2_same = PDFQualitySettings(
+        policy_version="test-policy-v2",
+        high_empty_page_ratio_threshold=0.75,
+    )
+    assert v2_same == v2
+
+    with pytest.raises(PDFQualityValidationError, match="already bound"):
+        PDFQualitySettings(
+            policy_version="test-policy-v2",
+            high_empty_page_ratio_threshold=0.80,
+        )
+
+
 @pytest.mark.parametrize("value", [True, 1.5, -1])
 def test_page_observation_rejects_invalid_counts(value: object) -> None:
     page = _assessment("ab" * 150).pages[0]
@@ -110,6 +137,40 @@ def test_page_observation_rejects_inconsistent_counts_and_flags() -> None:
     )
     with pytest.raises(PDFQualityValidationError, match="cannot also be sparse"):
         replace(empty, is_sparse=True)
+
+
+def test_page_observation_rejects_counts_exceeding_non_whitespace_count() -> None:
+    with pytest.raises(
+        PDFQualityValidationError,
+        match="control_character_count cannot exceed non_whitespace_character_count",
+    ):
+        PDFPageQualityObservation(
+            page_number=1,
+            character_count=1,
+            printable_character_count=0,
+            non_whitespace_character_count=0,
+            control_character_count=1,
+            replacement_character_count=0,
+            repeated_character_count=0,
+            is_empty=True,
+            is_sparse=False,
+        )
+
+    with pytest.raises(
+        PDFQualityValidationError,
+        match="replacement_character_count cannot exceed non_whitespace_character_count",
+    ):
+        PDFPageQualityObservation(
+            page_number=1,
+            character_count=1,
+            printable_character_count=0,
+            non_whitespace_character_count=0,
+            control_character_count=0,
+            replacement_character_count=1,
+            repeated_character_count=0,
+            is_empty=True,
+            is_sparse=False,
+        )
 
 
 def test_assessment_rejects_inconsistent_document_counts() -> None:

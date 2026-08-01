@@ -8,7 +8,9 @@ errors defined by the `PDFExtractor` protocol.
 Call `assess_pdf_extraction_quality` with an extraction result and an explicit
 `PDFQualitySettings` instance. The assessment records the settings'
 `policy_version`; changing a threshold or measurement rule requires a new
-policy version so later re-ingestion can reproduce the decision.
+policy version so later re-ingestion can reproduce the decision. Each
+`policy_version` is bound to an immutable threshold set; attempting to reuse
+a `policy_version` with different thresholds raises a `PDFQualityValidationError`.
 
 ## Default policy
 
@@ -37,6 +39,8 @@ feed, plus DEL and the C1 range. This explicit code-point rule avoids depending
 on platform or Unicode-database classifications. Printable counts exclude
 those controls and the four structural whitespace characters. Repeated-run
 measurement ignores whitespace runs and never rewrites the source text.
+Control-, replacement-, and repeated-character counts are bounded by
+`non_whitespace_character_count`.
 
 ## Status precedence
 

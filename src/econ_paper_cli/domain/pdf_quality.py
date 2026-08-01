@@ -81,6 +81,23 @@ _WARNING_MESSAGES = {
 _WARNING_ORDER = {code: position for position, code in enumerate(PDFQualityWarningCode)}
 
 
+_KNOWN_POLICY_SETTINGS: dict[str, dict[str, object]] = {}
+
+
+def _settings_thresholds(settings: "PDFQualitySettings") -> dict[str, object]:
+    return {
+        "sparse_page_non_whitespace_threshold": settings.sparse_page_non_whitespace_threshold,
+        "very_low_text_non_whitespace_threshold": settings.very_low_text_non_whitespace_threshold,
+        "high_empty_page_ratio_threshold": settings.high_empty_page_ratio_threshold,
+        "anomaly_ratio_warning_threshold": settings.anomaly_ratio_warning_threshold,
+        "anomaly_ratio_unusable_threshold": settings.anomaly_ratio_unusable_threshold,
+        "repeated_character_run_threshold": settings.repeated_character_run_threshold,
+        "repeated_character_ratio_unusable_threshold": settings.repeated_character_ratio_unusable_threshold,
+        "minimum_pages_for_imbalance": settings.minimum_pages_for_imbalance,
+        "severe_page_imbalance_ratio_threshold": settings.severe_page_imbalance_ratio_threshold,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class PDFQualitySettings:
     """Versioned and validated thresholds for one assessment policy."""
@@ -143,6 +160,17 @@ class PDFQualitySettings:
                 "anomaly_ratio_unusable_threshold."
             )
 
+        current_thresholds = _settings_thresholds(self)
+        existing = _KNOWN_POLICY_SETTINGS.get(self.policy_version)
+        if existing is not None:
+            if existing != current_thresholds:
+                raise PDFQualityValidationError(
+                    f"policy_version '{self.policy_version}' is already bound to a "
+                    "different threshold set."
+                )
+        else:
+            _KNOWN_POLICY_SETTINGS[self.policy_version] = current_thresholds
+
 
 @dataclass(frozen=True, slots=True)
 class PDFPageQualityObservation:
@@ -172,17 +200,20 @@ class PDFPageQualityObservation:
         for field_name, value in (
             ("printable_character_count", self.printable_character_count),
             ("non_whitespace_character_count", self.non_whitespace_character_count),
-            ("control_character_count", self.control_character_count),
-            ("replacement_character_count", self.replacement_character_count),
         ):
             if value > self.character_count:
                 raise PDFQualityValidationError(
                     f"{field_name} cannot exceed character_count."
                 )
-        if self.repeated_character_count > self.non_whitespace_character_count:
-            raise PDFQualityValidationError(
-                "repeated_character_count cannot exceed non_whitespace_character_count."
-            )
+        for field_name, value in (
+            ("control_character_count", self.control_character_count),
+            ("replacement_character_count", self.replacement_character_count),
+            ("repeated_character_count", self.repeated_character_count),
+        ):
+            if value > self.non_whitespace_character_count:
+                raise PDFQualityValidationError(
+                    f"{field_name} cannot exceed non_whitespace_character_count."
+                )
         if not isinstance(self.is_empty, bool):
             raise PDFQualityValidationError("is_empty must be a boolean.")
         if self.is_empty != (self.non_whitespace_character_count == 0):
@@ -243,16 +274,43 @@ class PDFQualityMeasurements:
         for field_name, value in (
             ("printable_character_count", self.printable_character_count),
             ("non_whitespace_character_count", self.non_whitespace_character_count),
-            ("control_character_count", self.control_character_count),
-            ("replacement_character_count", self.replacement_character_count),
         ):
             if value > self.total_character_count:
                 raise PDFQualityValidationError(
                     f"{field_name} cannot exceed total_character_count."
                 )
-        if self.repeated_character_count > self.non_whitespace_character_count:
+        for field_name, value in (
+            ("control_character_count", self.control_character_count),
+            ("replacement_character_count", self.replacement_character_count),
+            ("repeated_character_count", self.repeated_character_count),
+        ):
+            if value > self.non_whitespace_character_count:
+                raise PDFQualityValidationError(
+                    f"{field_name} cannot exceed non_whitespace_character_count."
+                )
+        if (
+            self.minimum_page_non_whitespace_character_count
+            > self.maximum_page_non_whitespace_character_count
+        ):
             raise PDFQualityValidationError(
-                "repeated_character_count cannot exceed non_whitespace_character_count."
+                "minimum page text count cannot exceed maximum page text count."
+            )
+        if self.page_count == 0 and any(
+            (
+                self.total_character_count,
+                self.printable_character_count,
+                self.non_whitespace_character_count,
+                self.empty_page_count,
+                self.sparse_page_count,
+                self.control_character_count,
+                self.replacement_character_count,
+                self.repeated_character_count,
+                self.minimum_page_non_whitespace_character_count,
+                self.maximum_page_non_whitespace_character_count,
+            )
+        ):
+            raise PDFQualityValidationError(
+                "all measurements must be zero when page_count is zero."
             )
         if (
             self.minimum_page_non_whitespace_character_count
