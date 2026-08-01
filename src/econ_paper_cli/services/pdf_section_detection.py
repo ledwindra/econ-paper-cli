@@ -143,23 +143,15 @@ def detect_pdf_sections(
     )
 
     # Determine Abstract section boundaries
-    if selected_abstract is not None:
-        if selected_intro is not None:
-            end_line_index = selected_intro.line_index
-        else:
-            # Check if intro candidates exist and tied (ambiguous intro)
-            top_intro_score = max((c.score for c in intro_candidates), default=0)
-            ambiguous_intro_lines = [
-                c.line_index
-                for c in intro_candidates
-                if c.score == top_intro_score and top_intro_score > 0
-            ]
-            if len(ambiguous_intro_lines) > 1:
-                # Abstract ends at the earliest ambiguous Introduction candidate line
-                end_line_index = min(ambiguous_intro_lines)
-            else:
-                end_line_index = len(all_lines)
+    is_intro_ambiguous = any(
+        w.code is PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES
+        for w in warnings_list
+    )
 
+    if selected_abstract is not None and not is_intro_ambiguous:
+        end_line_index = (
+            selected_intro.line_index if selected_intro is not None else len(all_lines)
+        )
         abstract_section = _build_section(
             kind=PDFSectionKind.ABSTRACT,
             heading_line=all_lines[selected_abstract.line_index],
@@ -288,8 +280,16 @@ def _detect_running_headers(lines: list[_LineInfo], page_count: int) -> set[str]
     if page_count < 2:
         return set()
     trimmed_counts: dict[str, set[int]] = {}
-    for line in lines:
-        if line.trimmed and len(line.trimmed) < 100:
+    for idx, line in enumerate(lines):
+        if not line.trimmed or len(line.trimmed) >= 100:
+            continue
+        prev_blank = idx == 0 or not lines[idx - 1].trimmed
+        next_blank = idx == len(lines) - 1 or not lines[idx + 1].trimmed
+        is_first_line = idx == 0 or lines[idx - 1].page_number != line.page_number
+        is_last_line = (
+            idx == len(lines) - 1 or lines[idx + 1].page_number != line.page_number
+        )
+        if prev_blank or next_blank or is_first_line or is_last_line:
             if line.trimmed not in trimmed_counts:
                 trimmed_counts[line.trimmed] = set()
             trimmed_counts[line.trimmed].add(line.page_number)
@@ -313,13 +313,21 @@ def _find_heading_candidates(
         if _TOC_DOT_LEADERS_RE.search(line.text):
             continue
         if pattern.match(line.trimmed):
-            score = 2
-            if line.trimmed in running_headers:
+            is_first_line = idx == 0 or lines[idx - 1].page_number != line.page_number
+            is_last_line = (
+                idx == len(lines) - 1 or lines[idx + 1].page_number != line.page_number
+            )
+            is_page_margin_header = (
+                is_first_line or is_last_line
+            ) and line.page_number > 1
+            if line.trimmed in running_headers and is_page_margin_header:
                 score = 0
-            prev_blank = idx == 0 or not lines[idx - 1].trimmed
-            next_blank = idx == len(lines) - 1 or not lines[idx + 1].trimmed
-            if prev_blank or next_blank:
-                score += 1
+            else:
+                score = 2
+                prev_blank = idx == 0 or not lines[idx - 1].trimmed
+                next_blank = idx == len(lines) - 1 or not lines[idx + 1].trimmed
+                if prev_blank or next_blank or is_first_line or is_last_line:
+                    score += 1
             candidates.append(_CandidateMatch(kind, idx, line, score))
     return candidates
 
@@ -339,7 +347,12 @@ def _find_next_section_candidate(
             continue
         prev_blank = idx == start_index or not lines[idx - 1].trimmed
         next_blank = idx == len(lines) - 1 or not lines[idx + 1].trimmed
-        if _is_genuine_next_top_level_heading(line, prev_blank, next_blank):
+        is_first_line = idx == 0 or lines[idx - 1].page_number != line.page_number
+        is_last_line = (
+            idx == len(lines) - 1 or lines[idx + 1].page_number != line.page_number
+        )
+        is_boundary = prev_blank or next_blank or is_first_line or is_last_line
+        if _is_genuine_next_top_level_heading(line, is_boundary):
             return _CandidateMatch(PDFSectionKind.INTRODUCTION, idx, line, 2)
     return None
 
@@ -359,9 +372,7 @@ _PROSE_VERB_PHRASES = (
 )
 
 
-def _is_genuine_next_top_level_heading(
-    line: _LineInfo, prev_blank: bool, next_blank: bool
-) -> bool:
+def _is_genuine_next_top_level_heading(line: _LineInfo, is_boundary: bool) -> bool:
     match = _NEXT_SECTION_TITLE_RE.match(line.trimmed)
     if not match:
         return False
@@ -391,8 +402,8 @@ def _is_genuine_next_top_level_heading(
     if any(phrase in title_lower for phrase in _PROSE_VERB_PHRASES):
         return False
 
-    # Must have structural heading context (preceded or followed by blank line/boundary)
-    if not (prev_blank or next_blank):
+    # Must have structural heading context (blank line or page boundary)
+    if not is_boundary:
         return False
 
     return True

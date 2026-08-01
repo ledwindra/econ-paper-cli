@@ -295,6 +295,9 @@ class PDFSectionDetectionResult:
                 )
 
         # Grounding checks for ambiguity and duplicate warnings
+        if len(set(self.candidates)) != len(self.candidates):
+            raise PDFSectionValidationError("candidates must be unique.")
+
         abstract_candidates = tuple(
             c for c in self.candidates if c.kind is PDFSectionKind.ABSTRACT
         )
@@ -307,12 +310,13 @@ class PDFSectionDetectionResult:
                 PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES,
                 PDFSectionWarningCode.DUPLICATE_ABSTRACT_CANDIDATES,
             }:
-                if len(abstract_candidates) < 2:
+                distinct_abstract = set(abstract_candidates)
+                if len(distinct_abstract) < 2:
                     raise PDFSectionValidationError(
-                        f"{warning.code.value} warning must be grounded by at least 2 Abstract candidates."
+                        f"{warning.code.value} warning must be grounded by at least 2 distinct Abstract candidates."
                     )
                 expected_pages = tuple(
-                    sorted(set(c.page_number for c in abstract_candidates))
+                    sorted(set(c.page_number for c in distinct_abstract))
                 )
                 if warning.page_numbers != expected_pages:
                     raise PDFSectionValidationError(
@@ -324,12 +328,13 @@ class PDFSectionDetectionResult:
                 PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES,
                 PDFSectionWarningCode.DUPLICATE_INTRODUCTION_CANDIDATES,
             }:
-                if len(intro_candidates) < 2:
+                distinct_intro = set(intro_candidates)
+                if len(distinct_intro) < 2:
                     raise PDFSectionValidationError(
-                        f"{warning.code.value} warning must be grounded by at least 2 Introduction candidates."
+                        f"{warning.code.value} warning must be grounded by at least 2 distinct Introduction candidates."
                     )
                 expected_pages = tuple(
-                    sorted(set(c.page_number for c in intro_candidates))
+                    sorted(set(c.page_number for c in distinct_intro))
                 )
                 if warning.page_numbers != expected_pages:
                     raise PDFSectionValidationError(

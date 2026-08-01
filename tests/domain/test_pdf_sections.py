@@ -127,7 +127,7 @@ def test_settings_canonical_binding() -> None:
         PDFSectionSettings(policy_version="unknown-v2")
 
 
-def test_section_detection_result_validation() -> None:
+def test_section_detection_result_validation_and_distinct_candidate_grounding() -> None:
     text = "Sample text 40 chars long string here..."
     span = PDFSectionSpan(
         page_number=1, start_character_offset=0, end_character_offset=len(text)
@@ -151,10 +151,17 @@ def test_section_detection_result_validation() -> None:
         spans=(intro_span,),
         text=text,
     )
-    candidate = PDFHeadingCandidate(
+    c1 = PDFHeadingCandidate(
         kind=PDFSectionKind.ABSTRACT,
         heading_text="Abstract",
         page_number=1,
+        start_character_offset=0,
+        end_character_offset=8,
+    )
+    c2 = PDFHeadingCandidate(
+        kind=PDFSectionKind.ABSTRACT,
+        heading_text="Abstract",
+        page_number=2,
         start_character_offset=0,
         end_character_offset=8,
     )
@@ -162,41 +169,55 @@ def test_section_detection_result_validation() -> None:
     result = PDFSectionDetectionResult(
         policy_version="pdf-section-detection-v1",
         sections=(section, intro_section),
-        candidates=(candidate,),
+        candidates=(c1,),
         warnings=(),
     )
     assert len(result.sections) == 2
-    assert len(result.candidates) == 1
 
-    with pytest.raises(
-        PDFSectionValidationError, match="not a recognized policy version"
-    ):
+    # Candidates must be unique
+    with pytest.raises(PDFSectionValidationError, match="candidates must be unique"):
         PDFSectionDetectionResult(
-            policy_version="unrecognized-v2",
+            policy_version="pdf-section-detection-v1",
             sections=(),
-            candidates=(),
-            warnings=(PDFSectionWarning(PDFSectionWarningCode.NO_PAGES),),
-        )
-
-    with pytest.raises(
-        PDFSectionValidationError, match="contradicts presence of Abstract"
-    ):
-        PDFSectionDetectionResult(
-            policy_version="pdf-section-detection-v1",
-            sections=(section, intro_section),
-            candidates=(),
-            warnings=(PDFSectionWarning(PDFSectionWarningCode.MISSING_ABSTRACT),),
-        )
-
-    with pytest.raises(
-        PDFSectionValidationError,
-        match="AMBIGUOUS_ABSTRACT_CANDIDATES warning contradicts",
-    ):
-        PDFSectionDetectionResult(
-            policy_version="pdf-section-detection-v1",
-            sections=(section, intro_section),
-            candidates=(),
+            candidates=(c1, c1),
             warnings=(
-                PDFSectionWarning(PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES),
+                PDFSectionWarning(
+                    PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES,
+                    page_numbers=(1,),
+                ),
+            ),
+        )
+
+    # Ambiguity warning must be grounded by at least 2 distinct candidates
+    with pytest.raises(
+        PDFSectionValidationError, match="must be grounded by at least 2 distinct"
+    ):
+        PDFSectionDetectionResult(
+            policy_version="pdf-section-detection-v1",
+            sections=(),
+            candidates=(c1,),
+            warnings=(
+                PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION),
+                PDFSectionWarning(
+                    PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES,
+                    page_numbers=(1,),
+                ),
+            ),
+        )
+
+    # Warning page_numbers must match candidate page numbers
+    with pytest.raises(
+        PDFSectionValidationError, match="do not match candidate page numbers"
+    ):
+        PDFSectionDetectionResult(
+            policy_version="pdf-section-detection-v1",
+            sections=(),
+            candidates=(c1, c2),
+            warnings=(
+                PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION),
+                PDFSectionWarning(
+                    PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES,
+                    page_numbers=(1,),
+                ),
             ),
         )

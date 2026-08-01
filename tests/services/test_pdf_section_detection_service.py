@@ -54,6 +54,21 @@ def test_abstract_and_introduction_separate_pages() -> None:
     assert "2. Data" not in intro.text
 
 
+def test_page_breaks_treated_as_structural_heading_boundaries() -> None:
+    p1 = "1. Introduction\nIntroduction prose line ending at the bottom of page 1."
+    p2 = "2 Data and empirical strategy\nData content starting directly at the top of page 2.\n"
+
+    result = detect_pdf_sections(
+        _extraction(p1, p2), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+
+    assert len(result.sections) == 1
+    intro = result.sections[0]
+    assert intro.kind is PDFSectionKind.INTRODUCTION
+    assert "Introduction prose line ending" in intro.text
+    assert "2 Data and empirical strategy" not in intro.text
+
+
 def test_abstract_and_introduction_same_page() -> None:
     text = (
         "Abstract\n"
@@ -255,7 +270,7 @@ def test_sentence_case_multiword_next_section_headings() -> None:
     assert "2 Data and empirical strategy" not in intro.text
 
 
-def test_abstract_bounded_by_earliest_ambiguous_introduction_candidate() -> None:
+def test_abstract_omitted_when_introduction_is_ambiguous() -> None:
     p1 = "Abstract\nAbstract content here.\n"
     p2 = "\n1. Introduction\nFirst intro candidate.\n"
     p3 = "\n1. Introduction\nSecond intro candidate.\n\n2. Data\nData text.\n"
@@ -264,15 +279,10 @@ def test_abstract_bounded_by_earliest_ambiguous_introduction_candidate() -> None
         _extraction(p1, p2, p3), settings=DEFAULT_PDF_SECTION_SETTINGS
     )
 
-    assert PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES in [
-        w.code for w in result.warnings
-    ]
-    assert len(result.sections) == 1
-    abstract = result.sections[0]
-    assert abstract.kind is PDFSectionKind.ABSTRACT
-    assert "Abstract content here." in abstract.text
-    assert "First intro candidate" not in abstract.text
-    assert "Second intro candidate" not in abstract.text
+    codes = [w.code for w in result.warnings]
+    assert PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES in codes
+    assert PDFSectionWarningCode.MISSING_ABSTRACT in codes
+    assert len(result.sections) == 0
 
 
 def test_ambiguous_abstract_and_introduction_candidates_emit_warning_and_omit_section() -> (
