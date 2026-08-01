@@ -18,7 +18,12 @@ from econ_paper_cli.domain import (
     SinglePaperAnalysisStatus,
     SinglePaperAnalysisWarningCode,
 )
-from econ_paper_cli.domain.errors import IngestionError, IngestionPathNotFoundError
+from econ_paper_cli.domain.errors import (
+    IngestionError,
+    IngestionPathNotFoundError,
+    IngestionPermissionError,
+    IngestionReadError,
+)
 from econ_paper_cli.protocols.generation import (
     AbstentionReason,
     FindingKind,
@@ -815,3 +820,109 @@ def test_all_five_stage_calls_in_correct_order(tmp_path: Path) -> None:
         "section_detection",
         "question_extraction",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Preflight error mappings — PREFLIGHT_PERMISSION_DENIED and PREFLIGHT_READ_ERROR
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_permission_denied_maps_to_exact_code(tmp_path: Path) -> None:
+    """IngestionPermissionError must map to PREFLIGHT_PERMISSION_DENIED with retained cause."""
+    from unittest.mock import patch
+
+    import econ_paper_cli.services.single_paper_analysis as svc_mod
+
+    cause = IngestionPermissionError("permission denied during preflight")
+    with patch.object(svc_mod, "run_ingestion_preflight", side_effect=cause):
+        res = analyze_single_paper(
+            tmp_path / "paper.pdf",
+            FakePDFExtractor(),
+            FakeGenerator(),
+            settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+        )
+
+    assert res.status is SinglePaperAnalysisStatus.PREFLIGHT_FAILED
+    assert res.failed_stage is SinglePaperAnalysisStage.PREFLIGHT
+    assert (
+        res.failure_code is SinglePaperAnalysisFailureCode.PREFLIGHT_PERMISSION_DENIED
+    )
+    assert res.failure_cause is cause
+    assert res.error_message == str(cause)
+
+
+def test_preflight_read_error_maps_to_exact_code(tmp_path: Path) -> None:
+    """IngestionReadError must map to PREFLIGHT_READ_ERROR with retained cause."""
+    from unittest.mock import patch
+
+    import econ_paper_cli.services.single_paper_analysis as svc_mod
+
+    cause = IngestionReadError("OS read error during preflight")
+    with patch.object(svc_mod, "run_ingestion_preflight", side_effect=cause):
+        res = analyze_single_paper(
+            tmp_path / "paper.pdf",
+            FakePDFExtractor(),
+            FakeGenerator(),
+            settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+        )
+
+    assert res.status is SinglePaperAnalysisStatus.PREFLIGHT_FAILED
+    assert res.failed_stage is SinglePaperAnalysisStage.PREFLIGHT
+    assert res.failure_code is SinglePaperAnalysisFailureCode.PREFLIGHT_READ_ERROR
+    assert res.failure_cause is cause
+    assert res.error_message == str(cause)
+
+
+# ---------------------------------------------------------------------------
+# MULTI_CANDIDATE_BATCH structural guard — exact code regression
+# ---------------------------------------------------------------------------
+
+
+def test_multi_candidate_batch_returns_exact_code(tmp_path: Path) -> None:
+    """When preflight returns multiple candidates, MULTI_CANDIDATE_BATCH is set with no cause."""
+    from unittest.mock import patch
+
+    import econ_paper_cli.services.single_paper_analysis as svc_mod
+    from econ_paper_cli.domain import IngestionPreflightResult, PreflightCandidate
+
+    pdf_path = _create_valid_pdf_file(tmp_path, "paper.pdf")
+    (tmp_path / "extra.pdf").write_bytes(b"%PDF-1.4 extra")
+
+    # Build a fake preflight result that looks like a regular file target
+    # but reports two candidates — exercises the multi-candidate guard.
+    resolved = pdf_path.resolve()
+    cand1 = PreflightCandidate(
+        source_path=resolved,
+        file_size_bytes=1000,
+        content_checksum="a" * 64,
+        is_stored=False,
+        is_batch_duplicate=False,
+    )
+    cand2 = PreflightCandidate(
+        source_path=(tmp_path / "extra.pdf").resolve(),
+        file_size_bytes=500,
+        content_checksum="b" * 64,
+        is_stored=False,
+        is_batch_duplicate=False,
+    )
+    fake_preflight = IngestionPreflightResult(
+        target_path=resolved,
+        candidates=(cand1, cand2),
+        new_candidate_count=2,
+        stored_candidate_count=0,
+        batch_duplicate_count=0,
+        total_candidate_count=2,
+    )
+
+    with patch.object(svc_mod, "run_ingestion_preflight", return_value=fake_preflight):
+        res = analyze_single_paper(
+            pdf_path,
+            FakePDFExtractor(),
+            FakeGenerator(),
+            settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+        )
+
+    assert res.status is SinglePaperAnalysisStatus.PREFLIGHT_FAILED
+    assert res.failed_stage is SinglePaperAnalysisStage.PREFLIGHT
+    assert res.failure_code is SinglePaperAnalysisFailureCode.MULTI_CANDIDATE_BATCH
+    assert res.failure_cause is None

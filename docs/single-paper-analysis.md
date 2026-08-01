@@ -132,12 +132,25 @@ propagate unchanged.
 from pathlib import Path
 from econ_paper_cli.services.single_paper_analysis import analyze_single_paper
 from econ_paper_cli.adapters.pypdf_extractor import PyPDFExtractor
-from econ_paper_cli.adapters.llama_cpp import LlamaCppGenerator
+from econ_paper_cli.adapters.llama_cpp import LlamaCppConfig, LlamaCppGenerator
+
+# LlamaCppGenerator requires an explicit LlamaCppConfig that names the runtime
+# executable, model file, model identity, expected size, and SHA-256 checksum.
+# Replace the placeholder values below with your actual runtime paths and
+# artifact metadata before running.
+config = LlamaCppConfig(
+    executable_path=Path("/path/to/llama-cli"),  # llama.cpp binary
+    model_path=Path("/path/to/model.gguf"),  # local GGUF model file
+    model_id="your-model-id",  # e.g. "mistral-7b-instruct-q4-k-m"
+    model_expected_size_bytes=4_000_000_000,  # expected file size in bytes
+    model_sha256="0" * 64,  # 64-char SHA-256 hex digest
+)
+generator = LlamaCppGenerator(config)
 
 result = analyze_single_paper(
     pdf_path=Path("paper.pdf"),
     pdf_extractor=PyPDFExtractor(),
-    generator=LlamaCppGenerator(model_path=Path("model.gguf")),
+    generator=generator,
 )
 
 if result.status.value == "success":

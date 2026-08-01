@@ -33,8 +33,12 @@ from econ_paper_cli.domain import (
     SinglePaperAnalysisWarning,
     SinglePaperAnalysisWarningCode,
 )
-from econ_paper_cli.domain.errors import IngestionPathNotFoundError
-from econ_paper_cli.protocols.pdf_extraction import PDFMalformedError
+from econ_paper_cli.domain.errors import (
+    IngestionPathNotFoundError,
+    PDFMalformedError,
+    PDFReadError,
+    PDFSourceNotFoundError,
+)
 
 
 def _make_preflight(path: Path) -> IngestionPreflightResult:
@@ -416,3 +420,149 @@ def test_invalid_stage_sequence_rejected(tmp_path: Path) -> None:
             error_message="Error",
             failure_cause=IngestionPathNotFoundError("Error"),
         )
+
+
+# ---------------------------------------------------------------------------
+# failure_cause type mismatch regressions (Blocker 1)
+# ---------------------------------------------------------------------------
+
+
+def _skipped_after_preflight() -> tuple:
+    return (
+        SinglePaperAnalysisStage.EXTRACTION,
+        SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
+        SinglePaperAnalysisStage.SECTION_DETECTION,
+        SinglePaperAnalysisStage.QUESTION_EXTRACTION,
+    )
+
+
+def test_path_not_found_code_with_pdf_malformed_cause_rejected(
+    tmp_path: Path,
+) -> None:
+    """PATH_NOT_FOUND paired with PDFMalformedError must be rejected."""
+    pdf_path = tmp_path / "paper.pdf"
+    wrong_cause = PDFMalformedError(pdf_path, ValueError("truncated"))
+
+    with pytest.raises(
+        SinglePaperAnalysisValidationError,
+        match="failure_cause for code path_not_found",
+    ):
+        SinglePaperAnalysisResult(
+            policy_version="single-paper-analysis-v1",
+            source_path=pdf_path,
+            checksum=None,
+            status=SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
+            completed_stages=(),
+            failed_stage=SinglePaperAnalysisStage.PREFLIGHT,
+            skipped_stages=_skipped_after_preflight(),
+            failure_code=SinglePaperAnalysisFailureCode.PATH_NOT_FOUND,
+            preflight_result=None,
+            extraction_result=None,
+            quality_assessment=None,
+            section_result=None,
+            research_question_result=None,
+            warnings=(),
+            error_message=str(wrong_cause),
+            failure_cause=wrong_cause,
+        )
+
+
+def test_pdf_encrypted_code_with_pdf_read_error_cause_rejected(
+    tmp_path: Path,
+) -> None:
+    """PDF_ENCRYPTED paired with PDFReadError must be rejected."""
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4")
+    wrong_cause = PDFReadError(pdf_path, OSError("read failed"))
+
+    with pytest.raises(
+        SinglePaperAnalysisValidationError,
+        match="failure_cause for code pdf_encrypted",
+    ):
+        SinglePaperAnalysisResult(
+            policy_version="single-paper-analysis-v1",
+            source_path=pdf_path,
+            checksum="a" * 64,
+            status=SinglePaperAnalysisStatus.EXTRACTION_FAILED,
+            completed_stages=(SinglePaperAnalysisStage.PREFLIGHT,),
+            failed_stage=SinglePaperAnalysisStage.EXTRACTION,
+            skipped_stages=(
+                SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
+                SinglePaperAnalysisStage.SECTION_DETECTION,
+                SinglePaperAnalysisStage.QUESTION_EXTRACTION,
+            ),
+            failure_code=SinglePaperAnalysisFailureCode.PDF_ENCRYPTED,
+            preflight_result=None,
+            extraction_result=None,
+            quality_assessment=None,
+            section_result=None,
+            research_question_result=None,
+            warnings=(),
+            error_message=str(wrong_cause),
+            failure_cause=wrong_cause,
+        )
+
+
+def test_directory_input_code_with_non_empty_directory_error_rejected(
+    tmp_path: Path,
+) -> None:
+    """DIRECTORY_INPUT failure_cause must be IngestionEmptyDirectoryError or None."""
+    from econ_paper_cli.domain.errors import IngestionError
+
+    pdf_path = tmp_path / "paper.pdf"
+    # Use a plain IngestionError (not IngestionEmptyDirectoryError) as the cause
+    wrong_cause = IngestionError("some other ingestion error")
+
+    with pytest.raises(
+        SinglePaperAnalysisValidationError,
+        match="DIRECTORY_INPUT failure_cause must be IngestionEmptyDirectoryError",
+    ):
+        SinglePaperAnalysisResult(
+            policy_version="single-paper-analysis-v1",
+            source_path=pdf_path,
+            checksum=None,
+            status=SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
+            completed_stages=(),
+            failed_stage=SinglePaperAnalysisStage.PREFLIGHT,
+            skipped_stages=_skipped_after_preflight(),
+            failure_code=SinglePaperAnalysisFailureCode.DIRECTORY_INPUT,
+            preflight_result=None,
+            extraction_result=None,
+            quality_assessment=None,
+            section_result=None,
+            research_question_result=None,
+            warnings=(),
+            error_message=str(wrong_cause),
+            failure_cause=wrong_cause,
+        )
+
+
+def test_pdf_not_found_code_with_correct_cause_accepted(tmp_path: Path) -> None:
+    """PDF_NOT_FOUND paired with PDFSourceNotFoundError must be accepted."""
+    pdf_path = tmp_path / "paper.pdf"
+    cause = PDFSourceNotFoundError(pdf_path)
+
+    result = SinglePaperAnalysisResult(
+        policy_version="single-paper-analysis-v1",
+        source_path=pdf_path,
+        checksum="a" * 64,
+        status=SinglePaperAnalysisStatus.EXTRACTION_FAILED,
+        completed_stages=(SinglePaperAnalysisStage.PREFLIGHT,),
+        failed_stage=SinglePaperAnalysisStage.EXTRACTION,
+        skipped_stages=(
+            SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
+            SinglePaperAnalysisStage.SECTION_DETECTION,
+            SinglePaperAnalysisStage.QUESTION_EXTRACTION,
+        ),
+        failure_code=SinglePaperAnalysisFailureCode.PDF_NOT_FOUND,
+        preflight_result=None,
+        extraction_result=None,
+        quality_assessment=None,
+        section_result=None,
+        research_question_result=None,
+        warnings=(),
+        error_message=str(cause),
+        failure_cause=cause,
+    )
+    assert result.failure_code is SinglePaperAnalysisFailureCode.PDF_NOT_FOUND
+    assert isinstance(result.failure_cause, PDFSourceNotFoundError)

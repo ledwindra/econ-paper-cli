@@ -4,7 +4,22 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-from econ_paper_cli.domain.errors import SinglePaperAnalysisValidationError
+from econ_paper_cli.domain.errors import (
+    IngestionEmptyDirectoryError,
+    IngestionInvalidPathError,
+    IngestionPathNotFoundError,
+    IngestionPermissionError,
+    IngestionReadError,
+    IngestionUnsupportedFileError,
+    PDFEncryptedError,
+    PDFMalformedError,
+    PDFParserError,
+    PDFPermissionError,
+    PDFReadError,
+    PDFSourceNotFoundError,
+    PDFSourceNotRegularFileError,
+    SinglePaperAnalysisValidationError,
+)
 from econ_paper_cli.domain.ingestion import IngestionPreflightResult
 from econ_paper_cli.domain.pdf_extraction import PDFExtractionResult
 from econ_paper_cli.domain.pdf_quality import (
@@ -165,6 +180,25 @@ _EXTRACTION_FAILURE_CODES = frozenset(
 _CAUSELESS_FAILURE_CODES = frozenset(
     {SinglePaperAnalysisFailureCode.MULTI_CANDIDATE_BATCH}
 )
+
+# Mapping each failure code to the exact exception base class its failure_cause
+# must be an instance of.  DIRECTORY_INPUT and MULTI_CANDIDATE_BATCH are handled
+# separately (DIRECTORY_INPUT may have no cause or IngestionEmptyDirectoryError;
+# MULTI_CANDIDATE_BATCH must have no cause).
+_FAILURE_CODE_CAUSE_TYPE: dict[SinglePaperAnalysisFailureCode, type[Exception]] = {
+    SinglePaperAnalysisFailureCode.PATH_NOT_FOUND: IngestionPathNotFoundError,
+    SinglePaperAnalysisFailureCode.PATH_INVALID: IngestionInvalidPathError,
+    SinglePaperAnalysisFailureCode.UNSUPPORTED_FILE_TYPE: IngestionUnsupportedFileError,
+    SinglePaperAnalysisFailureCode.PREFLIGHT_PERMISSION_DENIED: IngestionPermissionError,
+    SinglePaperAnalysisFailureCode.PREFLIGHT_READ_ERROR: IngestionReadError,
+    SinglePaperAnalysisFailureCode.PDF_NOT_FOUND: PDFSourceNotFoundError,
+    SinglePaperAnalysisFailureCode.PDF_NOT_REGULAR_FILE: PDFSourceNotRegularFileError,
+    SinglePaperAnalysisFailureCode.PDF_PERMISSION_DENIED: PDFPermissionError,
+    SinglePaperAnalysisFailureCode.PDF_READ_ERROR: PDFReadError,
+    SinglePaperAnalysisFailureCode.PDF_MALFORMED: PDFMalformedError,
+    SinglePaperAnalysisFailureCode.PDF_ENCRYPTED: PDFEncryptedError,
+    SinglePaperAnalysisFailureCode.PDF_PARSER_ERROR: PDFParserError,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -375,16 +409,30 @@ class SinglePaperAnalysisResult:
                     f"failure code {self.failure_code.value} must not have a failure_cause."
                 )
         elif self.failure_code is SinglePaperAnalysisFailureCode.DIRECTORY_INPUT:
-            if self.failure_cause is not None and self.error_message != str(
-                self.failure_cause
-            ):
-                raise SinglePaperAnalysisValidationError(
-                    "error_message must preserve the failure_cause message."
-                )
+            # DIRECTORY_INPUT may have no cause (structural directory rejection) or
+            # an IngestionEmptyDirectoryError (empty-directory preflight error).
+            if self.failure_cause is not None:
+                if not isinstance(self.failure_cause, IngestionEmptyDirectoryError):
+                    raise SinglePaperAnalysisValidationError(
+                        f"DIRECTORY_INPUT failure_cause must be IngestionEmptyDirectoryError "
+                        f"or None, got {type(self.failure_cause).__name__}."
+                    )
+                if self.error_message != str(self.failure_cause):
+                    raise SinglePaperAnalysisValidationError(
+                        "error_message must preserve the failure_cause message."
+                    )
         elif self.status in _FAILURE_CODE_STATUSES:
             if self.failure_cause is None:
                 raise SinglePaperAnalysisValidationError(
                     f"failure_cause is required for failure code {self.failure_code.value}."
+                )
+            expected_type = _FAILURE_CODE_CAUSE_TYPE.get(self.failure_code)
+            if expected_type is not None and not isinstance(
+                self.failure_cause, expected_type
+            ):
+                raise SinglePaperAnalysisValidationError(
+                    f"failure_cause for code {self.failure_code.value} must be an instance of "
+                    f"{expected_type.__name__}, got {type(self.failure_cause).__name__}."
                 )
             if self.error_message != str(self.failure_cause):
                 raise SinglePaperAnalysisValidationError(
