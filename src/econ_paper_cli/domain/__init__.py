@@ -12,11 +12,23 @@ from econ_paper_cli.domain.errors import (
     CitationValidationError,
     DomainError,
     EvidenceValidationError,
+    IngestionEmptyDirectoryError,
+    IngestionError,
+    IngestionInvalidPathError,
+    IngestionPathNotFoundError,
+    IngestionPermissionError,
+    IngestionReadError,
+    IngestionUnsupportedFileError,
+    IngestionValidationError,
     PaperValidationError,
     PassageValidationError,
     StorageRecordValidationError,
 )
 from econ_paper_cli.domain.evidence import RetrievalEvidence
+from econ_paper_cli.domain.ingestion import (
+    IngestionPreflightResult,
+    PreflightCandidate,
+)
 from econ_paper_cli.domain.papers import Paper
 from econ_paper_cli.domain.passages import Passage
 from econ_paper_cli.domain.storage import (
@@ -39,12 +51,22 @@ __all__ = [
     "DomainError",
     "EvidenceValidationError",
     "IngestionCompletion",
+    "IngestionEmptyDirectoryError",
+    "IngestionError",
+    "IngestionInvalidPathError",
+    "IngestionPathNotFoundError",
+    "IngestionPermissionError",
+    "IngestionPreflightResult",
+    "IngestionReadError",
+    "IngestionUnsupportedFileError",
+    "IngestionValidationError",
     "IngestionWarning",
     "Paper",
     "PaperRecord",
     "PaperValidationError",
     "Passage",
     "PassageValidationError",
+    "PreflightCandidate",
     "RedistributionStatus",
     "RetrievalEvidence",
     "SourceProvenance",
