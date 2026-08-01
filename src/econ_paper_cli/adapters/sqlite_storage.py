@@ -116,7 +116,15 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );""",
-            "INSERT INTO papers_v2 SELECT * FROM papers;",
+            """INSERT INTO papers_v2 (
+                paper_id, title, authors_json, year, abstract,
+                source_name, source_identifier, source_url,
+                content_checksum, created_at, updated_at
+            ) SELECT
+                paper_id, title, authors_json, year, abstract,
+                source_name, source_identifier, source_url,
+                LOWER(content_checksum), created_at, updated_at
+            FROM papers;""",
             "DROP TABLE papers;",
             "ALTER TABLE papers_v2 RENAME TO papers;",
             "CREATE INDEX IF NOT EXISTS idx_papers_checksum ON papers(content_checksum);",
@@ -136,7 +144,7 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 content_checksum, markdown_path, extraction_method, created_at
             ) SELECT
                 paper_id, source_path, source_format, 1,
-                content_checksum, source_path, extraction_method, created_at
+                LOWER(content_checksum), source_path, extraction_method, created_at
             FROM source_provenance;""",
             "DROP TABLE source_provenance;",
             "ALTER TABLE source_provenance_v2 RENAME TO source_provenance;",
@@ -151,7 +159,13 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE,
                 CONSTRAINT uq_paper_ordinal UNIQUE(paper_id, ordinal_position)
             );""",
-            "INSERT INTO passages_v2 SELECT * FROM passages;",
+            """INSERT INTO passages_v2 (
+                passage_id, paper_id, text, section_heading,
+                page_start, page_end, ordinal_position
+            ) SELECT
+                passage_id, paper_id, text, section_heading,
+                page_start, page_end, ordinal_position
+            FROM passages;""",
             "DROP TABLE passages;",
             "ALTER TABLE passages_v2 RENAME TO passages;",
             "CREATE INDEX IF NOT EXISTS idx_passages_paper_ordinal ON passages(paper_id, ordinal_position);",
@@ -198,6 +212,26 @@ class SQLiteStorage(StorageBackend):
             self._conn = sqlite3.connect(conn_str)
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA foreign_keys = ON;")
+        except sqlite3.Error as err:
+            if self._conn is not None:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                self._conn = None
+            raise StorageConnectionError(
+                f"Failed to connect to SQLite database at '{self._db_path}': {err}."
+            ) from err
+        except Exception:
+            if self._conn is not None:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                self._conn = None
+            raise
+
+        try:
             self._run_migrations()
         except Exception:
             if self._conn is not None:
@@ -260,6 +294,27 @@ class SQLiteStorage(StorageBackend):
             conn.execute("PRAGMA foreign_keys = OFF;")
             for version, description, statements in migrations:
                 if version > current_version:
+                    if version == 2 and custom_migrations is None:
+                        # Check for existing records in papers for version 1 database
+                        cur = conn.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table' AND name='papers'"
+                        )
+                        if cur.fetchone() is not None:
+                            cur = conn.execute(
+                                "SELECT LOWER(content_checksum) AS ck FROM papers GROUP BY LOWER(content_checksum) HAVING COUNT(*) > 1"
+                            )
+                            if cur.fetchone() is not None:
+                                raise StorageMigrationError(
+                                    f"Migration to schema version {version} failed: database contains legacy records with case-insensitive checksum conflicts. Please rebuild the database library."
+                                )
+
+                            cur = conn.execute("SELECT COUNT(*) AS c FROM papers")
+                            row = cur.fetchone()
+                            if row is not None and row["c"] > 0:
+                                raise StorageMigrationError(
+                                    f"Migration to schema version {version} failed: database contains {row['c']} existing paper record(s) missing required provenance metadata (source_file_size and markdown_path). Please rebuild the library database."
+                                )
+
                     try:
                         conn.execute("BEGIN IMMEDIATE")
                         for stmt in statements:
