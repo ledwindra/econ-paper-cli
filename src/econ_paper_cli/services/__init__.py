@@ -7,6 +7,7 @@ from econ_paper_cli.services.pdf_section_detection import detect_pdf_sections
 from econ_paper_cli.services.research_question_extraction import (
     extract_research_question,
 )
+from econ_paper_cli.services.single_paper_analysis import analyze_single_paper
 
 __all__ = [
     "run_ingestion_preflight",
@@ -14,4 +15,5 @@ __all__ = [
     "assess_pdf_extraction_quality",
     "detect_pdf_sections",
     "extract_research_question",
+    "analyze_single_paper",
 ]
