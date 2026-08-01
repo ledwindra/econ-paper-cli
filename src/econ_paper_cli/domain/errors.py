@@ -63,3 +63,7 @@ class PDFExtractionValidationError(DomainError):
 
 class PDFQualityValidationError(DomainError):
     """Raised when a PDF extraction-quality domain object fails validation."""
+
+
+class PDFSectionValidationError(DomainError):
+    """Raised when a PDF section-detection domain object fails validation."""
