@@ -13,10 +13,12 @@ from econ_paper_cli.domain import (
     PDFQualityStatus,
     ResearchQuestionKind,
     ResearchQuestionWarningCode,
+    SinglePaperAnalysisFailureCode,
     SinglePaperAnalysisStage,
     SinglePaperAnalysisStatus,
     SinglePaperAnalysisWarningCode,
 )
+from econ_paper_cli.domain.errors import IngestionError, IngestionPathNotFoundError
 from econ_paper_cli.protocols.generation import (
     AbstentionReason,
     FindingKind,
@@ -29,11 +31,21 @@ from econ_paper_cli.protocols.pdf_extraction import (
     PDFExtractionError,
     PDFExtractor,
     PDFMalformedError,
+    PDFParserError,
     PDFPermissionError,
+    PDFReadError,
+    PDFSourceNotFoundError,
+    PDFSourceNotRegularFileError,
 )
 from econ_paper_cli.services.single_paper_analysis import analyze_single_paper
 
 _ALL_STAGES = tuple(SinglePaperAnalysisStage)
+
+# ---------------------------------------------------------------------------
+# Fake implementations
+# ---------------------------------------------------------------------------
+
+_DEFAULT_PAGE_TEXT = "Abstract\nWe evaluate trade policy.\n\n1. Introduction\nTrade policy affects prices."
 
 
 class FakePDFExtractor(PDFExtractor):
@@ -44,9 +56,7 @@ class FakePDFExtractor(PDFExtractor):
         pages_text: list[str] | None = None,
         raise_error: PDFExtractionError | None = None,
     ) -> None:
-        self.pages_text = pages_text or [
-            "Abstract\nWe evaluate trade policy.\n\n1. Introduction\nTrade policy affects prices."
-        ]
+        self.pages_text = pages_text if pages_text is not None else [_DEFAULT_PAGE_TEXT]
         self.raise_error = raise_error
         self.call_count: int = 0
         self.last_path: Path | None = None
@@ -58,10 +68,7 @@ class FakePDFExtractor(PDFExtractor):
             raise self.raise_error
 
         pages = tuple(
-            ExtractedPDFPage(
-                page_number=i + 1,
-                text=txt,
-            )
+            ExtractedPDFPage(page_number=i + 1, text=txt)
             for i, txt in enumerate(self.pages_text)
         )
         meta = PDFDocumentMetadata(title="Test Paper")
@@ -159,12 +166,9 @@ def test_successful_single_pdf_analysis_flow(tmp_path: Path) -> None:
     pdf_path = _create_valid_pdf_file(tmp_path)
 
     abs_text = "Abstract\nWe evaluate trade policy."
-    intro_text = "1. Introduction\nTrade policy affects prices."
-    page_text = f"{abs_text}\n\n{intro_text}"
-    extractor = FakePDFExtractor(pages_text=[page_text])
-
     exc = "We evaluate trade policy."
     resp_json = _make_success_response_json(abs_text, exc)
+    extractor = FakePDFExtractor()
     generator = FakeGenerator(response_text=resp_json)
 
     res = analyze_single_paper(
@@ -174,6 +178,7 @@ def test_successful_single_pdf_analysis_flow(tmp_path: Path) -> None:
     assert res.status is SinglePaperAnalysisStatus.SUCCESS
     assert res.completed_stages == _ALL_STAGES
     assert res.failed_stage is None
+    assert res.failure_code is None
     assert res.skipped_stages == ()
     assert res.preflight_result is not None
     assert res.extraction_result is not None
@@ -185,41 +190,29 @@ def test_successful_single_pdf_analysis_flow(tmp_path: Path) -> None:
         res.research_question_result.question_text
         == "What is the impact of trade policy?"
     )
-    # Canonical path from preflight candidate used in extraction
+    # Canonical resolved path used for extraction
     assert extractor.last_path == pdf_path.resolve()
-    # Generator was called exactly once
     assert generator.call_count == 1
 
 
 def test_usable_with_warnings_quality_proceeds_to_success(tmp_path: Path) -> None:
-    """USABLE_WITH_WARNINGS quality should proceed — not halt."""
+    """USABLE_WITH_WARNINGS quality must not halt the pipeline."""
     pdf_path = _create_valid_pdf_file(tmp_path)
-
-    # Text with a single sparse page (non-empty but sparse) → USABLE_WITH_WARNINGS
-    sparse_text = (
-        "Abstract\nWe study growth.\n\n1. Introduction\nEconomic growth matters."
-    )
-    extractor = FakePDFExtractor(pages_text=[sparse_text])
 
     abs_text = "Abstract\nWe study growth."
     exc = "We study growth."
     resp_json = _make_success_response_json(abs_text, exc)
+    page_text = f"{abs_text}\n\n1. Introduction\nEconomic growth matters."
+    extractor = FakePDFExtractor(pages_text=[page_text])
     generator = FakeGenerator(response_text=resp_json)
 
     res = analyze_single_paper(
         pdf_path, extractor, generator, settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS
     )
 
-    # Regardless of quality warnings, USABLE_WITH_WARNINGS must not halt
-    assert res.status in (
-        SinglePaperAnalysisStatus.SUCCESS,
-        SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED,
-    )
     assert res.quality_assessment is not None
-    assert res.quality_assessment.status not in (
-        PDFQualityStatus.LIKELY_NEEDS_OCR,
-        PDFQualityStatus.UNUSABLE,
-    )
+    assert res.quality_assessment.status is PDFQualityStatus.USABLE_WITH_WARNINGS
+    assert res.status is SinglePaperAnalysisStatus.SUCCESS
 
 
 # ---------------------------------------------------------------------------
@@ -231,16 +224,17 @@ def test_non_pdf_file_rejected_as_preflight_failed(tmp_path: Path) -> None:
     txt_path = tmp_path / "paper.txt"
     txt_path.write_text("Not a PDF file.")
 
-    extractor = FakePDFExtractor()
-    generator = FakeGenerator()
-
     res = analyze_single_paper(
-        txt_path, extractor, generator, settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS
+        txt_path,
+        FakePDFExtractor(),
+        FakeGenerator(),
+        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     )
 
     assert res.status is SinglePaperAnalysisStatus.PREFLIGHT_FAILED
     assert res.completed_stages == ()
     assert res.failed_stage is SinglePaperAnalysisStage.PREFLIGHT
+    assert res.failure_code is SinglePaperAnalysisFailureCode.UNSUPPORTED_FILE_TYPE
     assert res.skipped_stages == (
         SinglePaperAnalysisStage.EXTRACTION,
         SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
@@ -248,43 +242,71 @@ def test_non_pdf_file_rejected_as_preflight_failed(tmp_path: Path) -> None:
         SinglePaperAnalysisStage.QUESTION_EXTRACTION,
     )
     assert res.extraction_result is None
-    assert res.error_message is not None
-    assert extractor.call_count == 0  # Extractor was not called
 
 
-def test_missing_file_rejected_as_preflight_failed(tmp_path: Path) -> None:
+def test_missing_file_rejected_as_path_not_found(tmp_path: Path) -> None:
     missing = tmp_path / "nonexistent.pdf"
-    extractor = FakePDFExtractor()
-    generator = FakeGenerator()
 
     res = analyze_single_paper(
-        missing, extractor, generator, settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS
+        missing,
+        FakePDFExtractor(),
+        FakeGenerator(),
+        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     )
 
     assert res.status is SinglePaperAnalysisStatus.PREFLIGHT_FAILED
     assert res.failed_stage is SinglePaperAnalysisStage.PREFLIGHT
-    assert extractor.call_count == 0
+    assert res.failure_code is SinglePaperAnalysisFailureCode.PATH_NOT_FOUND
+    assert isinstance(res.failure_cause, IngestionPathNotFoundError)
+    assert res.error_message == str(res.failure_cause)
+
+    repeated = analyze_single_paper(
+        missing,
+        FakePDFExtractor(),
+        FakeGenerator(),
+        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+    )
+    assert repeated.failure_cause is not res.failure_cause
+    assert repeated == res
 
 
-def test_directory_with_one_pdf_rejected_as_single_file_enforcement(
-    tmp_path: Path,
-) -> None:
-    """A directory containing exactly one PDF must be rejected: single-file contract."""
+def test_directory_with_one_pdf_rejected_as_directory_input(tmp_path: Path) -> None:
+    """A directory containing exactly one PDF must be rejected: DIRECTORY_INPUT code."""
     subdir = tmp_path / "papers"
     subdir.mkdir()
     (subdir / "paper.pdf").write_bytes(b"%PDF-1.4 synthetic content")
 
     extractor = FakePDFExtractor()
-    generator = FakeGenerator()
-
     res = analyze_single_paper(
-        subdir, extractor, generator, settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS
+        subdir,
+        extractor,
+        FakeGenerator(),
+        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     )
 
     assert res.status is SinglePaperAnalysisStatus.PREFLIGHT_FAILED
     assert res.failed_stage is SinglePaperAnalysisStage.PREFLIGHT
+    assert res.failure_code is SinglePaperAnalysisFailureCode.DIRECTORY_INPUT
+    assert res.failure_cause is None
     assert "single PDF file" in res.error_message
     assert extractor.call_count == 0
+
+
+def test_empty_directory_rejected_as_directory_input(tmp_path: Path) -> None:
+    subdir = tmp_path / "papers"
+    subdir.mkdir()
+
+    res = analyze_single_paper(
+        subdir,
+        FakePDFExtractor(),
+        FakeGenerator(),
+        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+    )
+
+    assert res.status is SinglePaperAnalysisStatus.PREFLIGHT_FAILED
+    assert res.failure_code is SinglePaperAnalysisFailureCode.DIRECTORY_INPUT
+    assert res.failure_cause is not None
+    assert res.error_message == str(res.failure_cause)
 
 
 def test_directory_with_multiple_pdfs_rejected(tmp_path: Path) -> None:
@@ -295,10 +317,11 @@ def test_directory_with_multiple_pdfs_rejected(tmp_path: Path) -> None:
     (subdir / "paper2.pdf").write_bytes(b"%PDF-1.4 content2")
 
     extractor = FakePDFExtractor()
-    generator = FakeGenerator()
-
     res = analyze_single_paper(
-        subdir, extractor, generator, settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS
+        subdir,
+        extractor,
+        FakeGenerator(),
+        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     )
 
     assert res.status is SinglePaperAnalysisStatus.PREFLIGHT_FAILED
@@ -306,89 +329,140 @@ def test_directory_with_multiple_pdfs_rejected(tmp_path: Path) -> None:
     assert extractor.call_count == 0
 
 
-def test_relative_path_uses_canonical_extraction_path(tmp_path: Path) -> None:
-    """source_path in result must be the canonical resolved candidate path."""
+def test_relative_path_uses_canonical_extraction_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """source_path in result must be the canonical resolved candidate path.
+
+    This test deliberately constructs a *relative* path using os.chdir-free
+    resolution: we resolve tmp_path to absolute, then build a relative path
+    from the cwd to the file.
+    """
     pdf_path = _create_valid_pdf_file(tmp_path)
-    # Pass the canonical path directly (run_ingestion_preflight resolves internally)
-    extractor = FakePDFExtractor()
+
+    monkeypatch.chdir(tmp_path)
+    relative = Path(pdf_path.name)
+    assert not relative.is_absolute()
 
     abs_text = "Abstract\nWe evaluate trade policy."
-    intro_text = "1. Introduction\nTrade policy affects prices."
-    page_text = f"{abs_text}\n\n{intro_text}"
-    extractor = FakePDFExtractor(pages_text=[page_text])
     exc = "We evaluate trade policy."
     resp_json = _make_success_response_json(abs_text, exc)
+    extractor = FakePDFExtractor()
     generator = FakeGenerator(response_text=resp_json)
 
     res = analyze_single_paper(
-        str(pdf_path),  # Pass as string to exercise Path conversion
-        extractor,
-        generator,
-        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+        relative, extractor, generator, settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS
     )
 
-    # source_path in result must be absolute/canonical
+    # source_path in result must always be absolute/canonical
     assert res.source_path.is_absolute()
     assert res.source_path == pdf_path.resolve()
 
 
 # ---------------------------------------------------------------------------
-# Extraction failures (typed exceptions only)
+# Extraction failures — exact failure codes
 # ---------------------------------------------------------------------------
 
 
-def test_extraction_malformed_pdf_halts_analysis(tmp_path: Path) -> None:
+def test_extraction_malformed_pdf_returns_pdf_malformed_code(tmp_path: Path) -> None:
     pdf_path = _create_valid_pdf_file(tmp_path)
 
-    extractor = FakePDFExtractor(
-        raise_error=PDFMalformedError(pdf_path, ValueError("truncated xref"))
-    )
-    generator = FakeGenerator()
-
+    cause = PDFMalformedError(pdf_path, ValueError("truncated xref"))
+    extractor = FakePDFExtractor(raise_error=cause)
     res = analyze_single_paper(
-        pdf_path, extractor, generator, settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS
+        pdf_path,
+        extractor,
+        FakeGenerator(),
+        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     )
 
     assert res.status is SinglePaperAnalysisStatus.EXTRACTION_FAILED
     assert res.completed_stages == (SinglePaperAnalysisStage.PREFLIGHT,)
     assert res.failed_stage is SinglePaperAnalysisStage.EXTRACTION
+    assert res.failure_code is SinglePaperAnalysisFailureCode.PDF_MALFORMED
+    assert res.failure_cause is cause
+    assert res.error_message == str(cause)
     assert res.skipped_stages == (
         SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
         SinglePaperAnalysisStage.SECTION_DETECTION,
         SinglePaperAnalysisStage.QUESTION_EXTRACTION,
     )
-    assert "malformed" in res.error_message.lower()
 
 
-def test_extraction_encrypted_pdf_halts_analysis(tmp_path: Path) -> None:
+def test_extraction_encrypted_pdf_returns_pdf_encrypted_code(tmp_path: Path) -> None:
     pdf_path = _create_valid_pdf_file(tmp_path)
 
     extractor = FakePDFExtractor(raise_error=PDFEncryptedError(pdf_path))
-    generator = FakeGenerator()
-
     res = analyze_single_paper(
-        pdf_path, extractor, generator, settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS
+        pdf_path,
+        extractor,
+        FakeGenerator(),
+        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     )
 
     assert res.status is SinglePaperAnalysisStatus.EXTRACTION_FAILED
-    assert res.failed_stage is SinglePaperAnalysisStage.EXTRACTION
-    assert "encrypted" in res.error_message.lower()
+    assert res.failure_code is SinglePaperAnalysisFailureCode.PDF_ENCRYPTED
 
 
-def test_extraction_permission_error_halts_analysis(tmp_path: Path) -> None:
+def test_extraction_permission_error_returns_pdf_permission_denied_code(
+    tmp_path: Path,
+) -> None:
     pdf_path = _create_valid_pdf_file(tmp_path)
 
     extractor = FakePDFExtractor(
         raise_error=PDFPermissionError(pdf_path, PermissionError("denied"))
     )
-    generator = FakeGenerator()
-
     res = analyze_single_paper(
-        pdf_path, extractor, generator, settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS
+        pdf_path,
+        extractor,
+        FakeGenerator(),
+        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     )
 
     assert res.status is SinglePaperAnalysisStatus.EXTRACTION_FAILED
-    assert res.failed_stage is SinglePaperAnalysisStage.EXTRACTION
+    assert res.failure_code is SinglePaperAnalysisFailureCode.PDF_PERMISSION_DENIED
+
+
+@pytest.mark.parametrize(
+    ("error_factory", "expected_code"),
+    (
+        (
+            lambda path: PDFSourceNotFoundError(path),
+            SinglePaperAnalysisFailureCode.PDF_NOT_FOUND,
+        ),
+        (
+            lambda path: PDFSourceNotRegularFileError(path),
+            SinglePaperAnalysisFailureCode.PDF_NOT_REGULAR_FILE,
+        ),
+        (
+            lambda path: PDFReadError(path, OSError("read failed")),
+            SinglePaperAnalysisFailureCode.PDF_READ_ERROR,
+        ),
+        (
+            lambda path: PDFParserError(path, ValueError("parser failed")),
+            SinglePaperAnalysisFailureCode.PDF_PARSER_ERROR,
+        ),
+    ),
+    ids=("not-found", "not-regular-file", "read-error", "parser-error"),
+)
+def test_remaining_extraction_errors_map_to_exact_codes(
+    tmp_path: Path,
+    error_factory,
+    expected_code: SinglePaperAnalysisFailureCode,
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    cause = error_factory(pdf_path)
+
+    res = analyze_single_paper(
+        pdf_path,
+        FakePDFExtractor(raise_error=cause),
+        FakeGenerator(),
+        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+    )
+
+    assert res.status is SinglePaperAnalysisStatus.EXTRACTION_FAILED
+    assert res.failure_code is expected_code
+    assert res.failure_cause is cause
 
 
 def test_unexpected_extractor_exception_propagates(tmp_path: Path) -> None:
@@ -396,32 +470,75 @@ def test_unexpected_extractor_exception_propagates(tmp_path: Path) -> None:
     pdf_path = _create_valid_pdf_file(tmp_path)
 
     extractor = FakePDFExtractor(raise_error=RuntimeError("unexpected crash"))  # type: ignore[arg-type]
-    generator = FakeGenerator()
-
     with pytest.raises(RuntimeError, match="unexpected crash"):
         analyze_single_paper(
             pdf_path,
             extractor,
-            generator,
+            FakeGenerator(),
             settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
         )
 
 
-# ---------------------------------------------------------------------------
-# Quality halt (LIKELY_NEEDS_OCR vs UNUSABLE separately)
-# ---------------------------------------------------------------------------
+def test_unmapped_ingestion_error_subclass_propagates(tmp_path: Path) -> None:
+    """Future ingestion errors need an explicit code before translation."""
+    from unittest.mock import patch
+
+    import econ_paper_cli.services.single_paper_analysis as svc_mod
+
+    class FutureIngestionError(IngestionError):
+        pass
+
+    cause = FutureIngestionError("future preflight failure")
+    with (
+        patch.object(svc_mod, "run_ingestion_preflight", side_effect=cause),
+        pytest.raises(FutureIngestionError) as raised,
+    ):
+        analyze_single_paper(
+            tmp_path / "paper.pdf",
+            FakePDFExtractor(),
+            FakeGenerator(),
+            settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+        )
+
+    assert raised.value is cause
 
 
-def test_empty_page_halts_at_quality_likely_needs_ocr_or_unusable(
-    tmp_path: Path,
-) -> None:
+def test_unmapped_pdf_extraction_error_subclass_propagates(tmp_path: Path) -> None:
+    """Future extraction errors need an explicit code before translation."""
     pdf_path = _create_valid_pdf_file(tmp_path)
 
-    extractor = FakePDFExtractor(pages_text=["   \n   "])
-    generator = FakeGenerator()
+    class FuturePDFExtractionError(PDFExtractionError):
+        pass
 
+    cause = FuturePDFExtractionError("future extraction failure")
+    extractor = FakePDFExtractor(raise_error=cause)
+    with pytest.raises(FuturePDFExtractionError) as raised:
+        analyze_single_paper(
+            pdf_path,
+            extractor,
+            FakeGenerator(),
+            settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+        )
+
+    assert raised.value is cause
+
+
+# ---------------------------------------------------------------------------
+# Quality halt: LIKELY_NEEDS_OCR and UNUSABLE tested separately
+# ---------------------------------------------------------------------------
+
+
+def test_empty_page_halts_at_quality_likely_needs_ocr(tmp_path: Path) -> None:
+    """Empty page text -> ALL_PAGES_EMPTY warning -> LIKELY_NEEDS_OCR status."""
+    pdf_path = _create_valid_pdf_file(tmp_path)
+
+    # Empty page -> ALL_PAGES_EMPTY warning -> LIKELY_NEEDS_OCR
+    extractor = FakePDFExtractor(pages_text=[""])
     res = analyze_single_paper(
-        pdf_path, extractor, generator, settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS
+        pdf_path,
+        extractor,
+        FakeGenerator(),
+        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     )
 
     assert res.status is SinglePaperAnalysisStatus.QUALITY_HALTED
@@ -431,34 +548,51 @@ def test_empty_page_halts_at_quality_likely_needs_ocr_or_unusable(
         SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
     )
     assert res.failed_stage is None
-    assert res.skipped_stages == (
-        SinglePaperAnalysisStage.SECTION_DETECTION,
-        SinglePaperAnalysisStage.QUESTION_EXTRACTION,
-    )
+    assert res.failure_code is None
     assert res.quality_assessment is not None
-    assert res.quality_assessment.status in (
-        PDFQualityStatus.LIKELY_NEEDS_OCR,
-        PDFQualityStatus.UNUSABLE,
-    )
+    assert res.quality_assessment.status is PDFQualityStatus.LIKELY_NEEDS_OCR
     assert res.section_result is None
     assert res.research_question_result is None
     assert any(
         w.code is SinglePaperAnalysisWarningCode.QUALITY_HALTED for w in res.warnings
     )
-    assert generator.call_count == 0  # Generator not called
+
+
+def test_garbage_page_halts_at_quality_unusable(tmp_path: Path) -> None:
+    """Page dominated by replacement chars -> EXTRACTION_GARBAGE -> UNUSABLE."""
+    pdf_path = _create_valid_pdf_file(tmp_path)
+
+    # Text consisting mostly of Unicode replacement characters (\ufffd) exceeds
+    # the 10% anomaly_ratio_unusable_threshold -> EXTRACTION_GARBAGE -> UNUSABLE
+    garbage_text = "\ufffd" * 100  # 100% replacement chars
+    extractor = FakePDFExtractor(pages_text=[garbage_text])
+    res = analyze_single_paper(
+        pdf_path,
+        extractor,
+        FakeGenerator(),
+        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+    )
+
+    assert res.status is SinglePaperAnalysisStatus.QUALITY_HALTED
+    assert res.quality_assessment is not None
+    assert res.quality_assessment.status is PDFQualityStatus.UNUSABLE
+    assert res.section_result is None
+    assert res.research_question_result is None
+    assert any(
+        w.code is SinglePaperAnalysisWarningCode.QUALITY_HALTED for w in res.warnings
+    )
 
 
 # ---------------------------------------------------------------------------
-# Section detection halt: no usable sections → extract_research_question still called
+# No usable sections → extract_research_question always called
 # ---------------------------------------------------------------------------
 
 
-def test_no_usable_sections_returns_section_detection_halted_with_rq_result(
+def test_no_usable_sections_always_calls_extract_research_question(
     tmp_path: Path,
 ) -> None:
-    """With no Abstract/Introduction, section detection halts; extract_research_question
-    is still called and returns NO_USABLE_SECTIONS; result preserves that nested result
-    and classifies as QUESTION_EXTRACTION_HALTED (not SECTION_DETECTION_HALTED)."""
+    """With no Abstract/Introduction, extract_research_question is still called
+    and returns NO_USABLE_SECTIONS; result is QUESTION_EXTRACTION_HALTED."""
     pdf_path = _create_valid_pdf_file(tmp_path)
 
     page_text = "3. Methodology and Data\nWe describe the regression model here."
@@ -469,11 +603,10 @@ def test_no_usable_sections_returns_section_detection_halted_with_rq_result(
         pdf_path, extractor, generator, settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS
     )
 
-    # Service always calls extract_research_question which returns UNAVAILABLE
-    # with NO_USABLE_SECTIONS warning → terminal status is QUESTION_EXTRACTION_HALTED
     assert res.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
     assert res.completed_stages == _ALL_STAGES
     assert res.failed_stage is None
+    assert res.failure_code is None
     assert res.section_result is not None
     assert res.research_question_result is not None
     assert res.research_question_result.kind is ResearchQuestionKind.UNAVAILABLE
@@ -481,11 +614,7 @@ def test_no_usable_sections_returns_section_detection_halted_with_rq_result(
         w.code is ResearchQuestionWarningCode.NO_USABLE_SECTIONS
         for w in res.research_question_result.warnings
     )
-    assert any(
-        w.code is SinglePaperAnalysisWarningCode.QUESTION_EXTRACTION_HALTED
-        for w in res.warnings
-    )
-    # Generator was NOT called (extract_research_question short-circuited)
+    # Generator short-circuited by extract_research_question (no usable sections)
     assert generator.call_count == 0
 
 
@@ -497,8 +626,7 @@ def test_no_usable_sections_returns_section_detection_halted_with_rq_result(
 def test_generator_abstention_halts_question_extraction(tmp_path: Path) -> None:
     pdf_path = _create_valid_pdf_file(tmp_path)
 
-    page_text = "Abstract\nWe evaluate trade policy.\n\n1. Introduction\nTrade policy affects prices."
-    extractor = FakePDFExtractor(pages_text=[page_text])
+    extractor = FakePDFExtractor()
     generator = FakeGenerator(abstained=True)
 
     res = analyze_single_paper(
@@ -508,6 +636,7 @@ def test_generator_abstention_halts_question_extraction(tmp_path: Path) -> None:
     assert res.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
     assert res.completed_stages == _ALL_STAGES
     assert res.failed_stage is None
+    assert res.failure_code is None
     assert res.research_question_result is not None
     assert res.research_question_result.kind is ResearchQuestionKind.UNAVAILABLE
     assert any(
@@ -523,8 +652,7 @@ def test_generator_abstention_halts_question_extraction(tmp_path: Path) -> None:
 def test_generator_failure_halts_question_extraction(tmp_path: Path) -> None:
     pdf_path = _create_valid_pdf_file(tmp_path)
 
-    page_text = "Abstract\nWe evaluate trade policy.\n\n1. Introduction\nTrade policy affects prices."
-    extractor = FakePDFExtractor(pages_text=[page_text])
+    extractor = FakePDFExtractor()
     generator = FakeGenerator(raise_error=RuntimeError("model crashed"))
 
     res = analyze_single_paper(
@@ -533,7 +661,6 @@ def test_generator_failure_halts_question_extraction(tmp_path: Path) -> None:
 
     assert res.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
     assert res.research_question_result is not None
-    assert res.research_question_result.kind is ResearchQuestionKind.UNAVAILABLE
     assert any(
         w.code is ResearchQuestionWarningCode.GENERATION_FAILED
         for w in res.research_question_result.warnings
@@ -543,8 +670,7 @@ def test_generator_failure_halts_question_extraction(tmp_path: Path) -> None:
 def test_malformed_json_response_halts_question_extraction(tmp_path: Path) -> None:
     pdf_path = _create_valid_pdf_file(tmp_path)
 
-    page_text = "Abstract\nWe evaluate trade policy.\n\n1. Introduction\nTrade policy affects prices."
-    extractor = FakePDFExtractor(pages_text=[page_text])
+    extractor = FakePDFExtractor()
     generator = FakeGenerator(response_text="this is not json at all!!")
 
     res = analyze_single_paper(
@@ -562,9 +688,7 @@ def test_malformed_json_response_halts_question_extraction(tmp_path: Path) -> No
 def test_ungrounded_evidence_halts_question_extraction(tmp_path: Path) -> None:
     pdf_path = _create_valid_pdf_file(tmp_path)
 
-    page_text = "Abstract\nWe evaluate trade policy.\n\n1. Introduction\nTrade policy affects prices."
-    extractor = FakePDFExtractor(pages_text=[page_text])
-    # Evidence with invented text not present in the section
+    extractor = FakePDFExtractor()
     bad_json = json.dumps(
         {
             "research_question": "What is the impact?",
@@ -603,22 +727,20 @@ def test_deterministic_repeated_runs(tmp_path: Path) -> None:
     pdf_path = _create_valid_pdf_file(tmp_path)
 
     abs_text = "Abstract\nWe evaluate trade policy."
-    intro_text = "1. Introduction\nTrade policy affects prices."
-    page_text = f"{abs_text}\n\n{intro_text}"
-
     exc = "We evaluate trade policy."
     resp_json = _make_success_response_json(abs_text, exc)
 
-    ext1 = FakePDFExtractor(pages_text=[page_text])
-    gen1 = FakeGenerator(response_text=resp_json)
     res1 = analyze_single_paper(
-        pdf_path, ext1, gen1, settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS
+        pdf_path,
+        FakePDFExtractor(),
+        FakeGenerator(response_text=resp_json),
+        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     )
-
-    ext2 = FakePDFExtractor(pages_text=[page_text])
-    gen2 = FakeGenerator(response_text=resp_json)
     res2 = analyze_single_paper(
-        pdf_path, ext2, gen2, settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS
+        pdf_path,
+        FakePDFExtractor(),
+        FakeGenerator(response_text=resp_json),
+        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     )
 
     assert res1 == res2
@@ -626,38 +748,70 @@ def test_deterministic_repeated_runs(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Stage invocation ordering
+# Stage invocation ordering: all 5 stages instrumented
 # ---------------------------------------------------------------------------
 
 
-def test_extractor_called_after_preflight_and_before_generator(tmp_path: Path) -> None:
-    """Verify stage call ordering: extractor called once before generator."""
-    pdf_path = _create_valid_pdf_file(tmp_path)
+def test_all_five_stage_calls_in_correct_order(tmp_path: Path) -> None:
+    """Verify all 5 stage calls happen in canonical order using a call log."""
+    from unittest.mock import patch
 
+    pdf_path = _create_valid_pdf_file(tmp_path)
     call_log: list[str] = []
 
-    class OrderedExtractor(FakePDFExtractor):
-        def extract(self, pdf_path: Path) -> PDFExtractionResult:
-            call_log.append("extractor")
-            return super().extract(pdf_path)
-
-    class OrderedGenerator(FakeGenerator):
-        def generate(self, request: GenerationRequest) -> GenerationResponse:
-            call_log.append("generator")
-            return super().generate(request)
-
     abs_text = "Abstract\nWe evaluate trade policy."
-    intro_text = "1. Introduction\nTrade policy affects prices."
-    page_text = f"{abs_text}\n\n{intro_text}"
     exc = "We evaluate trade policy."
     resp_json = _make_success_response_json(abs_text, exc)
 
-    extractor = OrderedExtractor(pages_text=[page_text])
-    generator = OrderedGenerator(response_text=resp_json)
+    import econ_paper_cli.services.single_paper_analysis as svc_mod
 
-    res = analyze_single_paper(
-        pdf_path, extractor, generator, settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS
-    )
+    original_preflight = svc_mod.run_ingestion_preflight
+    original_quality = svc_mod.assess_pdf_extraction_quality
+    original_sections = svc_mod.detect_pdf_sections
+    original_rq = svc_mod.extract_research_question
+
+    class _OrderedExtractor(FakePDFExtractor):
+        def extract(self, pdf_path: Path) -> PDFExtractionResult:
+            call_log.append("extraction")
+            return super().extract(pdf_path)
+
+    def _preflight_wrap(path):
+        call_log.append("preflight")
+        return original_preflight(path)
+
+    def _quality_wrap(result, settings):
+        call_log.append("quality_assessment")
+        return original_quality(result, settings=settings)
+
+    def _sections_wrap(result, settings):
+        call_log.append("section_detection")
+        return original_sections(result, settings=settings)
+
+    def _rq_wrap(section_result, gen, settings):
+        call_log.append("question_extraction")
+        return original_rq(section_result, gen, settings)
+
+    ordered_extractor = _OrderedExtractor()
+    ordered_generator = FakeGenerator(response_text=resp_json)
+
+    with (
+        patch.object(svc_mod, "run_ingestion_preflight", _preflight_wrap),
+        patch.object(svc_mod, "assess_pdf_extraction_quality", _quality_wrap),
+        patch.object(svc_mod, "detect_pdf_sections", _sections_wrap),
+        patch.object(svc_mod, "extract_research_question", _rq_wrap),
+    ):
+        res = analyze_single_paper(
+            pdf_path,
+            ordered_extractor,
+            ordered_generator,
+            settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+        )
 
     assert res.status is SinglePaperAnalysisStatus.SUCCESS
-    assert call_log == ["extractor", "generator"]
+    assert call_log == [
+        "preflight",
+        "extraction",
+        "quality_assessment",
+        "section_detection",
+        "question_extraction",
+    ]

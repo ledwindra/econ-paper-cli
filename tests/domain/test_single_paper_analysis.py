@@ -24,6 +24,7 @@ from econ_paper_cli.domain import (
     ResearchQuestionEvidence,
     ResearchQuestionKind,
     ResearchQuestionResult,
+    SinglePaperAnalysisFailureCode,
     SinglePaperAnalysisResult,
     SinglePaperAnalysisSettings,
     SinglePaperAnalysisStage,
@@ -32,6 +33,8 @@ from econ_paper_cli.domain import (
     SinglePaperAnalysisWarning,
     SinglePaperAnalysisWarningCode,
 )
+from econ_paper_cli.domain.errors import IngestionPathNotFoundError
+from econ_paper_cli.protocols.pdf_extraction import PDFMalformedError
 
 
 def _make_preflight(path: Path) -> IngestionPreflightResult:
@@ -179,6 +182,7 @@ def test_single_paper_analysis_result_success_validation(tmp_path: Path) -> None
         completed_stages=tuple(SinglePaperAnalysisStage),
         failed_stage=None,
         skipped_stages=(),
+        failure_code=None,
         preflight_result=preflight,
         extraction_result=extraction,
         quality_assessment=quality,
@@ -191,10 +195,13 @@ def test_single_paper_analysis_result_success_validation(tmp_path: Path) -> None
     assert res.status is SinglePaperAnalysisStatus.SUCCESS
     assert res.completed_stages == tuple(SinglePaperAnalysisStage)
     assert res.failed_stage is None
+    assert res.failure_code is None
     assert res.skipped_stages == ()
 
 
-def test_preflight_failed_result_uses_failed_stage(tmp_path: Path) -> None:
+def test_preflight_failed_result_uses_failed_stage_and_failure_code(
+    tmp_path: Path,
+) -> None:
     pdf_path = tmp_path / "paper.pdf"
 
     res = SinglePaperAnalysisResult(
@@ -210,6 +217,7 @@ def test_preflight_failed_result_uses_failed_stage(tmp_path: Path) -> None:
             SinglePaperAnalysisStage.SECTION_DETECTION,
             SinglePaperAnalysisStage.QUESTION_EXTRACTION,
         ),
+        failure_code=SinglePaperAnalysisFailureCode.PATH_NOT_FOUND,
         preflight_result=None,
         extraction_result=None,
         quality_assessment=None,
@@ -217,18 +225,23 @@ def test_preflight_failed_result_uses_failed_stage(tmp_path: Path) -> None:
         research_question_result=None,
         warnings=(),
         error_message="File not found.",
+        failure_cause=IngestionPathNotFoundError("File not found."),
     )
 
     assert res.status is SinglePaperAnalysisStatus.PREFLIGHT_FAILED
     assert res.completed_stages == ()
     assert res.failed_stage is SinglePaperAnalysisStage.PREFLIGHT
+    assert res.failure_code is SinglePaperAnalysisFailureCode.PATH_NOT_FOUND
     assert SinglePaperAnalysisStage.EXTRACTION in res.skipped_stages
 
 
-def test_extraction_failed_result_uses_failed_stage(tmp_path: Path) -> None:
+def test_extraction_failed_result_uses_failed_stage_and_failure_code(
+    tmp_path: Path,
+) -> None:
     pdf_path = tmp_path / "paper.pdf"
     preflight = _make_preflight(pdf_path)
 
+    cause = PDFMalformedError(pdf_path, ValueError("Corrupted PDF"))
     res = SinglePaperAnalysisResult(
         policy_version="single-paper-analysis-v1",
         source_path=pdf_path,
@@ -241,37 +254,42 @@ def test_extraction_failed_result_uses_failed_stage(tmp_path: Path) -> None:
             SinglePaperAnalysisStage.SECTION_DETECTION,
             SinglePaperAnalysisStage.QUESTION_EXTRACTION,
         ),
+        failure_code=SinglePaperAnalysisFailureCode.PDF_MALFORMED,
         preflight_result=preflight,
         extraction_result=None,
         quality_assessment=None,
         section_result=None,
         research_question_result=None,
         warnings=(),
-        error_message="Corrupted PDF.",
+        error_message=str(cause),
+        failure_cause=cause,
     )
 
     assert res.completed_stages == (SinglePaperAnalysisStage.PREFLIGHT,)
     assert res.failed_stage is SinglePaperAnalysisStage.EXTRACTION
+    assert res.failure_code is SinglePaperAnalysisFailureCode.PDF_MALFORMED
     assert SinglePaperAnalysisStage.QUALITY_ASSESSMENT in res.skipped_stages
 
 
-def test_wrong_failed_stage_rejected(tmp_path: Path) -> None:
+def test_wrong_failure_code_for_status_rejected(tmp_path: Path) -> None:
     pdf_path = tmp_path / "paper.pdf"
 
-    with pytest.raises(SinglePaperAnalysisValidationError, match="failed_stage"):
+    # PDF extraction code is not valid for PREFLIGHT_FAILED
+    with pytest.raises(SinglePaperAnalysisValidationError, match="failure_code"):
         SinglePaperAnalysisResult(
             policy_version="single-paper-analysis-v1",
             source_path=pdf_path,
             checksum=None,
             status=SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
             completed_stages=(),
-            failed_stage=SinglePaperAnalysisStage.EXTRACTION,  # Wrong!
+            failed_stage=SinglePaperAnalysisStage.PREFLIGHT,
             skipped_stages=(
                 SinglePaperAnalysisStage.EXTRACTION,
                 SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
                 SinglePaperAnalysisStage.SECTION_DETECTION,
                 SinglePaperAnalysisStage.QUESTION_EXTRACTION,
             ),
+            failure_code=SinglePaperAnalysisFailureCode.PDF_MALFORMED,  # Wrong!
             preflight_result=None,
             extraction_result=None,
             quality_assessment=None,
@@ -279,6 +297,98 @@ def test_wrong_failed_stage_rejected(tmp_path: Path) -> None:
             research_question_result=None,
             warnings=(),
             error_message="Error",
+            failure_cause=IngestionPathNotFoundError("Error"),
+        )
+
+
+def test_failure_code_required_for_failure_statuses(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "paper.pdf"
+
+    with pytest.raises(
+        SinglePaperAnalysisValidationError, match="failure_code is required"
+    ):
+        SinglePaperAnalysisResult(
+            policy_version="single-paper-analysis-v1",
+            source_path=pdf_path,
+            checksum=None,
+            status=SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
+            completed_stages=(),
+            failed_stage=SinglePaperAnalysisStage.PREFLIGHT,
+            skipped_stages=(
+                SinglePaperAnalysisStage.EXTRACTION,
+                SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
+                SinglePaperAnalysisStage.SECTION_DETECTION,
+                SinglePaperAnalysisStage.QUESTION_EXTRACTION,
+            ),
+            failure_code=None,  # Missing!
+            preflight_result=None,
+            extraction_result=None,
+            quality_assessment=None,
+            section_result=None,
+            research_question_result=None,
+            warnings=(),
+            error_message="Error",
+        )
+
+
+def test_failure_code_forbidden_for_success(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "paper.pdf"
+    preflight = _make_preflight(pdf_path)
+    extraction = _make_extraction(pdf_path)
+    quality = _make_quality()
+
+    span = PDFSectionSpan(
+        page_number=1, start_character_offset=0, end_character_offset=26
+    )
+    sec = PDFSection(
+        kind=PDFSectionKind.ABSTRACT,
+        heading_text="Abstract",
+        start_page_number=1,
+        end_page_number=1,
+        spans=(span,),
+        text="Abstract\nWe study tariffs.",
+    )
+    sec_res = PDFSectionDetectionResult(
+        policy_version="pdf-section-detection-v1",
+        sections=(sec,),
+        candidates=(),
+        warnings=(PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION),),
+    )
+    ev = ResearchQuestionEvidence(
+        section_kind=PDFSectionKind.ABSTRACT,
+        excerpt_text="We study tariffs.",
+        page_number=1,
+        start_character_offset=9,
+        end_character_offset=26,
+    )
+    rq_res = ResearchQuestionResult(
+        policy_version="research-question-extraction-v1",
+        question_text="What is the impact of tariffs?",
+        kind=ResearchQuestionKind.EXPLICIT,
+        sections_used=(PDFSectionKind.ABSTRACT,),
+        evidence=(ev,),
+        warnings=(),
+    )
+
+    with pytest.raises(
+        SinglePaperAnalysisValidationError, match="failure_code must be None"
+    ):
+        SinglePaperAnalysisResult(
+            policy_version="single-paper-analysis-v1",
+            source_path=pdf_path,
+            checksum="a" * 64,
+            status=SinglePaperAnalysisStatus.SUCCESS,
+            completed_stages=tuple(SinglePaperAnalysisStage),
+            failed_stage=None,
+            skipped_stages=(),
+            failure_code=SinglePaperAnalysisFailureCode.PDF_ENCRYPTED,  # Forbidden!
+            preflight_result=preflight,
+            extraction_result=extraction,
+            quality_assessment=quality,
+            section_result=sec_res,
+            research_question_result=rq_res,
+            warnings=(),
+            error_message=None,
         )
 
 
@@ -296,6 +406,7 @@ def test_invalid_stage_sequence_rejected(tmp_path: Path) -> None:
             completed_stages=(),
             failed_stage=SinglePaperAnalysisStage.PREFLIGHT,
             skipped_stages=(),  # Missing 4 stages!
+            failure_code=SinglePaperAnalysisFailureCode.PATH_NOT_FOUND,
             preflight_result=None,
             extraction_result=None,
             quality_assessment=None,
@@ -303,4 +414,5 @@ def test_invalid_stage_sequence_rejected(tmp_path: Path) -> None:
             research_question_result=None,
             warnings=(),
             error_message="Error",
+            failure_cause=IngestionPathNotFoundError("Error"),
         )

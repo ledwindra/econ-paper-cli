@@ -1,6 +1,6 @@
 """Immutable domain contracts for single-paper research-question analysis."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
@@ -43,24 +43,49 @@ class SinglePaperAnalysisStatus(str, Enum):
     PREFLIGHT_FAILED = "preflight_failed"
     EXTRACTION_FAILED = "extraction_failed"
     QUALITY_HALTED = "quality_halted"
-    SECTION_DETECTION_HALTED = "section_detection_halted"
     QUESTION_EXTRACTION_HALTED = "question_extraction_halted"
+
+
+class SinglePaperAnalysisFailureCode(str, Enum):
+    """Stable, typed failure codes for single-paper analysis orchestration.
+
+    Each code maps deterministically to a specific ``IngestionError`` or
+    ``PDFExtractionError`` subclass, or to a structural contract violation
+    detected by the service (e.g. directory input, multi-candidate batch).
+    Codes are set only when ``status`` is ``PREFLIGHT_FAILED`` or
+    ``EXTRACTION_FAILED``; all other statuses leave ``failure_code=None``.
+    """
+
+    # Preflight failure codes
+    PATH_NOT_FOUND = "path_not_found"
+    PATH_INVALID = "path_invalid"
+    UNSUPPORTED_FILE_TYPE = "unsupported_file_type"
+    DIRECTORY_INPUT = "directory_input"
+    MULTI_CANDIDATE_BATCH = "multi_candidate_batch"
+    PREFLIGHT_PERMISSION_DENIED = "preflight_permission_denied"
+    PREFLIGHT_READ_ERROR = "preflight_read_error"
+
+    # Extraction failure codes
+    PDF_NOT_FOUND = "pdf_not_found"
+    PDF_NOT_REGULAR_FILE = "pdf_not_regular_file"
+    PDF_PERMISSION_DENIED = "pdf_permission_denied"
+    PDF_READ_ERROR = "pdf_read_error"
+    PDF_MALFORMED = "pdf_malformed"
+    PDF_ENCRYPTED = "pdf_encrypted"
+    PDF_PARSER_ERROR = "pdf_parser_error"
 
 
 class SinglePaperAnalysisWarningCode(str, Enum):
     """Stable warning identifiers for single-paper analysis orchestration."""
 
     QUALITY_HALTED = "quality_halted"
-    SECTION_DETECTION_HALTED = "section_detection_halted"
     QUESTION_EXTRACTION_HALTED = "question_extraction_halted"
 
 
 _WARNING_MESSAGES = {
     SinglePaperAnalysisWarningCode.QUALITY_HALTED: (
-        "Extraction quality was poor or unusable. Downstream section detection and generation were skipped."
-    ),
-    SinglePaperAnalysisWarningCode.SECTION_DETECTION_HALTED: (
-        "No usable Abstract or Introduction section was detected. Research question extraction was skipped."
+        "Extraction quality was poor or unusable. "
+        "Downstream section detection and generation were skipped."
     ),
     SinglePaperAnalysisWarningCode.QUESTION_EXTRACTION_HALTED: (
         "Research question extraction could not yield an evidence-backed question."
@@ -77,9 +102,7 @@ _CANONICAL_SINGLE_PAPER_SETTINGS: dict[str, dict[str, object]] = {
 # Canonical stage sequence
 _ALL_STAGES = tuple(SinglePaperAnalysisStage)
 
-# Stage sequences for each non-success terminal status.
-# completed_stages must contain only *successfully completed* stages.
-# The failed stage is the last stage attempted (for failure statuses).
+# Expected completed_stages per status (only successfully completed stages).
 _STATUS_COMPLETED: dict[
     SinglePaperAnalysisStatus, tuple[SinglePaperAnalysisStage, ...]
 ] = {
@@ -90,26 +113,58 @@ _STATUS_COMPLETED: dict[
         SinglePaperAnalysisStage.EXTRACTION,
         SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
     ),
-    SinglePaperAnalysisStatus.SECTION_DETECTION_HALTED: (
-        SinglePaperAnalysisStage.PREFLIGHT,
-        SinglePaperAnalysisStage.EXTRACTION,
-        SinglePaperAnalysisStage.QUALITY_ASSESSMENT,
-        SinglePaperAnalysisStage.SECTION_DETECTION,
-    ),
     SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED: _ALL_STAGES,
     SinglePaperAnalysisStatus.SUCCESS: _ALL_STAGES,
 }
 
+# Expected failed_stage per status (None for halt/success statuses).
 _STATUS_FAILED_STAGE: dict[
     SinglePaperAnalysisStatus, SinglePaperAnalysisStage | None
 ] = {
     SinglePaperAnalysisStatus.PREFLIGHT_FAILED: SinglePaperAnalysisStage.PREFLIGHT,
     SinglePaperAnalysisStatus.EXTRACTION_FAILED: SinglePaperAnalysisStage.EXTRACTION,
     SinglePaperAnalysisStatus.QUALITY_HALTED: None,
-    SinglePaperAnalysisStatus.SECTION_DETECTION_HALTED: None,
     SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED: None,
     SinglePaperAnalysisStatus.SUCCESS: None,
 }
+
+# Statuses that require a failure_code.
+_FAILURE_CODE_STATUSES = frozenset(
+    {
+        SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
+        SinglePaperAnalysisStatus.EXTRACTION_FAILED,
+    }
+)
+
+# Valid failure_code values per status.
+_PREFLIGHT_FAILURE_CODES = frozenset(
+    {
+        SinglePaperAnalysisFailureCode.PATH_NOT_FOUND,
+        SinglePaperAnalysisFailureCode.PATH_INVALID,
+        SinglePaperAnalysisFailureCode.UNSUPPORTED_FILE_TYPE,
+        SinglePaperAnalysisFailureCode.DIRECTORY_INPUT,
+        SinglePaperAnalysisFailureCode.MULTI_CANDIDATE_BATCH,
+        SinglePaperAnalysisFailureCode.PREFLIGHT_PERMISSION_DENIED,
+        SinglePaperAnalysisFailureCode.PREFLIGHT_READ_ERROR,
+    }
+)
+_EXTRACTION_FAILURE_CODES = frozenset(
+    {
+        SinglePaperAnalysisFailureCode.PDF_NOT_FOUND,
+        SinglePaperAnalysisFailureCode.PDF_NOT_REGULAR_FILE,
+        SinglePaperAnalysisFailureCode.PDF_PERMISSION_DENIED,
+        SinglePaperAnalysisFailureCode.PDF_READ_ERROR,
+        SinglePaperAnalysisFailureCode.PDF_MALFORMED,
+        SinglePaperAnalysisFailureCode.PDF_ENCRYPTED,
+        SinglePaperAnalysisFailureCode.PDF_PARSER_ERROR,
+    }
+)
+
+# A multi-candidate result is a structural guard produced by the orchestrator,
+# rather than a caught stage exception, so it has no failure_cause.
+_CAUSELESS_FAILURE_CODES = frozenset(
+    {SinglePaperAnalysisFailureCode.MULTI_CANDIDATE_BATCH}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,13 +231,16 @@ class SinglePaperAnalysisResult:
 
     Stage outcome semantics:
     - ``completed_stages``: stages that executed and *succeeded*.
-    - ``failed_stage``: the stage that failed (not None for PREFLIGHT_FAILED and
-      EXTRACTION_FAILED; None for halt/success statuses).
-    - ``skipped_stages``: stages that were not attempted because a prior stage
-      failed or halted.
+    - ``failed_stage``: the stage that failed (set for ``PREFLIGHT_FAILED`` and
+      ``EXTRACTION_FAILED``; ``None`` for halt/success statuses).
+    - ``skipped_stages``: stages not attempted because a prior stage failed/halted.
+    - ``failure_code``: stable typed code identifying the exact failure reason
+      (set for ``PREFLIGHT_FAILED`` and ``EXTRACTION_FAILED``; ``None`` otherwise).
+    - ``failure_cause``: the original caught typed exception, where applicable;
+      structural guards without an exception have no cause.
 
-    The union ``completed_stages + ((failed_stage,) if failed_stage else ()) +
-    skipped_stages`` must equal the canonical stage tuple in order.
+    Invariant: ``completed_stages + ((failed_stage,) if failed_stage else ()) +
+    skipped_stages`` equals the canonical stage tuple in order.
     """
 
     policy_version: str
@@ -192,6 +250,7 @@ class SinglePaperAnalysisResult:
     completed_stages: tuple[SinglePaperAnalysisStage, ...]
     failed_stage: SinglePaperAnalysisStage | None
     skipped_stages: tuple[SinglePaperAnalysisStage, ...]
+    failure_code: SinglePaperAnalysisFailureCode | None
     preflight_result: IngestionPreflightResult | None
     extraction_result: PDFExtractionResult | None
     quality_assessment: PDFExtractionQualityAssessment | None
@@ -199,8 +258,11 @@ class SinglePaperAnalysisResult:
     research_question_result: ResearchQuestionResult | None
     warnings: tuple[SinglePaperAnalysisWarning, ...]
     error_message: str | None
+    # Exception equality is identity-based. Excluding the retained cause keeps
+    # repeated equivalent workflow results structurally comparable.
+    failure_cause: Exception | None = field(default=None, compare=False)
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # noqa: C901
         _validate_nonempty_text("policy_version", self.policy_version)
         if self.policy_version not in _CANONICAL_SINGLE_PAPER_SETTINGS:
             raise SinglePaperAnalysisValidationError(
@@ -234,6 +296,12 @@ class SinglePaperAnalysisResult:
             raise SinglePaperAnalysisValidationError(
                 "skipped_stages must be a tuple of SinglePaperAnalysisStage instances."
             )
+        if self.failure_code is not None and not isinstance(
+            self.failure_code, SinglePaperAnalysisFailureCode
+        ):
+            raise SinglePaperAnalysisValidationError(
+                "failure_code must be a SinglePaperAnalysisFailureCode instance or None."
+            )
         if not isinstance(self.warnings, tuple) or not all(
             isinstance(w, SinglePaperAnalysisWarning) for w in self.warnings
         ):
@@ -242,6 +310,12 @@ class SinglePaperAnalysisResult:
             )
         if self.error_message is not None:
             _validate_nonempty_text("error_message", self.error_message)
+        if self.failure_cause is not None and not isinstance(
+            self.failure_cause, Exception
+        ):
+            raise SinglePaperAnalysisValidationError(
+                "failure_cause must be an Exception instance or None."
+            )
 
         # Stage combination & sequence checks
         combined: tuple[SinglePaperAnalysisStage, ...]
@@ -271,6 +345,54 @@ class SinglePaperAnalysisResult:
             raise SinglePaperAnalysisValidationError(
                 f"completed_stages {self.completed_stages!r} does not match expected "
                 f"{expected_completed!r} for status {self.status.value}."
+            )
+
+        # failure_code is required for failure statuses, forbidden otherwise
+        if self.status in _FAILURE_CODE_STATUSES:
+            if self.failure_code is None:
+                raise SinglePaperAnalysisValidationError(
+                    f"failure_code is required for status {self.status.value}."
+                )
+            if self.status is SinglePaperAnalysisStatus.PREFLIGHT_FAILED:
+                if self.failure_code not in _PREFLIGHT_FAILURE_CODES:
+                    raise SinglePaperAnalysisValidationError(
+                        f"failure_code {self.failure_code!r} is not valid for PREFLIGHT_FAILED."
+                    )
+            elif self.status is SinglePaperAnalysisStatus.EXTRACTION_FAILED:
+                if self.failure_code not in _EXTRACTION_FAILURE_CODES:
+                    raise SinglePaperAnalysisValidationError(
+                        f"failure_code {self.failure_code!r} is not valid for EXTRACTION_FAILED."
+                    )
+        else:
+            if self.failure_code is not None:
+                raise SinglePaperAnalysisValidationError(
+                    f"failure_code must be None for status {self.status.value}."
+                )
+
+        if self.failure_code in _CAUSELESS_FAILURE_CODES:
+            if self.failure_cause is not None:
+                raise SinglePaperAnalysisValidationError(
+                    f"failure code {self.failure_code.value} must not have a failure_cause."
+                )
+        elif self.failure_code is SinglePaperAnalysisFailureCode.DIRECTORY_INPUT:
+            if self.failure_cause is not None and self.error_message != str(
+                self.failure_cause
+            ):
+                raise SinglePaperAnalysisValidationError(
+                    "error_message must preserve the failure_cause message."
+                )
+        elif self.status in _FAILURE_CODE_STATUSES:
+            if self.failure_cause is None:
+                raise SinglePaperAnalysisValidationError(
+                    f"failure_cause is required for failure code {self.failure_code.value}."
+                )
+            if self.error_message != str(self.failure_cause):
+                raise SinglePaperAnalysisValidationError(
+                    "error_message must preserve the failure_cause message."
+                )
+        elif self.failure_cause is not None:
+            raise SinglePaperAnalysisValidationError(
+                f"failure_cause must be None for status {self.status.value}."
             )
 
         # Status-specific field invariants
@@ -341,16 +463,6 @@ class SinglePaperAnalysisResult:
             ):
                 raise SinglePaperAnalysisValidationError(
                     "QUALITY_HALTED status requires LIKELY_NEEDS_OCR or UNUSABLE quality assessment."
-                )
-
-        elif self.status is SinglePaperAnalysisStatus.SECTION_DETECTION_HALTED:
-            if self.research_question_result is not None:
-                raise SinglePaperAnalysisValidationError(
-                    "SECTION_DETECTION_HALTED status must have None for research_question_result."
-                )
-            if self.section_result is None:
-                raise SinglePaperAnalysisValidationError(
-                    "SECTION_DETECTION_HALTED status requires section_result."
                 )
 
         elif self.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED:

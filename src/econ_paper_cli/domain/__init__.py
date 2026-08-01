@@ -73,6 +73,7 @@ from econ_paper_cli.domain.research_question import (
 )
 from econ_paper_cli.domain.single_paper_analysis import (
     DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+    SinglePaperAnalysisFailureCode,
     SinglePaperAnalysisResult,
     SinglePaperAnalysisSettings,
     SinglePaperAnalysisStage,
@@ -148,6 +149,7 @@ __all__ = [
     "ResearchQuestionWarning",
     "ResearchQuestionWarningCode",
     "DEFAULT_RESEARCH_QUESTION_SETTINGS",
+    "SinglePaperAnalysisFailureCode",
     "SinglePaperAnalysisResult",
     "SinglePaperAnalysisSettings",
     "SinglePaperAnalysisStage",
