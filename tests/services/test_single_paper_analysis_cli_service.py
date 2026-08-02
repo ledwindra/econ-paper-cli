@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from econ_paper_cli.adapters.llama_cpp import LlamaCppReadinessError
+from econ_paper_cli.adapters.llama_cpp import ProcessResult
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.domain import (
     PDFDocumentMetadata,
@@ -687,12 +687,38 @@ def test_invalid_model_checksum_returns_code_2(
     assert "Configuration or readiness error:" in err
 
 
-def test_runtime_readiness_failure_returns_code_2(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(
+    "process_result_kwargs,expected_err_fragment",
+    [
+        # Case 1: subprocess exits with non-zero returncode
+        (
+            {"returncode": 1, "stdout": "", "stderr": "runtime crashed"},
+            "Configured llama.cpp executable failed its version readiness check.",
+        ),
+        # Case 2: subprocess exits with zero but version marker is absent from output
+        (
+            {"returncode": 0, "stdout": "wrong-version-string", "stderr": ""},
+            "Configured llama.cpp executable does not match the expected runtime version marker.",
+        ),
+    ],
+)
+def test_runtime_readiness_subprocess_boundary_returns_code_2(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    process_result_kwargs: dict,
+    expected_err_fragment: str,
 ) -> None:
+    """Verify the real check_readiness() path: valid artifacts reach the subprocess
+    boundary; a nonzero result or missing version marker returns code 2 without traceback.
+    """
+
     pdf_path = _create_valid_pdf_file(tmp_path)
     exe_file = tmp_path / "llama-cli"
     exe_file.write_bytes(b"dummy_exe_bytes")
+    # Make executable so platform X_OK check passes on POSIX
+    exe_file.chmod(exe_file.stat().st_mode | 0o111)
+
     model_content = b"dummy_model_bytes"
     model_file = tmp_path / "model.gguf"
     model_file.write_bytes(model_content)
@@ -708,21 +734,35 @@ def test_runtime_readiness_failure_returns_code_2(
         db_path=tmp_path / "readiness_test.db",
     )
 
-    def failing_check_readiness(self_gen: object) -> None:
-        raise LlamaCppReadinessError("Runtime executable exited with non-zero status.")
+    captured_commands: list[tuple[str, ...]] = []
+
+    def fake_run(
+        self_runner: object,
+        command: tuple[str, ...],
+        *,
+        timeout_seconds: float,
+        max_output_bytes: int,
+        cancellation_requested: object,
+        environment: object,
+    ) -> ProcessResult:
+        captured_commands.append(tuple(command))
+        return ProcessResult(**process_result_kwargs)
 
     monkeypatch.setattr(
-        "econ_paper_cli.adapters.llama_cpp.LlamaCppGenerator.check_readiness",
-        failing_check_readiness,
+        "econ_paper_cli.adapters.llama_cpp.SubprocessRunner.run",
+        fake_run,
     )
 
-    assert (
-        run_single_paper_analysis_command(opts, extractor=FakePDFExtractor())
-        == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
-    )
+    exit_code = run_single_paper_analysis_command(opts, extractor=FakePDFExtractor())
+
+    assert exit_code == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
     err = capsys.readouterr().err
     assert "Configuration or readiness error:" in err
-    assert "Runtime executable exited with non-zero status." in err
+    assert expected_err_fragment in err
+
+    # Assert the exact subprocess command the generator constructed
+    assert len(captured_commands) == 1
+    assert captured_commands[0] == (str(exe_file), "--version", "--offline")
 
 
 def test_command_execution_uses_default_db_path(
