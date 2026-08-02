@@ -647,3 +647,79 @@ def test_status_reports_corrupt_when_configured_identity_disagrees_with_receipt(
     assert report.runtime_origin is RuntimeOrigin.UNKNOWN
     assert report.runtime_state is RuntimeState.CORRUPT_OR_MISMATCHED
     assert report.runtime_error is not None
+
+
+def test_status_never_reclassifies_symlinked_managed_executable_as_external(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #58 review: replacing a managed executable with a symlink to an
+    outside file must not let managed-origin discovery lose the managed
+    location and take the external-runtime branch, skipping managed
+    verification entirely. Even with a readiness checker that succeeds
+    (as a real outside executable reporting the expected marker would),
+    this must report corrupt/mismatched, never EXTERNAL/VERIFIED."""
+    import os
+
+    runtime_dir = tmp_path / "runtime"
+    monkeypatch.setenv("ECONPAPERS_RUNTIME_DIR", str(runtime_dir))
+    executable_path, receipt = _install_managed_runtime(tmp_path, runtime_dir)
+    _patch_manifest_to_match_receipt(monkeypatch, receipt)
+
+    outside_executable = tmp_path / "outside" / "llama-completion"
+    outside_executable.parent.mkdir(parents=True)
+    outside_executable.write_bytes(b"fake")  # same bytes: checksum would match
+    executable_path.unlink()
+    os.symlink(outside_executable, executable_path)
+
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(_config(executable_path=executable_path))
+    storage = SQLiteStorage(str(tmp_path / "missing.db"), read_only=True)
+
+    report = execute_status_command(
+        StatusCommandOptions(),
+        config_backend=config_backend,
+        storage=storage,
+        runtime_readiness_checker=_ok_runtime_checker,
+        model_readiness_checker=_ok_model_checker,
+    )
+
+    assert report.runtime_origin is RuntimeOrigin.UNKNOWN
+    assert report.runtime_state is RuntimeState.CORRUPT_OR_MISMATCHED
+    assert report.runtime_origin is not RuntimeOrigin.EXTERNAL
+    assert report.runtime_state is not RuntimeState.VERIFIED
+
+
+def test_status_rejects_symlinked_managed_install_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A symlinked install *root* under the managed runtime directory must
+    also be rejected: promotion only ever creates a real directory, so
+    reading a receipt through a symlinked root would validate whatever it
+    points at instead of the managed install."""
+    import os
+
+    runtime_dir = tmp_path / "runtime"
+    monkeypatch.setenv("ECONPAPERS_RUNTIME_DIR", str(runtime_dir))
+    staged_root = tmp_path / "elsewhere"
+    executable_path, receipt = _install_managed_runtime(tmp_path, staged_root)
+    _patch_manifest_to_match_receipt(monkeypatch, receipt)
+
+    real_install_dir = executable_path.parent
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    symlinked_root = runtime_dir / real_install_dir.name
+    os.symlink(real_install_dir, symlinked_root)
+
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(_config(executable_path=symlinked_root / "llama-completion"))
+    storage = SQLiteStorage(str(tmp_path / "missing.db"), read_only=True)
+
+    report = execute_status_command(
+        StatusCommandOptions(),
+        config_backend=config_backend,
+        storage=storage,
+        runtime_readiness_checker=_ok_runtime_checker,
+        model_readiness_checker=_ok_model_checker,
+    )
+
+    assert report.runtime_origin is RuntimeOrigin.UNKNOWN
+    assert report.runtime_state is RuntimeState.CORRUPT_OR_MISMATCHED

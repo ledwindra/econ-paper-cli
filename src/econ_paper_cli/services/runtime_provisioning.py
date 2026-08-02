@@ -303,7 +303,18 @@ def verify_managed_install(
     artifact. A directory merely sitting under the runtime root, or a
     receipt that is merely internally self-consistent, is never treated as
     verified without both checks passing.
+
+    The install directory itself must also be a real directory, never a
+    symlink: promotion only ever creates a real directory, so a symlinked
+    install root is tampering, and reading a receipt through it would
+    validate whatever it points at instead of the managed install.
     """
+    if install_dir.is_symlink():
+        raise CorruptManagedInstallError(
+            f"Managed install root '{install_dir}' is a symlink, which a "
+            "legitimate install never produces."
+        )
+
     receipt_path = install_dir / _RECEIPT_FILENAME
     try:
         raw_text = receipt_path.read_text(encoding="utf-8")
@@ -446,19 +457,50 @@ def locate_managed_install_root(
     callers combine it with ``verify_managed_install`` to classify a
     configured executable as verified-managed vs. corrupt-managed vs.
     external (outside ``runtime_dir`` entirely).
+
+    Containment is decided from the executable's *lexical* location, never
+    from where symlinks along that path happen to point. Fully resolving
+    the path first would let a managed executable replaced by a symlink to
+    an outside file escape the managed root entirely, so callers would take
+    the external-runtime branch and skip managed verification — silently
+    reclassifying a tampered managed install as a valid external runtime.
+    A symlink found at a managed location is a tamper signal for
+    ``verify_managed_install`` to reject, not a reason to stop treating the
+    install as managed.
     """
+    candidate_executables = _containment_candidates(executable_path)
+    candidate_roots = _containment_candidates(runtime_dir)
+
+    for candidate_root in candidate_roots:
+        for candidate_executable in candidate_executables:
+            try:
+                relative = candidate_executable.relative_to(candidate_root)
+            except ValueError:
+                continue
+            if not relative.parts:
+                continue
+            return candidate_root / relative.parts[0]
+    return None
+
+
+def _containment_candidates(path: Path) -> tuple[Path, ...]:
+    """Return the path spellings to test for managed-root containment.
+
+    Includes the purely lexical absolute path (no symlink following at all)
+    and, when it differs, the variant with only the *parent* directories
+    resolved — the latter absorbs benign platform canonicalization (macOS
+    ``/var`` -> ``/private/var``, Windows short names) without ever
+    following a symlink at the final component.
+    """
+    lexical = Path(os.path.abspath(path))
+    candidates = [lexical]
     try:
-        resolved_executable = executable_path.resolve()
-        resolved_runtime_dir = runtime_dir.resolve()
+        parent_resolved = path.parent.resolve() / path.name
     except OSError:
-        return None
-    try:
-        relative = resolved_executable.relative_to(resolved_runtime_dir)
-    except ValueError:
-        return None
-    if not relative.parts:
-        return None
-    return resolved_runtime_dir / relative.parts[0]
+        return tuple(candidates)
+    if parent_resolved != lexical:
+        candidates.append(parent_resolved)
+    return tuple(candidates)
 
 
 def _install_result(
