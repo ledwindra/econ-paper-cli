@@ -9,10 +9,11 @@ here; the library snapshot is fixed for the life of the process.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
 from typing import TextIO
 
 from econ_paper_cli.adapters.bm25 import BM25Retriever
@@ -26,6 +27,7 @@ from econ_paper_cli.adapters.llama_cpp import (
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.domain import Corpus
 from econ_paper_cli.domain.corpora import CorpusValidationError
+from econ_paper_cli.domain.early_section_library import EarlySectionLibraryRecord
 from econ_paper_cli.domain.errors import CitationValidationError
 from econ_paper_cli.protocols import (
     GenerationRequest,
@@ -84,7 +86,8 @@ class ShellTurnOutcome(str, Enum):
     ANSWERED = "answered"
     NO_MATCHES = "no_matches"
     ABSTAINED = "abstained"
-    FAILED = "failed"
+    TYPED_FAILURE = "typed_failure"
+    INTERNAL_FAILURE = "internal_failure"
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,13 +125,18 @@ class SessionSnapshot:
     """Immutable, restart-safe snapshot of the durable library for one session.
 
     Fixed for the life of the process: papers analyzed after the session
-    opens become visible only after restarting ``econpapers``.
+    opens become visible only after restarting ``econpapers``. This
+    includes ``early_section_records``, the exact citation/provenance data
+    used to render citations — turns resolve citations from this in-memory
+    mapping, never from a live re-read of storage, so a concurrent
+    ``analyze``/``update`` cannot change or break a citation mid-session.
     """
 
     db_path: Path
     paper_count: int
     passage_count: int
     corpus: Corpus | None
+    early_section_records: Mapping[str, EarlySectionLibraryRecord]
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,9 +196,14 @@ class InteractiveShellSession:
         """Whether a generator has already been constructed this session."""
         return self._cached_generator is not None
 
+    def close(self) -> None:
+        """Close the session-owned storage connection deterministically."""
+        self._storage.close()
+
     def ask(self, question: str) -> ShellTurnResult:
         """Answer one independent question against the fixed session snapshot."""
         normalized = question.strip()
+        generator_action: str | None = None
         try:
             if self._retriever is None:
                 return ShellTurnResult(
@@ -233,8 +246,13 @@ class InteractiveShellSession:
                     generator_action=generator_action,
                 )
 
+            if self.snapshot.corpus is None:
+                raise ShellSessionError("No corpus is available to resolve citations.")
             cited = _resolve_citations(
-                self._storage, self.snapshot.corpus, evidence, response
+                self.snapshot.early_section_records.get,
+                self.snapshot.corpus,
+                evidence,
+                response,
             )
             return ShellTurnResult(
                 question=normalized,
@@ -252,14 +270,16 @@ class InteractiveShellSession:
         ) as error:
             return ShellTurnResult(
                 question=normalized,
-                outcome=ShellTurnOutcome.FAILED,
+                outcome=ShellTurnOutcome.TYPED_FAILURE,
                 error_message=str(error),
+                generator_action=generator_action,
             )
         except (LlamaCppReadinessError, StorageConnectionError, ConfigError) as error:
             return ShellTurnResult(
                 question=normalized,
-                outcome=ShellTurnOutcome.FAILED,
+                outcome=ShellTurnOutcome.TYPED_FAILURE,
                 error_message=str(error),
+                generator_action=generator_action,
             )
         except (
             CorpusValidationError,
@@ -273,20 +293,23 @@ class InteractiveShellSession:
         ) as error:
             return ShellTurnResult(
                 question=normalized,
-                outcome=ShellTurnOutcome.FAILED,
+                outcome=ShellTurnOutcome.INTERNAL_FAILURE,
                 error_message=str(error),
+                generator_action=generator_action,
             )
         except (ShellSessionError, StorageError) as error:
             return ShellTurnResult(
                 question=normalized,
-                outcome=ShellTurnOutcome.FAILED,
+                outcome=ShellTurnOutcome.INTERNAL_FAILURE,
                 error_message=str(error),
+                generator_action=generator_action,
             )
         except Exception as error:
             return ShellTurnResult(
                 question=normalized,
-                outcome=ShellTurnOutcome.FAILED,
+                outcome=ShellTurnOutcome.INTERNAL_FAILURE,
                 error_message=str(error),
+                generator_action=generator_action,
             )
 
 
@@ -343,12 +366,24 @@ def open_shell_session(
         # An empty library has no valid Corpus to construct (Corpus requires
         # at least one paper); questions short-circuit to NO_MATCHES instead.
         corpus = storage_backend.load_corpus() if paper_count > 0 else None
+        # Loaded once, here, into the immutable snapshot: every later turn
+        # resolves citations from this fixed mapping, never a live re-read,
+        # so a concurrent analyze/update cannot change or break a citation
+        # mid-session.
+        early_section_records = MappingProxyType(
+            {
+                record.paper.paper_id: record
+                for record in storage_backend.list_early_section_records()
+            }
+        )
     except StorageConnectionError as error:
+        storage_backend.close()
         return ShellStartupFailure(
             exit_code=ShellExitCode.TYPED_FAILURE_OR_CONFIG_ERROR,
             error_message=str(error),
         )
     except (CorpusValidationError, StorageValidationError, StorageError) as error:
+        storage_backend.close()
         return ShellStartupFailure(
             exit_code=ShellExitCode.UNEXPECTED_ERROR, error_message=str(error)
         )
@@ -358,6 +393,7 @@ def open_shell_session(
         paper_count=paper_count,
         passage_count=passage_count,
         corpus=corpus,
+        early_section_records=early_section_records,
     )
 
     provider = generator_provider or (
@@ -495,34 +531,40 @@ def run_interactive_shell(
 
     out.write(format_shell_banner(session.snapshot) + "\n")
 
-    while True:
-        out.write(SHELL_PROMPT)
-        out.flush()
-        try:
-            line = in_.readline()
-        except KeyboardInterrupt:
-            out.write("\n")
-            return ShellExitCode.INTERRUPTED
+    try:
+        while True:
+            out.write(SHELL_PROMPT)
+            out.flush()
+            try:
+                line = in_.readline()
+            except KeyboardInterrupt:
+                out.write("\n")
+                return ShellExitCode.INTERRUPTED
 
-        if line == "":
-            out.write("\n")
-            return ShellExitCode.SUCCESS
+            if line == "":
+                out.write("\n")
+                return ShellExitCode.SUCCESS
 
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped in ("/exit", "/quit"):
-            return ShellExitCode.SUCCESS
-        if stripped == "/help":
-            out.write(format_shell_help() + "\n")
-            continue
-        if stripped == "/status":
-            out.write(format_shell_status(session) + "\n")
-            continue
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped in ("/exit", "/quit"):
+                return ShellExitCode.SUCCESS
+            if stripped == "/help":
+                out.write(format_shell_help() + "\n")
+                continue
+            if stripped == "/status":
+                out.write(format_shell_status(session) + "\n")
+                continue
 
-        result = session.ask(stripped)
-        rendered = format_shell_turn_output(result)
-        if result.outcome is ShellTurnOutcome.FAILED:
-            err.write(rendered + "\n")
-        else:
-            out.write(rendered + "\n")
+            result = session.ask(stripped)
+            rendered = format_shell_turn_output(result)
+            if result.outcome in (
+                ShellTurnOutcome.TYPED_FAILURE,
+                ShellTurnOutcome.INTERNAL_FAILURE,
+            ):
+                err.write(rendered + "\n")
+            else:
+                out.write(rendered + "\n")
+    finally:
+        session.close()

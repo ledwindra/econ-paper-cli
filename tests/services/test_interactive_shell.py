@@ -275,7 +275,8 @@ def test_failed_construction_does_not_poison_session_for_later_questions(
     )
 
     first = session.ask("trade policy")
-    assert first.outcome is ShellTurnOutcome.FAILED
+    assert first.outcome is ShellTurnOutcome.INTERNAL_FAILURE
+    assert first.generator_action is None
     assert session.generator_ready is False
 
     second = session.ask("trade policy")
@@ -375,11 +376,83 @@ def test_typed_generator_failure_renders_error_and_session_continues(
     )
 
     failed = session.ask("trade policy")
-    assert failed.outcome is ShellTurnOutcome.FAILED
+    assert failed.outcome is ShellTurnOutcome.TYPED_FAILURE
     assert failed.error_message is not None
+    assert failed.generator_action is None
 
     recovered = session.ask("trade policy")
     assert recovered.outcome is ShellTurnOutcome.ANSWERED
+
+
+def test_typed_failure_after_cached_generator_reuse_preserves_generator_action(
+    tmp_path: Path,
+) -> None:
+    """A typed failure that happens *after* a cached generator was reused
+    must still report generator_action == "reused", not discard it."""
+    from econ_paper_cli.adapters.llama_cpp import LlamaCppReadinessError
+
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(_record(tmp_path))
+
+    class FlakyAfterFirstCallGenerator(Generator):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(self, request: GenerationRequest) -> GenerationResponse:
+            self.calls += 1
+            if self.calls == 1:
+                return GenerationResponse(
+                    answer_text="First answer.",
+                    citations=tuple(
+                        Citation(
+                            citation_id=f"e{item.rank}",
+                            paper_id=item.passage.paper_id,
+                            passage_id=item.passage.passage_id,
+                        )
+                        for item in request.evidence
+                    ),
+                    generation_method="fake-generator",
+                    abstained=False,
+                    abstention_reason=None,
+                    finding_kinds=(FindingKind.DESCRIPTIVE,),
+                )
+            raise LlamaCppReadinessError("model became unready")
+
+    generator = FlakyAfterFirstCallGenerator()
+    session = open_shell_session(
+        ShellCommandOptions(), storage=storage, generator_provider=lambda: generator
+    )
+
+    first = session.ask("trade policy")
+    assert first.outcome is ShellTurnOutcome.ANSWERED
+    assert first.generator_action == "constructed"
+
+    second = session.ask("trade policy")
+    assert second.outcome is ShellTurnOutcome.TYPED_FAILURE
+    assert second.generator_action == "reused"
+
+
+def test_internal_failure_after_generator_construction_preserves_generator_action(
+    tmp_path: Path,
+) -> None:
+    """An internal (unexpected) failure right after constructing a fresh
+    generator must still report generator_action == "constructed"."""
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(_record(tmp_path))
+
+    class BoomAfterConstructionGenerator(Generator):
+        def generate(self, request: GenerationRequest) -> GenerationResponse:
+            raise RuntimeError("boom after construction")
+
+    session = open_shell_session(
+        ShellCommandOptions(),
+        storage=storage,
+        generator_provider=lambda: BoomAfterConstructionGenerator(),
+    )
+
+    result = session.ask("trade policy")
+    assert result.outcome is ShellTurnOutcome.INTERNAL_FAILURE
+    assert result.generator_action == "constructed"
 
 
 def test_malformed_model_output_renders_error_and_session_continues(
@@ -405,7 +478,10 @@ def test_malformed_model_output_renders_error_and_session_continues(
         generator_provider=lambda: MalformedGenerator(),
     )
     failed = session.ask("trade policy")
-    assert failed.outcome is ShellTurnOutcome.FAILED
+    # GenerationResponseValidationError subclasses ValueError, so it is a
+    # typed failure here, matching one-shot chat's exit_code=2 for the same
+    # error (see test_chat_cli_service.py's citation-validation coverage).
+    assert failed.outcome is ShellTurnOutcome.TYPED_FAILURE
 
     good_generator = AnsweringGenerator()
     session2 = open_shell_session(
@@ -444,7 +520,9 @@ def test_citation_validation_failure_renders_error(tmp_path: Path) -> None:
         generator_provider=lambda: InvalidCitationGenerator(),
     )
     result = session.ask("trade policy")
-    assert result.outcome is ShellTurnOutcome.FAILED
+    # CitationValidationError subclasses ValueError, so it is a typed
+    # failure, matching one-shot chat's exit_code=2 for the same error.
+    assert result.outcome is ShellTurnOutcome.TYPED_FAILURE
 
 
 def test_unexpected_generator_exception_renders_error_and_continues(
@@ -463,7 +541,7 @@ def test_unexpected_generator_exception_renders_error_and_continues(
         generator_provider=lambda: BoomGenerator(),
     )
     result = session.ask("trade policy")
-    assert result.outcome is ShellTurnOutcome.FAILED
+    assert result.outcome is ShellTurnOutcome.INTERNAL_FAILURE
     assert "boom" in (result.error_message or "")
 
 
@@ -503,6 +581,65 @@ def test_citation_rendering_matches_one_shot_chat_formatter(tmp_path: Path) -> N
     chat_citation_block = chat_rendered.split("--- Citations ---\n", 1)[1]
     shell_citation_block = shell_rendered.split("--- Citations ---\n", 1)[1]
     assert chat_citation_block == shell_citation_block
+
+
+# --- Snapshot immutability against concurrent writes ----------------------
+
+
+def test_later_write_to_same_paper_is_invisible_to_open_session_citations(
+    tmp_path: Path,
+) -> None:
+    """A write landing after the session opened (same paper_id, changed
+    title) must not change what an open session cites: citation resolution
+    reads the immutable session snapshot, never a live re-read of storage."""
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(_record(tmp_path, title="Original Title"))
+    generator = AnsweringGenerator()
+
+    session = open_shell_session(
+        ShellCommandOptions(), storage=storage, generator_provider=lambda: generator
+    )
+
+    # A concurrent write changes the paper's title in durable storage after
+    # the session snapshot was already built.
+    storage.save_early_section_record(_record(tmp_path, title="Updated Title"))
+    assert (
+        storage.get_early_section_record(_record(tmp_path).paper.paper_id).paper.title
+        == "Updated Title"
+    )
+
+    result = session.ask("trade policy")
+    assert result.outcome is ShellTurnOutcome.ANSWERED
+    assert len(result.citations) > 0
+    assert all(detail.paper_title == "Original Title" for detail in result.citations)
+
+
+def test_session_storage_closed_deterministically_on_repl_exit(
+    tmp_path: Path,
+) -> None:
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(_record(tmp_path))
+    close_calls = 0
+    real_close = storage.close
+
+    def tracking_close() -> None:
+        nonlocal close_calls
+        close_calls += 1
+        real_close()
+
+    storage.close = tracking_close  # type: ignore[method-assign]
+
+    exit_code = run_interactive_shell(
+        ShellCommandOptions(),
+        storage=storage,
+        generator_provider=lambda: AnsweringGenerator(),
+        stdin=_scripted_lines("/exit"),
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert exit_code == ShellExitCode.SUCCESS
+    assert close_calls == 1
 
 
 # --- Full REPL loop -------------------------------------------------------

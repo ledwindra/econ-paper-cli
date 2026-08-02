@@ -22,6 +22,7 @@ from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.adapters.storage_paths import get_default_db_path
 from econ_paper_cli.domain import Corpus, RetrievalEvidence
 from econ_paper_cli.domain.corpora import CorpusValidationError
+from econ_paper_cli.domain.early_section_library import EarlySectionLibraryRecord
 from econ_paper_cli.domain.errors import CitationValidationError
 from econ_paper_cli.protocols import (
     GenerationRequest,
@@ -250,7 +251,9 @@ def execute_chat_command(
                 generation_method=response.generation_method,
             )
 
-        cited = _resolve_citations(storage_backend, corpus, evidence, response)
+        cited = _resolve_citations(
+            storage_backend.get_early_section_record, corpus, evidence, response
+        )
         return ChatCommandResult(
             outcome=ChatTerminalOutcome.ANSWERED,
             exit_code=0,
@@ -460,18 +463,25 @@ def _build_llama_cpp_generator(
 
 
 def _resolve_citations(
-    storage: StorageBackend,
+    record_lookup: Callable[[str], EarlySectionLibraryRecord | None],
     corpus: Corpus,
     evidence: tuple[RetrievalEvidence, ...],
     response: GenerationResponse,
 ) -> tuple[ChatCitationDetail, ...]:
+    """Resolve citation detail from an early-section record lookup.
+
+    Callers pass either a live storage read (one-shot ``chat``) or a fixed
+    in-memory snapshot mapping (the interactive shell), so both stay
+    byte-for-byte identical in rendering while the shell never re-reads live
+    storage per turn.
+    """
     paper_by_id = {paper.paper_id: paper for paper in corpus.papers}
     evidence_by_id = {f"e{item.rank}": item for item in evidence}
     details: list[ChatCitationDetail] = []
 
     for citation in response.citations:
         evidence_item = evidence_by_id[citation.citation_id]
-        record = storage.get_early_section_record(evidence_item.passage.paper_id)
+        record = record_lookup(evidence_item.passage.paper_id)
         if record is None:
             raise StorageValidationError(
                 f"Missing early-section record for paper_id '{evidence_item.passage.paper_id}'."
