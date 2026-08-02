@@ -8,6 +8,7 @@ import pytest
 from econ_paper_cli.adapters.config_storage import JSONConfigStorage
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.domain import (
+    DEFAULT_PDF_CONVERSION_SETTINGS,
     Citation,
     EarlySectionLibraryRecord,
     ExtractedPDFPage,
@@ -106,7 +107,7 @@ def _record(
         parser_version="1.0",
     )
     detection = PDFSectionDetectionResult(
-        policy_version="pdf-section-detection-v1",
+        policy_version=DEFAULT_PDF_CONVERSION_SETTINGS.section_policy_version,
         sections=(
             PDFSection(
                 kind=PDFSectionKind.ABSTRACT,

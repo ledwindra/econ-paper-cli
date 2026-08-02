@@ -73,7 +73,11 @@ def _detection(*sections: PDFSection) -> PDFSectionDetectionResult:
         if kind not in kinds
     )
     return PDFSectionDetectionResult(
-        policy_version="pdf-section-detection-v1",
+        # Must agree with DEFAULT_PDF_CONVERSION_SETTINGS.section_policy_version:
+        # conversion now rejects a detection produced under a different
+        # section policy than the conversion settings claim (see
+        # test_rejects_detection_policy_that_disagrees_with_settings).
+        policy_version=DEFAULT_PDF_CONVERSION_SETTINGS.section_policy_version,
         sections=sections,
         candidates=(),
         warnings=warnings,

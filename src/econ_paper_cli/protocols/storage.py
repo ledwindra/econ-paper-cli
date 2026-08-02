@@ -6,6 +6,7 @@ from econ_paper_cli.domain.corpora import Corpus
 from econ_paper_cli.domain.early_section_library import EarlySectionLibraryRecord
 from econ_paper_cli.domain.papers import Paper
 from econ_paper_cli.domain.passages import Passage
+from econ_paper_cli.domain.pdf_conversion import PDFConversionSettings
 from econ_paper_cli.domain.single_paper_analysis import SinglePaperAnalysisRecord
 from econ_paper_cli.domain.storage import PaperRecord
 
@@ -103,9 +104,17 @@ class StorageBackend(Protocol):
         ...
 
     def get_early_section_record(
-        self, paper_id: str
+        self, paper_id: str, settings: PDFConversionSettings | None = None
     ) -> EarlySectionLibraryRecord | None:
-        """Retrieve and strictly validate an early-section record."""
+        """Retrieve and strictly validate an early-section record.
+
+        When ``settings`` is given, a stored record whose settings
+        fingerprint does not match the requested conversion settings is
+        reported as absent (``None``) rather than returned for reuse — this
+        is how a policy bump (conversion *or* section detection) invalidates
+        stale library rows. Application code depends on this parameter, so
+        it is part of the protocol, not an adapter-specific extension.
+        """
         ...
 
     def list_early_section_records(self) -> tuple[EarlySectionLibraryRecord, ...]:

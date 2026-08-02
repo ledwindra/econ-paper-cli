@@ -10,6 +10,7 @@ from econ_paper_cli.adapters import BM25Retriever
 from econ_paper_cli.adapters.config_storage import JSONConfigStorage
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.domain import (
+    DEFAULT_PDF_CONVERSION_SETTINGS,
     Citation,
     EarlySectionLibraryRecord,
     ExtractedPDFPage,
@@ -98,7 +99,7 @@ def _record(
         parser_version="1.0",
     )
     detection = PDFSectionDetectionResult(
-        policy_version="pdf-section-detection-v1",
+        policy_version=DEFAULT_PDF_CONVERSION_SETTINGS.section_policy_version,
         sections=(
             PDFSection(
                 kind=PDFSectionKind.ABSTRACT,
@@ -571,8 +572,11 @@ def test_chat_rejects_invalid_citations(
     db_path = _prepare_chat_database(tmp_path, record)
     before = _database_snapshot(db_path)
     paper_id = record.paper.paper_id
-    passage_1 = record.passages[0].passage_id
-    passage_2 = record.passages[1].passage_id
+    # e1/e2 reach the generator in *retrieval rank* order, which tie-breaks
+    # on ascending passage_id — not in the record's own passage order.
+    # Deriving them from record.passages[0]/[1] would silently depend on the
+    # settings fingerprint, since passage IDs are derived from it.
+    passage_1, passage_2 = sorted(passage.passage_id for passage in record.passages[:2])
 
     if case == "unknown":
         citations = (Citation("e3", paper_id, passage_1),)

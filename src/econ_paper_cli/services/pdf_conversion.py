@@ -52,6 +52,16 @@ def convert_pdf_early_sections(
         raise TypeError("detection must be a PDFSectionDetectionResult instance.")
     if not isinstance(settings, PDFConversionSettings):
         raise TypeError("settings must be a PDFConversionSettings instance.")
+    if detection.policy_version != settings.section_policy_version:
+        # The conversion settings are what get fingerprinted and persisted,
+        # so labelling a v1 detection's output as conversion input v2 (or
+        # vice versa) would store a record under an identity that does not
+        # describe how its text was actually produced.
+        raise PDFConversionValidationError(
+            f"Section detection policy '{detection.policy_version}' does not "
+            f"match the conversion settings' section_policy_version "
+            f"'{settings.section_policy_version}'."
+        )
 
     paper_id = compute_conversion_paper_id(content_checksum)
     fingerprint = compute_conversion_settings_fingerprint(settings)

@@ -38,7 +38,16 @@ def _record(
     timestamp: str = "2026-08-01T12:00:00+00:00",
     max_characters: int = 1200,
     source_path: Path | None = None,
+    section_policy_version: str = "pdf-section-detection-v2",
 ) -> EarlySectionLibraryRecord:
+    """Build a record genuinely produced under ``section_policy_version``.
+
+    The section policy identity flows into both the detection result and the
+    conversion settings, so a "v1 record" really is one the v1 pipeline
+    would have produced — passage identities included. Patching settings
+    onto a v2-derived record afterwards would not be a real v1 record,
+    since passage IDs are derived from the settings fingerprint.
+    """
     text = "First paragraph.\n\nSecond paragraph."
     path = source_path or (Path.cwd().resolve() / "stored.pdf")
     extraction = PDFExtractionResult(
@@ -50,7 +59,7 @@ def _record(
         parser_version="1.0",
     )
     detection = PDFSectionDetectionResult(
-        policy_version="pdf-section-detection-v2",
+        policy_version=section_policy_version,
         sections=(
             PDFSection(
                 kind=PDFSectionKind.INTRODUCTION,
@@ -65,7 +74,10 @@ def _record(
         candidates=(),
         warnings=(PDFSectionWarning(PDFSectionWarningCode.MISSING_ABSTRACT),),
     )
-    settings = PDFConversionSettings(max_passage_characters=max_characters)
+    settings = PDFConversionSettings(
+        max_passage_characters=max_characters,
+        section_policy_version=section_policy_version,
+    )
     conversion = convert_pdf_early_sections(
         extraction, detection, content_checksum=CHECKSUM, settings=settings
     )
@@ -106,34 +118,34 @@ def test_stale_v1_early_section_record_cache_invalidation(tmp_path: Path) -> Non
     storage = SQLiteStorage(database)
     storage.initialize()
 
-    # 1. Construct and save a true v1 early section record
-    v1_settings = PDFConversionSettings(
-        section_policy_version="pdf-section-detection-v1"
+    # 1. Construct and save a record genuinely produced under section
+    #    policy v1 (detection policy and conversion settings both v1, so
+    #    passage identities really are the v1 pipeline's).
+    v1_record = _record(
+        timestamp="2026-08-01T00:00:00Z",
+        section_policy_version="pdf-section-detection-v1",
     )
-    v1_record = _record(timestamp="2026-08-01T00:00:00Z")
-    v1_record = dataclasses.replace(
-        v1_record,
-        conversion_settings=v1_settings,
-        settings_fingerprint=compute_conversion_settings_fingerprint(v1_settings),
-    )
+    v1_settings = v1_record.conversion_settings
     storage.save_early_section_record(v1_record)
 
-    # 2. Querying with requested v2 settings returns None (cache miss)
-    v2_settings = PDFConversionSettings(
-        section_policy_version="pdf-section-detection-v2"
+    # 2. Querying with requested v2 settings returns None (cache miss) —
+    #    section_policy_version is part of the composite fingerprint, so
+    #    v1 and v2 can never collide on one fingerprint.
+    v2_record = _record(
+        timestamp="2026-08-01T00:00:00Z",
+        section_policy_version="pdf-section-detection-v2",
     )
+    v2_settings = v2_record.conversion_settings
+    assert compute_conversion_settings_fingerprint(
+        v1_settings
+    ) != compute_conversion_settings_fingerprint(v2_settings)
     retrieved_v2 = storage.get_early_section_record(
         v1_record.paper.paper_id, settings=v2_settings
     )
     assert retrieved_v2 is None
 
-    # 3. Replace with v2 record
-    v2_record = dataclasses.replace(
-        v1_record,
-        conversion_settings=v2_settings,
-        settings_fingerprint=compute_conversion_settings_fingerprint(v2_settings),
-        updated_at="2026-08-02T12:00:00Z",
-    )
+    # 3. Replace with the v2 record
+    v2_record = dataclasses.replace(v2_record, updated_at="2026-08-02T12:00:00Z")
     storage.save_early_section_record(v2_record)
     storage.close()
 

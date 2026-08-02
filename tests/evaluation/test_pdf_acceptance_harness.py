@@ -30,6 +30,7 @@ from econ_paper_cli.domain import (
     PreflightCandidate,
     SinglePaperAnalysisRecord,
     SinglePaperAnalysisSettings,
+    SinglePaperAnalysisStatus,
 )
 from econ_paper_cli.protocols.generation import (
     AbstentionReason,
@@ -56,8 +57,18 @@ ACCEPTANCE_PAPER_DIR_ENV_VAR = "ECONPAPERS_ACCEPTANCE_PAPER_DIR"
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class BenchmarkCaseManifest:
+    """One approved acceptance case, identified by exact local filename.
+
+    ``filename`` is the exact basename documented on issue #59, not a glob.
+    ``papers/`` holds a large unrelated bulk corpus alongside the six
+    approved files, so loose patterns (``*Regional*.pdf``, ``*trade*.pdf``)
+    match dozens of unrelated papers and would silently benchmark the wrong
+    document. Several approved files also have a ``... (1).pdf`` duplicate
+    copy in that directory, which an exact basename resolves unambiguously.
+    """
+
     case_id: str
-    patterns: tuple[str, ...]
+    filename: str
     expected_abstract_method: PDFSectionDetectionMethod
     expected_intro_method: PDFSectionDetectionMethod
 
@@ -65,37 +76,43 @@ class BenchmarkCaseManifest:
 BENCHMARK_MANIFEST = (
     BenchmarkCaseManifest(
         case_id="case_a",
-        patterns=("1-s2.0-S009411902600001X-main.pdf", "*case_a*.pdf"),
+        filename="1-s2.0-S009411902600001X-main.pdf",
         expected_abstract_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
         expected_intro_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
     ),
     BenchmarkCaseManifest(
         case_id="case_b",
-        patterns=("lbaf056.pdf", "*case_b*.pdf"),
+        filename="lbaf056.pdf",
         expected_abstract_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
         expected_intro_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
     ),
     BenchmarkCaseManifest(
         case_id="case_c",
-        patterns=("*Aspelund*.pdf", "*Russo*.pdf", "*case_c*.pdf"),
+        filename=(
+            "aspelund-russo-2026-additionality-and-asymmetric-information-in-"
+            "environmental-markets-evidence-from-conservation.pdf"
+        ),
         expected_abstract_method=PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER,
         expected_intro_method=PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER,
     ),
     BenchmarkCaseManifest(
         case_id="case_d",
-        patterns=("*Regional*.pdf", "*regional*.pdf", "*case_d*.pdf"),
+        filename=(
+            "Journal of Regional Science - 2026 - Ma - Attracting Top Talent  "
+            "Analyzing Local Policies in China With Economists  CV Data.pdf"
+        ),
         expected_abstract_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
         expected_intro_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
     ),
     BenchmarkCaseManifest(
         case_id="case_e",
-        patterns=("*gravity*.pdf", "*trade*.pdf", "*case_e*.pdf"),
+        filename="Trade  gravity and cross-sectional dependence.pdf",
         expected_abstract_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
         expected_intro_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
     ),
     BenchmarkCaseManifest(
         case_id="case_f",
-        patterns=("427465.pdf", "*case_f*.pdf"),
+        filename="427465.pdf",
         expected_abstract_method=PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER,
         expected_intro_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
     ),
@@ -131,29 +148,55 @@ class DeterministicMockGenerator(Generator):
         )
 
 
+def resolve_benchmark_files(papers_dir: Path) -> dict[str, Path]:
+    """Map each approved case_id to its exact local PDF, or fail hard.
+
+    Resolution is by exact basename and is case-sensitive, so it can never
+    silently pick an unrelated paper out of the surrounding bulk corpus.
+    A missing file, a path that is not a regular file, or two distinct
+    cases resolving to the same file all fail loudly rather than degrading
+    into a partial or misattributed benchmark run.
+    """
+    resolved: dict[str, Path] = {}
+    missing: list[str] = []
+
+    for manifest_entry in BENCHMARK_MANIFEST:
+        target = papers_dir / manifest_entry.filename
+        if not target.is_file():
+            missing.append(f"{manifest_entry.case_id}: '{manifest_entry.filename}'")
+            continue
+        resolved[manifest_entry.case_id] = target
+
+    if missing:
+        pytest.fail(
+            f"Acceptance corpus in '{papers_dir}' is incomplete; missing "
+            f"{len(missing)} approved file(s): {sorted(missing)}."
+        )
+
+    by_path: dict[Path, list[str]] = {}
+    for case_id, path in resolved.items():
+        by_path.setdefault(path.resolve(), []).append(case_id)
+    ambiguous = {
+        str(path): sorted(case_ids)
+        for path, case_ids in by_path.items()
+        if len(case_ids) > 1
+    }
+    if ambiguous:
+        pytest.fail(
+            f"Acceptance corpus in '{papers_dir}' is ambiguous; one file "
+            f"resolves to multiple cases: {ambiguous}."
+        )
+
+    assert len(resolved) == len(BENCHMARK_MANIFEST)
+    return resolved
+
+
 def run_pdf_acceptance_harness(papers_dir: Path, db_dir: Path) -> dict[str, str]:
     """Execute full 6-paper benchmark acceptance suite over a papers directory."""
     if not papers_dir.exists():
         pytest.fail(f"Acceptance papers directory does not exist: {papers_dir}")
 
-    matched_files: dict[str, Path] = {}
-    assigned_files: set[Path] = set()
-
-    for manifest_entry in BENCHMARK_MANIFEST:
-        candidates: list[Path] = []
-        for pattern in manifest_entry.patterns:
-            candidates.extend(papers_dir.glob(pattern))
-
-        unassigned = [c for c in candidates if c not in assigned_files]
-        if not unassigned:
-            pytest.fail(
-                f"Missing benchmark PDF for {manifest_entry.case_id} matching patterns {manifest_entry.patterns} in {papers_dir}"
-            )
-        target = unassigned[0]
-        matched_files[manifest_entry.case_id] = target
-        assigned_files.add(target)
-
-    assert len(matched_files) == 6
+    matched_files = resolve_benchmark_files(papers_dir)
 
     extractor = PyPDFExtractor()
     generator = DeterministicMockGenerator()
@@ -233,7 +276,21 @@ def run_pdf_acceptance_harness(papers_dir: Path, db_dir: Path) -> dict[str, str]
             generator,
             settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
         )
-        assert analysis_result.preflight_result.passed
+        # Research-question extraction is deterministic and model-free, so a
+        # paper whose Abstract/Introduction phrasing yields no extractable
+        # question halts at that stage. That is a legitimate terminal
+        # outcome for this issue's scope; what must never happen is a
+        # preflight or extraction *failure* on an approved corpus file.
+        assert analysis_result.status in (
+            SinglePaperAnalysisStatus.SUCCESS,
+            SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED,
+        ), (
+            f"[{case_id}] analysis failed before question extraction: "
+            f"{analysis_result.status} ({analysis_result.failure_code})"
+        )
+        assert analysis_result.preflight_result is not None
+        assert analysis_result.preflight_result.total_candidate_count == 1
+        assert analysis_result.section_result is not None
         analysis_record = SinglePaperAnalysisRecord.from_result(analysis_result)
         storage.save_single_paper_analysis(analysis_record)
 

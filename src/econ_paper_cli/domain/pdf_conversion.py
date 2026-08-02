@@ -285,13 +285,23 @@ DEFAULT_PDF_CONVERSION_SETTINGS = PDFConversionSettings()
 
 
 def compute_conversion_settings_fingerprint(settings: PDFConversionSettings) -> str:
-    """Return the stable SHA-256 fingerprint of conversion settings."""
+    """Return the stable SHA-256 fingerprint of conversion settings.
+
+    This is the *composite* ingestion identity: it covers every policy whose
+    change alters the stored early-section content, including
+    ``section_policy_version``. Section detection decides which text becomes
+    Abstract/Introduction at all, so a record produced under section policy
+    v1 must not be reused under v2 — omitting it here would let two
+    materially different conversions share one fingerprint and silently
+    survive a policy bump.
+    """
     if not isinstance(settings, PDFConversionSettings):
         raise TypeError("settings must be a PDFConversionSettings instance.")
     canonical = json.dumps(
         {
             "max_passage_characters": settings.max_passage_characters,
             "policy_version": settings.policy_version,
+            "section_policy_version": settings.section_policy_version,
         },
         sort_keys=True,
         separators=(",", ":"),
