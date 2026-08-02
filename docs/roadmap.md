@@ -139,12 +139,14 @@ Completed:
   early-section research-question workflow, with deterministic ordering,
   duplicate-byte suppression, exact durable-record reuse, and isolated
   per-file outcomes
+- Convert detected Abstract and Introduction spans into deterministic,
+  inspectable Markdown and stable passages with exact page-local provenance
 
 Not yet implemented:
 
 - Connect preflight eligibility decisions to extraction orchestration
 - Add supported OCR and connect extraction-quality outcomes to orchestration
-- Generate inspectable Markdown and stable passages with complete provenance
+- Extend conversion beyond the currently supported Abstract and Introduction
 - Populate SQLite through the storage protocol and refresh rebuildable
   retrieval state
 - Verify offline, restart-safe, and cross-platform behavior
