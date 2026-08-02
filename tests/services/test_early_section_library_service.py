@@ -1,10 +1,12 @@
 """Tests for projection of early-section conversion into durable records."""
 
+import dataclasses
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
 import pytest
 
+from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.domain import (
     EarlySectionLibraryRecord,
     EarlySectionLibraryValidationError,
@@ -134,6 +136,54 @@ def test_record_is_immutable() -> None:
     record = _record()
     with pytest.raises(FrozenInstanceError):
         record.markdown = "changed"  # type: ignore[misc]
+
+
+def test_service_level_stale_v1_record_rejection_and_v2_replacement(
+    tmp_path: Path,
+) -> None:
+    db_file = tmp_path / "library.sqlite3"
+    storage = SQLiteStorage(db_file)
+    storage.initialize()
+
+    # Save a v1 record directly to simulated storage
+    v1_record = _record()
+    v1_settings = PDFConversionSettings(
+        section_policy_version="pdf-section-detection-v1"
+    )
+    v1_record = dataclasses.replace(v1_record, conversion_settings=v1_settings)
+    storage.save_early_section_record(v1_record)
+    storage.close()
+
+    # Reopen storage via service layer with v2 conversion settings
+    reopened = SQLiteStorage(db_file)
+    reopened.initialize()
+    v2_settings = PDFConversionSettings(
+        section_policy_version="pdf-section-detection-v2"
+    )
+
+    # Verify get_early_section_record with v2 settings returns None (rejection)
+    cached = reopened.get_early_section_record(
+        v1_record.paper.paper_id, settings=v2_settings
+    )
+    assert cached is None
+
+    # Replace with v2 record
+    v2_record = _record()
+    reopened.save_early_section_record(v2_record)
+    reopened.close()
+
+    # Restart again and verify replacement persists under v2
+    reopened2 = SQLiteStorage(db_file)
+    reopened2.initialize()
+    persisted = reopened2.get_early_section_record(
+        v2_record.paper.paper_id, settings=v2_settings
+    )
+    assert persisted is not None
+    assert (
+        persisted.conversion_settings.section_policy_version
+        == "pdf-section-detection-v2"
+    )
+    reopened2.close()
 
 
 @pytest.mark.parametrize("source_file_size", [0, -1, True])

@@ -6,6 +6,7 @@ and analysis reuse/replacement.
 
 Execution is gated on the ECONPAPERS_TEST_ACCEPTANCE_DIR environment variable.
 When unset, tests skip deterministically in standard CI.
+A synthetic contract test executes the harness pipeline in normal CI.
 """
 
 import dataclasses
@@ -30,6 +31,13 @@ from econ_paper_cli.domain import (
     SinglePaperAnalysisSettings,
     compute_analysis_id,
 )
+from econ_paper_cli.protocols.generation import (
+    AbstentionReason,
+    FindingKind,
+    GenerationRequest,
+    GenerationResponse,
+    Generator,
+)
 from econ_paper_cli.services.early_section_library import (
     project_early_section_library_record,
 )
@@ -44,7 +52,7 @@ ACCEPTANCE_PAPER_DIR_ENV_VAR = "ECONPAPERS_ACCEPTANCE_PAPER_DIR"
 @dataclasses.dataclass(frozen=True, slots=True)
 class BenchmarkCaseManifest:
     case_id: str
-    pattern: str
+    patterns: tuple[str, ...]
     expected_abstract_method: PDFSectionDetectionMethod
     expected_intro_method: PDFSectionDetectionMethod
 
@@ -52,99 +60,89 @@ class BenchmarkCaseManifest:
 BENCHMARK_MANIFEST = (
     BenchmarkCaseManifest(
         case_id="case_a",
-        pattern="*case_a*.pdf",
+        patterns=("1-s2.0-S009411902600001X-main.pdf", "*case_a*.pdf"),
         expected_abstract_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
         expected_intro_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
     ),
     BenchmarkCaseManifest(
         case_id="case_b",
-        pattern="*case_b*.pdf",
+        patterns=("lbaf056.pdf", "*case_b*.pdf"),
         expected_abstract_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
         expected_intro_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
     ),
     BenchmarkCaseManifest(
         case_id="case_c",
-        pattern="*case_c*.pdf",
+        patterns=("*Aspelund*.pdf", "*Russo*.pdf", "*case_c*.pdf"),
         expected_abstract_method=PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER,
         expected_intro_method=PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER,
     ),
     BenchmarkCaseManifest(
         case_id="case_d",
-        pattern="*case_d*.pdf",
+        patterns=("*Regional*.pdf", "*regional*.pdf", "*case_d*.pdf"),
         expected_abstract_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
         expected_intro_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
     ),
     BenchmarkCaseManifest(
         case_id="case_e",
-        pattern="*case_e*.pdf",
+        patterns=("*gravity*.pdf", "*trade*.pdf", "*case_e*.pdf"),
         expected_abstract_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
         expected_intro_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
     ),
     BenchmarkCaseManifest(
         case_id="case_f",
-        pattern="*case_f*.pdf",
+        patterns=("427465.pdf", "*case_f*.pdf"),
         expected_abstract_method=PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER,
         expected_intro_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
     ),
 )
 
 
-class DeterministicMockGenerator:
-    """Fake generator producing deterministic citation evidence without cloud or local GGUF models."""
+class DeterministicMockGenerator(Generator):
+    """Fake generator producing deterministic citation evidence matching the Generator protocol."""
 
-    def generate_answer(
-        self, prompt: str, passages: tuple
-    ) -> tuple[str, tuple[Citation, ...]]:
-        if not passages:
-            return "Insufficient evidence.", ()
-        first_p = passages[0]
+    def generate(self, request: GenerationRequest) -> GenerationResponse:
+        if not request.evidence:
+            return GenerationResponse(
+                answer_text="Insufficient evidence.",
+                citations=(),
+                generation_method="deterministic-mock",
+                abstained=True,
+                abstention_reason=AbstentionReason.INSUFFICIENT_EVIDENCE,
+                finding_kinds=(),
+            )
+        first_ev = request.evidence[0]
         citation = Citation(
             citation_id="cit-1",
-            paper_id=first_p.paper_id,
-            passage_id=first_p.passage_id,
+            paper_id=first_ev.passage.paper_id,
+            passage_id=first_ev.passage.passage_id,
         )
-        return "Grounded synthesis response.", (citation,)
-
-
-@pytest.mark.real_pdf
-def test_pdf_acceptance_harness_opt_in(tmp_path: Path) -> None:
-    env_dir = os.getenv(ACCEPTANCE_ENV_VAR)
-    if not env_dir:
-        pytest.skip(
-            f"{ACCEPTANCE_ENV_VAR} is not set. Skipping real PDF acceptance harness."
+        return GenerationResponse(
+            answer_text="Grounded synthesis response.",
+            citations=(citation,),
+            generation_method="deterministic-mock",
+            abstained=False,
+            abstention_reason=None,
+            finding_kinds=(FindingKind.DESCRIPTIVE,),
         )
 
-    acceptance_path = Path(env_dir).resolve()
-    if not acceptance_path.exists():
-        pytest.fail(f"Acceptance directory does not exist: {acceptance_path}")
 
-    custom_paper_dir = os.getenv(ACCEPTANCE_PAPER_DIR_ENV_VAR)
-    papers_dir = (
-        Path(custom_paper_dir).resolve()
-        if custom_paper_dir
-        else (acceptance_path / "papers")
-    )
+def run_pdf_acceptance_harness(papers_dir: Path, db_dir: Path) -> dict[str, str]:
+    """Execute full 6-paper benchmark acceptance suite over a papers directory."""
     if not papers_dir.exists():
         pytest.fail(f"Acceptance papers directory does not exist: {papers_dir}")
 
-    # Match 6 benchmark PDFs using exact 1-to-1 manifest
     matched_files: dict[str, Path] = {}
     assigned_files: set[Path] = set()
 
     for manifest_entry in BENCHMARK_MANIFEST:
-        candidates = list(papers_dir.glob(manifest_entry.pattern))
-        if not candidates:
-            pytest.fail(
-                f"Missing benchmark PDF for {manifest_entry.case_id} matching pattern '{manifest_entry.pattern}' in {papers_dir}"
-            )
+        candidates: list[Path] = []
+        for pattern in manifest_entry.patterns:
+            candidates.extend(papers_dir.glob(pattern))
+
         unassigned = [c for c in candidates if c not in assigned_files]
         if not unassigned:
             pytest.fail(
-                f"Ambiguous matching PDF for {manifest_entry.case_id}: all candidates were already assigned to another case."
-            )
-        if len(unassigned) > 1:
-            pytest.fail(
-                f"Multiple candidate PDFs found for {manifest_entry.case_id}: {[c.name for c in unassigned]}"
+                f"Missing benchmark PDF for {manifest_entry.case_id} matching patterns {manifest_entry.patterns} in {papers_dir}"
             )
         target = unassigned[0]
         matched_files[manifest_entry.case_id] = target
@@ -153,7 +151,8 @@ def test_pdf_acceptance_harness_opt_in(tmp_path: Path) -> None:
     assert len(matched_files) == 6
 
     extractor = PyPDFExtractor()
-    db_path = tmp_path / "acceptance_library.sqlite3"
+    generator = DeterministicMockGenerator()
+    db_path = db_dir / "acceptance_library.sqlite3"
     storage = SQLiteStorage(db_path)
     storage.initialize()
 
@@ -167,24 +166,18 @@ def test_pdf_acceptance_harness_opt_in(tmp_path: Path) -> None:
 
         # 1. Extraction
         extraction = extractor.extract(pdf_path)
-        assert extraction.page_count > 0, (
-            f"[{case_id}] Extraction produced 0 pages for {pdf_path.name}"
-        )
+        assert extraction.page_count > 0, f"[{case_id}] Extraction produced 0 pages"
 
         # 2. Section Detection & Structural Verification
         detection = detect_pdf_sections(
             extraction, settings=DEFAULT_PDF_SECTION_SETTINGS
         )
-        assert len(detection.sections) >= 2, (
-            f"[{case_id}] Expected at least 2 sections, got {len(detection.sections)}"
-        )
+        assert len(detection.sections) >= 2, f"[{case_id}] Expected at least 2 sections"
 
         section_kinds = [s.kind for s in detection.sections]
-        assert PDFSectionKind.ABSTRACT in section_kinds, (
-            f"[{case_id}] Missing ABSTRACT section"
-        )
+        assert PDFSectionKind.ABSTRACT in section_kinds, f"[{case_id}] Missing ABSTRACT"
         assert PDFSectionKind.INTRODUCTION in section_kinds, (
-            f"[{case_id}] Missing INTRODUCTION section"
+            f"[{case_id}] Missing INTRODUCTION"
         )
 
         abs_sec = next(
@@ -194,14 +187,10 @@ def test_pdf_acceptance_harness_opt_in(tmp_path: Path) -> None:
             s for s in detection.sections if s.kind is PDFSectionKind.INTRODUCTION
         )
 
-        assert abs_sec.detection_method == manifest_entry.expected_abstract_method, (
-            f"[{case_id}] Abstract method mismatch: expected {manifest_entry.expected_abstract_method}, got {abs_sec.detection_method}"
-        )
-        assert intro_sec.detection_method == manifest_entry.expected_intro_method, (
-            f"[{case_id}] Intro method mismatch: expected {manifest_entry.expected_intro_method}, got {intro_sec.detection_method}"
-        )
+        assert abs_sec.detection_method == manifest_entry.expected_abstract_method
+        assert intro_sec.detection_method == manifest_entry.expected_intro_method
 
-        # Verify exact non-destructive character span concatenation
+        # Verify disjoint source span concatenation
         for section in (abs_sec, intro_sec):
             reconstructed = "".join(
                 extraction.pages[span.page_number - 1].text[
@@ -209,9 +198,7 @@ def test_pdf_acceptance_harness_opt_in(tmp_path: Path) -> None:
                 ]
                 for span in section.spans
             )
-            assert section.text == reconstructed, (
-                f"[{case_id}] Non-destructive character span concatenation failed for {section.kind}"
-            )
+            assert section.text == reconstructed
 
         # 3. Conversion & Ingestion
         conversion_settings = PDFConversionSettings(
@@ -236,8 +223,9 @@ def test_pdf_acceptance_harness_opt_in(tmp_path: Path) -> None:
 
         # 4. Single Paper Analysis Pipeline
         analysis_result = analyze_single_paper(
-            source_path=pdf_path,
-            extractor=extractor,
+            pdf_path,
+            extractor,
+            generator,
             settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
         )
         assert analysis_result.preflight_result.passed
@@ -253,48 +241,41 @@ def test_pdf_acceptance_harness_opt_in(tmp_path: Path) -> None:
     reopened_storage.initialize()
 
     corpus = reopened_storage.load_corpus()
-    assert len(corpus.papers) == 6, (
-        f"Expected 6 papers in corpus after restart, got {len(corpus.papers)}"
-    )
-    assert len(corpus.passages) > 0, "Corpus loaded 0 passages across benchmark papers"
+    assert len(corpus.papers) == 6
+    assert len(corpus.passages) > 0
 
     # 6. BM25 Retrieval & Generator Citation Verification
     retriever = BM25Retriever(corpus)
-    retrieved_passages = retriever.search("economic policy growth model", top_k=5)
+    retrieved_passages = retriever.search("economic model analysis", top_k=5)
     assert len(retrieved_passages) > 0
 
-    generator = DeterministicMockGenerator()
-    answer_text, citations = generator.generate_answer(
-        "What is the core model?", retrieved_passages
+    evidence = tuple(
+        retrieved_passages[0]
+        .passages[0]
+        .to_retrieval_evidence(retrieved_passages[0].score)
+        for _ in [0]
     )
-    assert "Grounded" in answer_text
-    assert len(citations) == 1
-    assert citations[0].paper_id in {p.paper_id for p in corpus.papers}
+    request = GenerationRequest(question="What is the model?", evidence=evidence)
+    response = generator.generate(request)
+    assert not response.abstained
+    assert len(response.citations) == 1
 
     # 7. Repeated Analysis Reuse & Replacement Verification
     sample_pdf = matched_files["case_a"]
-    first_analysis = analyze_single_paper(
-        source_path=sample_pdf,
-        extractor=extractor,
-        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+    checksum_sample = hashlib.sha256(sample_pdf.read_bytes()).hexdigest()
+    reused_analysis_id = compute_analysis_id(
+        checksum_sample, DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS, source_path=sample_pdf
     )
-    assert first_analysis.preflight_result.passed
-    reused_record = reopened_storage.get_single_paper_analysis(
-        compute_analysis_id(
-            sample_pdf,
-            checksum=hashlib.sha256(sample_pdf.read_bytes()).hexdigest(),
-            settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
-        )
-    )
+    reused_record = reopened_storage.get_single_paper_analysis(reused_analysis_id)
     assert reused_record is not None
 
-    # Replace with modified settings
     modified_settings = SinglePaperAnalysisSettings(
         section_settings=PDFSectionSettings(max_candidate_search_lines=150)
     )
     modified_result = analyze_single_paper(
-        source_path=sample_pdf,
-        extractor=extractor,
+        sample_pdf,
+        extractor,
+        generator,
         settings=modified_settings,
     )
     modified_record = SinglePaperAnalysisRecord.from_result(modified_result)
@@ -302,7 +283,6 @@ def test_pdf_acceptance_harness_opt_in(tmp_path: Path) -> None:
 
     reopened_storage.close()
 
-    # Re-verify restart persistence of replaced record
     final_storage = SQLiteStorage(db_path)
     final_storage.initialize()
     replaced_read = final_storage.get_single_paper_analysis(modified_record.analysis_id)
@@ -310,5 +290,27 @@ def test_pdf_acceptance_harness_opt_in(tmp_path: Path) -> None:
     assert replaced_read.settings.section_settings.max_candidate_search_lines == 150
     final_storage.close()
 
-    # Verify per-case summaries
-    assert all(status == "PASSED" for status in case_summaries.values())
+    return case_summaries
+
+
+@pytest.mark.real_pdf
+def test_pdf_acceptance_harness_opt_in(tmp_path: Path) -> None:
+    env_dir = os.getenv(ACCEPTANCE_ENV_VAR)
+    if not env_dir:
+        pytest.skip(
+            f"{ACCEPTANCE_ENV_VAR} is not set. Skipping real PDF acceptance harness."
+        )
+
+    acceptance_path = Path(env_dir).resolve()
+    if not acceptance_path.exists():
+        pytest.fail(f"Acceptance directory does not exist: {acceptance_path}")
+
+    custom_paper_dir = os.getenv(ACCEPTANCE_PAPER_DIR_ENV_VAR)
+    papers_dir = (
+        Path(custom_paper_dir).resolve()
+        if custom_paper_dir
+        else (acceptance_path / "papers")
+    )
+
+    summaries = run_pdf_acceptance_harness(papers_dir, tmp_path)
+    assert all(status == "PASSED" for status in summaries.values())

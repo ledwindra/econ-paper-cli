@@ -64,6 +64,10 @@ _FOOTNOTE_AFFILIATION_RE = re.compile(
     r"^(?:[\*\dagger\d]\s*)?(?:Department\s+of|Faculty\s+of|School\s+of|University\s+of|Email\:|Corresponding\s+author|Financial\s+support)",
     re.IGNORECASE,
 )
+_ACKNOWLEDGMENTS_RE = re.compile(
+    r"^\s*(?:We\s+thank|Thanks\s+to|Financial\s+support|The\s+authors\s+thank|Acknowledge?ments?)\b",
+    re.IGNORECASE,
+)
 _LOWERCASE_PROSE_VERBS = {
     "studies",
     "predicts",
@@ -284,10 +288,12 @@ def detect_pdf_sections(
                 end_search_idx = first_sec_cand.line_index
 
         jel_idx = None
+        ack_idx = None
         for idx in range(start_line_idx, end_search_idx):
-            if _JEL_KEYWORDS_RE.match(all_lines[idx].trimmed):
+            if jel_idx is None and _JEL_KEYWORDS_RE.match(all_lines[idx].trimmed):
                 jel_idx = idx
-                break
+            if ack_idx is None and _ACKNOWLEDGMENTS_RE.match(all_lines[idx].trimmed):
+                ack_idx = idx
 
         if jel_idx is not None and jel_idx > start_line_idx + 1:
             title_ev = PDFSectionBoundaryEvidence(
@@ -311,6 +317,32 @@ def detect_pdf_sections(
                 all_lines=all_lines,
                 extraction=extraction,
                 boundary_evidence=(title_ev, jel_ev),
+                running_headers=running_headers,
+            )
+            if implicit_abs is not None:
+                sections_list.append(implicit_abs)
+        elif ack_idx is not None and ack_idx > start_line_idx + 1:
+            title_ev = PDFSectionBoundaryEvidence(
+                page_number=all_lines[start_line_idx].page_number,
+                start_character_offset=all_lines[start_line_idx].start_offset,
+                end_character_offset=all_lines[start_line_idx].end_offset,
+                evidence_type=PDFSectionBoundaryEvidenceType.TITLE_BLOCK,
+                description="Implicit front-matter inferred from title block and acknowledgments",
+            )
+            ack_ev = PDFSectionBoundaryEvidence(
+                page_number=all_lines[ack_idx].page_number,
+                start_character_offset=all_lines[ack_idx].start_offset,
+                end_character_offset=all_lines[ack_idx].end_offset,
+                evidence_type=PDFSectionBoundaryEvidenceType.ACKNOWLEDGMENTS_START,
+                description="Implicit Abstract bounded by acknowledgments block",
+            )
+            implicit_abs = _build_implicit_section(
+                kind=PDFSectionKind.ABSTRACT,
+                start_line_index=start_line_idx + 1,
+                end_line_index=ack_idx,
+                all_lines=all_lines,
+                extraction=extraction,
+                boundary_evidence=(title_ev, ack_ev),
                 running_headers=running_headers,
             )
             if implicit_abs is not None:
@@ -512,12 +544,19 @@ def _extract_lines(extraction: PDFExtractionResult) -> list[_LineInfo]:
     return lines
 
 
+def _clean_header_text(text: str) -> str:
+    return re.sub(r"^\d+\s*|\s*\d+$", "", text).strip()
+
+
 def _detect_running_headers(lines: list[_LineInfo], page_count: int) -> set[str]:
     if page_count < 2:
         return set()
     trimmed_counts: dict[str, set[int]] = {}
     for idx, line in enumerate(lines):
         if not line.trimmed or len(line.trimmed) >= 100:
+            continue
+        cleaned = _clean_header_text(line.trimmed)
+        if not cleaned:
             continue
         prev_blank = idx == 0 or not lines[idx - 1].trimmed
         next_blank = idx == len(lines) - 1 or not lines[idx + 1].trimmed
@@ -529,6 +568,9 @@ def _detect_running_headers(lines: list[_LineInfo], page_count: int) -> set[str]
             if line.trimmed not in trimmed_counts:
                 trimmed_counts[line.trimmed] = set()
             trimmed_counts[line.trimmed].add(line.page_number)
+            if cleaned not in trimmed_counts:
+                trimmed_counts[cleaned] = set()
+            trimmed_counts[cleaned].add(line.page_number)
     return {
         text
         for text, pages in trimmed_counts.items()
@@ -751,9 +793,12 @@ def _build_spans_and_text(
                 or all_lines[global_idx + 1].page_number != p_num
             )
 
+            cleaned_header = _clean_header_text(line.trimmed)
             is_rh = (
                 p_num > 1
-                and line.trimmed in running_headers
+                and (
+                    line.trimmed in running_headers or cleaned_header in running_headers
+                )
                 and (is_first_on_page or is_last_on_page)
             )
             is_page_num = (
@@ -765,9 +810,17 @@ def _build_spans_and_text(
                 _ARTICLE_HISTORY_RE.match(line.trimmed)
             )
             is_affiliation = bool(_FOOTNOTE_AFFILIATION_RE.match(line.trimmed))
+            is_acknowledgments = bool(_ACKNOWLEDGMENTS_RE.match(line.trimmed))
             is_cover = bool(_PUBLISHER_COVER_SHEET_RE.search(line.text)) and p_num == 1
 
-            if is_rh or is_page_num or is_metadata or is_affiliation or is_cover:
+            if (
+                is_rh
+                or is_page_num
+                or is_metadata
+                or is_affiliation
+                or is_acknowledgments
+                or is_cover
+            ):
                 if current_run:
                     _emit_run_span(
                         current_run, p_num, page_text, spans_list, text_parts

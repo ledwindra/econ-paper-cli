@@ -23,6 +23,7 @@ from econ_paper_cli.adapters.pypdf_extractor import PyPDFExtractor
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.domain import (
     DEFAULT_PDF_CONVERSION_SETTINGS,
+    DEFAULT_PDF_SECTION_SETTINGS,
     DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     LibraryPopulationResult,
     LibraryPopulationStatus,
@@ -447,12 +448,16 @@ def _build_settings(options: AnalyzeCommandOptions) -> SinglePaperAnalysisSettin
 
 def _build_conversion_settings(options: AnalyzeCommandOptions) -> PDFConversionSettings:
     """Build and validate conversion settings from command options."""
+    sec_policy = (
+        options.section_policy_version or DEFAULT_PDF_SECTION_SETTINGS.policy_version
+    )
     return PDFConversionSettings(
         policy_version=(
             options.conversion_policy_version
             or DEFAULT_PDF_CONVERSION_SETTINGS.policy_version
         ),
         max_passage_characters=options.max_passage_characters,
+        section_policy_version=sec_policy,
     )
 
 
@@ -574,7 +579,9 @@ def _process_candidate(
         conversion_settings
     )
     existing_analysis = storage.get_single_paper_analysis(analysis_id)
-    existing_library = storage.get_early_section_record(paper_id)
+    existing_library = storage.get_early_section_record(
+        paper_id, settings=conversion_settings
+    )
 
     if existing_analysis is not None:
         if existing_analysis.content_checksum != checksum:
@@ -651,7 +658,9 @@ def _process_candidate(
             library_result = prepared.library_result
             if prepared.library_record is not None:
                 storage.save_early_section_record(prepared.library_record)
-                durable_library = storage.get_early_section_record(paper_id)
+                durable_library = storage.get_early_section_record(
+                    paper_id, settings=conversion_settings
+                )
                 if durable_library is None:
                     raise RuntimeError(
                         f"Failed to read back early-section record '{paper_id}'."
