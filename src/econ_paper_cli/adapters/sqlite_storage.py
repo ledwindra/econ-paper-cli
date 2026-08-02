@@ -358,7 +358,9 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
 class SQLiteStorage(StorageBackend):
     """Local SQLite storage adapter using Python standard library sqlite3."""
 
-    def __init__(self, db_path: str | Path | None = None) -> None:
+    def __init__(
+        self, db_path: str | Path | None = None, read_only: bool = False
+    ) -> None:
         """Initialize SQLite storage adapter.
 
         If db_path is None, defaults to the canonical cross-platform user path.
@@ -370,6 +372,7 @@ class SQLiteStorage(StorageBackend):
             self._db_path = Path(db_path) if db_path != ":memory:" else db_path
         else:
             self._db_path = db_path
+        self._read_only = read_only
 
         self._conn: sqlite3.Connection | None = None
         self._coordinated_transaction_active = False
@@ -385,22 +388,35 @@ class SQLiteStorage(StorageBackend):
             return
 
         try:
+            if self._read_only and self._db_path == ":memory:":
+                raise StorageConnectionError(
+                    "Read-only SQLiteStorage cannot use an in-memory database."
+                )
+
             if isinstance(self._db_path, Path):
-                self._db_path.parent.mkdir(parents=True, exist_ok=True)
-                conn_str = str(self._db_path)
+                if not self._read_only:
+                    self._db_path.parent.mkdir(parents=True, exist_ok=True)
+                    conn_str = str(self._db_path)
+                    connect_kwargs: dict[str, object] = {}
+                else:
+                    conn_str = f"{self._db_path.resolve(strict=False).as_uri()}?mode=ro"
+                    connect_kwargs = {"uri": True}
             else:
                 conn_str = self._db_path
+                connect_kwargs = {"uri": True} if self._read_only else {}
 
-            self._conn = sqlite3.connect(conn_str)
+            self._conn = sqlite3.connect(conn_str, **connect_kwargs)
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA foreign_keys = ON;")
-        except (sqlite3.Error, OSError) as err:
+        except (sqlite3.Error, OSError, StorageConnectionError) as err:
             if self._conn is not None:
                 try:
                     self._conn.close()
                 except Exception:
                     pass
                 self._conn = None
+            if isinstance(err, StorageConnectionError):
+                raise
             raise StorageConnectionError(
                 f"Failed to connect to SQLite database at '{self._db_path}': {err}."
             ) from err
@@ -414,6 +430,22 @@ class SQLiteStorage(StorageBackend):
             raise
 
         try:
+            if self._read_only:
+                current_version = self.get_schema_version()
+                if current_version == 0:
+                    raise StorageMigrationError(
+                        f"Read-only database at '{self._db_path}' is not initialized."
+                    )
+                if current_version < CURRENT_SCHEMA_VERSION:
+                    raise StorageMigrationError(
+                        f"Read-only database schema version {current_version} is older than supported version {CURRENT_SCHEMA_VERSION}; reopen the database in write mode to migrate it."
+                    )
+                if current_version > CURRENT_SCHEMA_VERSION:
+                    raise StorageIncompatibleSchemaError(
+                        f"Database schema version {current_version} is newer than maximum supported version {CURRENT_SCHEMA_VERSION}."
+                    )
+                return
+
             self._run_migrations()
         except Exception:
             if self._conn is not None:
@@ -1197,11 +1229,19 @@ class SQLiteStorage(StorageBackend):
                 created_at=source_row["created_at"],
             )
             passages = self.get_passages(paper_id)
+            if not passages:
+                raise StorageValidationError(
+                    f"Missing passage rows for early-section record '{paper_id}'."
+                )
             provenance_rows = conn.execute(
                 """SELECT * FROM passage_provenance
                    WHERE paper_id = ? ORDER BY ordinal_position ASC""",
                 (paper_id,),
             ).fetchall()
+            if not provenance_rows:
+                raise StorageValidationError(
+                    f"Missing passage provenance rows for early-section record '{paper_id}'."
+                )
             stored_provenance = []
             for expected_ordinal, provenance_row in enumerate(provenance_rows):
                 if provenance_row["ordinal_position"] != expected_ordinal:

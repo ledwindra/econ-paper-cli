@@ -138,13 +138,14 @@ def execute_chat_command(
         raise TypeError("options must be a ChatCommandOptions instance.")
 
     db_path = options.db_path or get_default_db_path()
-    storage_backend = storage or SQLiteStorage(db_path)
+    storage_backend = storage or SQLiteStorage(db_path, read_only=True)
     owns_storage = storage is None
     question = options.question
 
     try:
         storage_backend.initialize()
-        if storage_backend.count_passages() == 0:
+        records = storage_backend.list_early_section_records()
+        if not records:
             return ChatCommandResult(
                 outcome=ChatTerminalOutcome.EMPTY_LIBRARY,
                 exit_code=1,
@@ -254,6 +255,15 @@ def execute_chat_command(
             error_message=str(error),
         )
     except StorageError as error:
+        return ChatCommandResult(
+            outcome=ChatTerminalOutcome.FAILED,
+            exit_code=3,
+            question=question,
+            db_path=db_path,
+            top_k=options.top_k,
+            error_message=str(error),
+        )
+    except Exception as error:
         return ChatCommandResult(
             outcome=ChatTerminalOutcome.FAILED,
             exit_code=3,
