@@ -49,7 +49,7 @@ from econ_paper_cli.domain.pdf_conversion import (
 from econ_paper_cli.domain.pdf_quality import PDFQualityStatus
 from econ_paper_cli.domain.single_paper_analysis import compute_analysis_id
 from econ_paper_cli.protocols.generation import Generator
-from econ_paper_cli.protocols.pdf_extraction import PDFExtractor
+from econ_paper_cli.protocols.pdf_extraction import PDFExtractionError, PDFExtractor
 from econ_paper_cli.protocols.storage import StorageBackend, StorageConnectionError
 from econ_paper_cli.services.analysis_library import (
     prepare_analysis_library,
@@ -570,6 +570,26 @@ def _process_candidate(
             raise RuntimeError(
                 f"Stored analysis '{analysis_id}' does not match current PDF checksum."
             )
+        if not _analysis_is_library_eligible(existing_analysis):
+            return BatchItemOutcome(
+                path=pdf_path,
+                kind=BatchOutcomeKind.REUSED,
+                record=existing_analysis,
+                library_result=LibraryPopulationResult(
+                    LibraryPopulationStatus.NOT_ELIGIBLE
+                ),
+            )
+        if not existing_analysis.sections:
+            return BatchItemOutcome(
+                path=pdf_path,
+                kind=BatchOutcomeKind.REUSED,
+                record=existing_analysis,
+                library_result=LibraryPopulationResult(
+                    LibraryPopulationStatus.NO_USABLE_SECTIONS,
+                    paper_id=paper_id,
+                    conversion_fingerprint=conversion_fingerprint,
+                ),
+            )
         if (
             existing_library is not None
             and existing_library.settings_fingerprint == conversion_fingerprint
@@ -585,7 +605,9 @@ def _process_candidate(
                     passage_count=len(existing_library.passages),
                 ),
             )
-        if not _analysis_is_library_eligible(existing_analysis):
+        try:
+            extraction = extractor.extract(candidate.source_path)
+        except PDFExtractionError:
             return BatchItemOutcome(
                 path=pdf_path,
                 kind=BatchOutcomeKind.REUSED,
@@ -594,8 +616,6 @@ def _process_candidate(
                     LibraryPopulationStatus.NOT_ELIGIBLE
                 ),
             )
-
-        extraction = extractor.extract(candidate.source_path)
         quality = assess_pdf_extraction_quality(
             extraction, settings=analysis_settings.quality_settings
         )

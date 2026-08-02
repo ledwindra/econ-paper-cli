@@ -1049,6 +1049,91 @@ def test_analysis_only_record_backfills_without_generator(
     assert "Outcome: stored" in capsys.readouterr().out
 
 
+def test_typed_extraction_failure_during_backfill_is_not_eligible(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    storage = SQLiteStorage(":memory:")
+    storage.initialize()
+    options = _make_options(pdf_path, tmp_path)
+    response = _make_success_response_json(
+        "Abstract\nWe evaluate trade policy.", "We evaluate trade policy."
+    )
+    assert (
+        run_single_paper_analysis_command(
+            options,
+            extractor=FakePDFExtractor(),
+            generator=FakeGenerator(response_text=response),
+            storage=storage,
+        )
+        == CLIExitCode.SUCCESS
+    )
+    paper_id = storage.list_early_section_records()[0].paper.paper_id
+    assert storage.delete_early_section_record(paper_id)
+    extractor = FakePDFExtractor(
+        raise_error=PDFParserError(pdf_path, RuntimeError("backfill parser failure"))
+    )
+    generator = FakeGenerator(raise_error=AssertionError("must not generate"))
+    capsys.readouterr()
+
+    code = run_single_paper_analysis_command(
+        options, extractor=extractor, generator=generator, storage=storage
+    )
+
+    assert code == CLIExitCode.SUCCESS
+    assert extractor.call_count == 1
+    assert generator.call_count == 0
+    assert storage.get_early_section_record(paper_id) is None
+    assert "Outcome: not_eligible" in capsys.readouterr().out
+
+
+def test_ineligible_analysis_does_not_reuse_stale_library(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    options = _make_options(pdf_path, tmp_path)
+    eligible_storage = SQLiteStorage(":memory:")
+    eligible_storage.initialize()
+    response = _make_success_response_json(
+        "Abstract\nWe evaluate trade policy.", "We evaluate trade policy."
+    )
+    assert (
+        run_single_paper_analysis_command(
+            options,
+            extractor=FakePDFExtractor(),
+            generator=FakeGenerator(response_text=response),
+            storage=eligible_storage,
+        )
+        == CLIExitCode.SUCCESS
+    )
+    stale_library = eligible_storage.list_early_section_records()[0]
+
+    storage = SQLiteStorage(":memory:")
+    storage.initialize()
+    assert (
+        run_single_paper_analysis_command(
+            options,
+            extractor=FakePDFExtractor(pages_text=["", ""]),
+            generator=FakeGenerator(),
+            storage=storage,
+        )
+        == CLIExitCode.HALTED_OR_UNAVAILABLE
+    )
+    storage.save_early_section_record(stale_library)
+    extractor = FakePDFExtractor()
+    generator = FakeGenerator(raise_error=AssertionError("must not generate"))
+    capsys.readouterr()
+
+    code = run_single_paper_analysis_command(
+        options, extractor=extractor, generator=generator, storage=storage
+    )
+
+    assert code == CLIExitCode.HALTED_OR_UNAVAILABLE
+    assert extractor.call_count == 0
+    assert generator.call_count == 0
+    assert "Outcome: not_eligible" in capsys.readouterr().out
+
+
 def test_corrupt_library_fails_visibly_without_rebuild(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1175,8 +1260,9 @@ def test_no_detected_early_section_is_inspectable_without_empty_record(
     storage = SQLiteStorage(":memory:")
     storage.initialize()
 
+    options = _make_options(pdf_path, tmp_path)
     code = run_single_paper_analysis_command(
-        _make_options(pdf_path, tmp_path),
+        options,
         extractor=FakePDFExtractor(pages_text=["Unheaded discussion text. " * 30]),
         generator=FakeGenerator(),
         storage=storage,
@@ -1184,6 +1270,18 @@ def test_no_detected_early_section_is_inspectable_without_empty_record(
 
     assert code == CLIExitCode.HALTED_OR_UNAVAILABLE
     assert storage.list_single_paper_analyses()
+    assert storage.list_early_section_records() == ()
+    assert "Outcome: no_usable_sections" in capsys.readouterr().out
+
+    extractor = FakePDFExtractor()
+    generator = FakeGenerator(raise_error=AssertionError("must not generate"))
+    code = run_single_paper_analysis_command(
+        options, extractor=extractor, generator=generator, storage=storage
+    )
+
+    assert code == CLIExitCode.HALTED_OR_UNAVAILABLE
+    assert extractor.call_count == 0
+    assert generator.call_count == 0
     assert storage.list_early_section_records() == ()
     assert "Outcome: no_usable_sections" in capsys.readouterr().out
 
