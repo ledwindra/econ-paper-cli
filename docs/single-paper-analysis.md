@@ -20,6 +20,12 @@ accepts exactly one local PDF file path and runs five stages in canonical order:
 No network calls are made. All backends are replaceable through the
 `PDFExtractor` and `Generator` protocols.
 
+The `econpapers analyze` command additionally projects eligible detected
+Abstract/Introduction content into the early-section library. This command-level
+coordination is separate from `analyze_single_paper`: it supports exact
+analysis-plus-library reuse, generator-free library backfill, and atomic dual
+persistence for newly produced records.
+
 ## Input requirements
 
 - `pdf_path`: path to a **single PDF file**. Directories are rejected, even if

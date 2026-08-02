@@ -1095,7 +1095,11 @@ class SinglePaperAnalysisRecord:
                 f"does not match settings.research_question_settings.policy_version '{settings.research_question_settings.policy_version}'."
             )
 
-        now_str = datetime.now(timezone.utc).isoformat()
+        now_str = (
+            datetime.now(timezone.utc).isoformat()
+            if created_at is None or updated_at is None
+            else ""
+        )
         c_at = created_at or now_str
         u_at = updated_at or now_str
 

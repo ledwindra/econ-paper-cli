@@ -94,6 +94,14 @@ class StorageBackend(Protocol):
         """Persist or replace a complete early-section record atomically."""
         ...
 
+    def save_analysis_and_early_section(
+        self,
+        analysis: SinglePaperAnalysisRecord,
+        library: EarlySectionLibraryRecord,
+    ) -> None:
+        """Persist complete analysis and library records in one transaction."""
+        ...
+
     def get_early_section_record(
         self, paper_id: str
     ) -> EarlySectionLibraryRecord | None:

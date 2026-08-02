@@ -355,9 +355,17 @@ against its passage slice without claiming that full extraction pages are
 stored. Atomic replacement preserves the original durable creation timestamp,
 uses the injected projection timestamp as the update timestamp, and removes
 stale passages and fragments in the same transaction. Stored passages remain
-available through `load_corpus()` and the existing in-memory BM25 adapter. This
-boundary is not yet connected to `econpapers analyze` and does not write
-Markdown files or persist a retrieval index. See
+available through `load_corpus()` and the existing in-memory BM25 adapter.
+Issue 50 connects this boundary to `econpapers analyze`. A preflight-first
+application state machine decides exact reuse and legacy library backfill before
+constructing the local generator. Newly produced eligible analysis and library
+records share one injected timestamp and one coordinated SQLite transaction;
+non-eligible terminal analyses retain their analysis-only transaction. Existing
+analysis records can be paired with a missing or differently configured library
+record through extraction and deterministic conversion without generation.
+Conversion, projection, or storage failures roll back and surface as internal
+failures. The workflow does not write Markdown files or persist a retrieval
+index. See
 [`docs/early-section-library-storage.md`](early-section-library-storage.md).
 
 Future changes should introduce only the narrow interfaces required by their

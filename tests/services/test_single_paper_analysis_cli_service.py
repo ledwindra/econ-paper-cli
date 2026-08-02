@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from econ_paper_cli.adapters.bm25 import BM25Retriever
 from econ_paper_cli.adapters.llama_cpp import ProcessResult
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.domain import (
@@ -47,6 +48,7 @@ class FakePDFExtractor(PDFExtractor):
         pages_text: list[str] | None = None,
         raise_error: Exception | None = None,
     ) -> None:
+        self.call_count = 0
         self.pages_text = (
             pages_text
             if pages_text is not None
@@ -58,6 +60,7 @@ class FakePDFExtractor(PDFExtractor):
         self.raise_error = raise_error
 
     def extract(self, pdf_path: Path) -> PDFExtractionResult:
+        self.call_count += 1
         if self.raise_error is not None:
             raise self.raise_error
 
@@ -92,11 +95,13 @@ class FakeGenerator(Generator):
         abstained: bool = False,
         raise_error: Exception | None = None,
     ) -> None:
+        self.call_count = 0
         self.response_text = response_text
         self.abstained = abstained
         self.raise_error = raise_error
 
     def generate(self, request: GenerationRequest) -> GenerationResponse:
+        self.call_count += 1
         if self.raise_error is not None:
             raise self.raise_error
 
@@ -284,6 +289,11 @@ def test_run_single_paper_analysis_command_success_exact_rendering(
         "[quality] very_low_text_volume: The document contains very little extracted text. Confirm that extraction captured the intended content.\n"
         "[quality] sparse_pages: Some non-empty pages contain unusually little text. Inspect the listed pages for extraction problems. (pages: [1, 2])\n"
         "[section] missing_next_section_boundary: Introduction heading was detected, but no subsequent top-level section heading was found. Introduction extends to the end of the extracted text.\n"
+        "\n--- Early-Section Library ---\n"
+        "Outcome: stored\n"
+        f"Paper ID: {storage.list_early_section_records()[0].paper.paper_id}\n"
+        f"Conversion Fingerprint: {storage.list_early_section_records()[0].settings_fingerprint}\n"
+        "Passage Count: 2\n"
     )
     assert out == expected_exact_output
 
@@ -318,6 +328,11 @@ def test_run_single_paper_analysis_command_quality_halted_exact_rendering(
         "--- Warnings ---\n"
         "[quality] all_pages_empty: No extractable text was found on any page. Run local OCR or inspect the document manually. (pages: [1, 2])\n"
         "[orchestration] quality_halted - Extraction quality status is likely_needs_ocr.\n"
+        "\n--- Early-Section Library ---\n"
+        "Outcome: not_eligible\n"
+        "Paper ID: N/A\n"
+        "Conversion Fingerprint: N/A\n"
+        "Passage Count: 0\n"
     )
     assert out == expected_exact_output
 
@@ -359,6 +374,11 @@ def test_run_single_paper_analysis_command_question_extraction_halted_exact_rend
         "[section] missing_next_section_boundary: Introduction heading was detected, but no subsequent top-level section heading was found. Introduction extends to the end of the extracted text.\n"
         "[research_question] model_abstained: Model abstained from generating a research question response due to insufficient evidence.\n"
         "[orchestration] question_extraction_halted\n"
+        "\n--- Early-Section Library ---\n"
+        "Outcome: stored\n"
+        f"Paper ID: {storage.list_early_section_records()[0].paper.paper_id}\n"
+        f"Conversion Fingerprint: {storage.list_early_section_records()[0].settings_fingerprint}\n"
+        "Passage Count: 2\n"
     )
     assert out == expected_exact_output
 
@@ -392,6 +412,11 @@ def test_run_single_paper_analysis_command_preflight_failed_exact_rendering(
         "Status: preflight_failed\n"
         "Failure Code: path_not_found\n"
         f"Error Message: Target path for ingestion does not exist: '{non_existent_pdf}'.\n"
+        "\n--- Early-Section Library ---\n"
+        "Outcome: not_eligible\n"
+        "Paper ID: N/A\n"
+        "Conversion Fingerprint: N/A\n"
+        "Passage Count: 0\n"
     )
     assert out == expected_exact_output
 
@@ -425,6 +450,11 @@ def test_run_single_paper_analysis_command_extraction_failed_exact_rendering(
         "Status: extraction_failed\n"
         "Failure Code: pdf_parser_error\n"
         f"Error Message: PDF parser failed for '{pdf_path}': PDF file corrupt or unreadable..\n"
+        "\n--- Early-Section Library ---\n"
+        "Outcome: not_eligible\n"
+        "Paper ID: N/A\n"
+        "Conversion Fingerprint: N/A\n"
+        "Passage Count: 0\n"
     )
     assert out == expected_exact_output
 
@@ -470,7 +500,7 @@ def test_database_migration_error_returns_code_3(
     assert "Migration v3 failed" in err
 
 
-def test_run_single_paper_analysis_command_uses_read_back_record(
+def test_coordinated_write_rejects_modified_analysis_read_back(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     pdf_path = _create_valid_pdf_file(tmp_path)
@@ -490,9 +520,10 @@ def test_run_single_paper_analysis_command_uses_read_back_record(
         opts, extractor=extractor, generator=generator, storage=storage
     )
 
-    assert exit_code == CLIExitCode.SUCCESS
-    out = capsys.readouterr().out
-    assert "MODIFIED FROM STORAGE READ-BACK" in out
+    assert exit_code == CLIExitCode.UNEXPECTED_ERROR
+    assert "Strict coordinated read-back" in capsys.readouterr().err
+    assert storage.list_single_paper_analyses() == ()
+    assert storage.list_early_section_records() == ()
 
 
 def test_run_single_paper_analysis_command_missing_read_back_raises_code_3(
@@ -513,7 +544,7 @@ def test_run_single_paper_analysis_command_missing_read_back_raises_code_3(
     assert exit_code == CLIExitCode.UNEXPECTED_ERROR
     err = capsys.readouterr().err
     assert "Unexpected internal error:" in err
-    assert "Failed to read back persisted analysis record" in err
+    assert "Strict coordinated read-back" in err
 
 
 def test_invalid_policy_versions_return_code_2(
@@ -897,3 +928,402 @@ def test_run_single_paper_analysis_command_idempotence(
     assert rec1 == rec2
     assert rec1.created_at == rec2.created_at
     assert rec1.updated_at == rec2.updated_at
+
+
+def test_success_stores_both_records_with_one_injected_timestamp(
+    tmp_path: Path,
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    storage = SQLiteStorage(tmp_path / "coordinated.db")
+    storage.initialize()
+    extractor = FakePDFExtractor()
+    generator = FakeGenerator(
+        response_text=_make_success_response_json(
+            "Abstract\nWe evaluate trade policy.", "We evaluate trade policy."
+        )
+    )
+    timestamp = "2026-08-01T20:30:00+00:00"
+
+    code = run_single_paper_analysis_command(
+        _make_options(pdf_path, tmp_path, db_path=tmp_path / "coordinated.db"),
+        extractor=extractor,
+        generator=generator,
+        storage=storage,
+        timestamp_provider=lambda: timestamp,
+    )
+
+    assert code == CLIExitCode.SUCCESS
+    assert extractor.call_count == 1
+    assert generator.call_count == 1
+    analysis = storage.list_single_paper_analyses()[0]
+    library = storage.list_early_section_records()[0]
+    assert analysis.created_at == analysis.updated_at == timestamp
+    assert library.created_at == library.updated_at == timestamp
+    assert analysis.content_checksum == library.source_provenance.content_checksum
+    storage.close()
+    reopened = SQLiteStorage(tmp_path / "coordinated.db")
+    corpus = reopened.load_corpus()
+    assert corpus.passages == library.passages
+    BM25Retriever(corpus)
+    reopened.close()
+
+
+def test_exact_reuse_needs_neither_extractor_nor_model_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    db_path = tmp_path / "lazy-reuse.db"
+    options = _make_options(pdf_path, tmp_path, db_path=db_path)
+    storage = SQLiteStorage(db_path)
+    storage.initialize()
+    response = _make_success_response_json(
+        "Abstract\nWe evaluate trade policy.", "We evaluate trade policy."
+    )
+    assert (
+        run_single_paper_analysis_command(
+            options,
+            extractor=FakePDFExtractor(),
+            generator=FakeGenerator(response_text=response),
+            storage=storage,
+        )
+        == CLIExitCode.SUCCESS
+    )
+    options.executable_path.unlink()
+    options.model_path.unlink()
+    extractor = FakePDFExtractor()
+
+    def forbidden_generator(config: object) -> None:
+        raise AssertionError("generator must not be constructed for exact reuse")
+
+    monkeypatch.setattr(
+        "econ_paper_cli.services.single_paper_analysis_cli.LlamaCppGenerator",
+        forbidden_generator,
+    )
+    capsys.readouterr()
+
+    code = run_single_paper_analysis_command(
+        options, extractor=extractor, storage=storage
+    )
+
+    assert code == CLIExitCode.SUCCESS
+    assert extractor.call_count == 0
+    assert "Outcome: reused" in capsys.readouterr().out
+
+
+def test_analysis_only_record_backfills_without_generator(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    db_path = tmp_path / "backfill.db"
+    options = _make_options(pdf_path, tmp_path, db_path=db_path)
+    storage = SQLiteStorage(db_path)
+    storage.initialize()
+    response = _make_success_response_json(
+        "Abstract\nWe evaluate trade policy.", "We evaluate trade policy."
+    )
+    assert (
+        run_single_paper_analysis_command(
+            options,
+            extractor=FakePDFExtractor(),
+            generator=FakeGenerator(response_text=response),
+            storage=storage,
+        )
+        == CLIExitCode.SUCCESS
+    )
+    paper_id = storage.list_early_section_records()[0].paper.paper_id
+    assert storage.delete_early_section_record(paper_id)
+    extractor = FakePDFExtractor()
+    generator = FakeGenerator(raise_error=AssertionError("must not generate"))
+    capsys.readouterr()
+
+    code = run_single_paper_analysis_command(
+        options, extractor=extractor, generator=generator, storage=storage
+    )
+
+    assert code == CLIExitCode.SUCCESS
+    assert extractor.call_count == 1
+    assert generator.call_count == 0
+    assert storage.get_early_section_record(paper_id) is not None
+    assert "Outcome: stored" in capsys.readouterr().out
+
+
+def test_typed_extraction_failure_during_backfill_is_not_eligible(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    storage = SQLiteStorage(":memory:")
+    storage.initialize()
+    options = _make_options(pdf_path, tmp_path)
+    response = _make_success_response_json(
+        "Abstract\nWe evaluate trade policy.", "We evaluate trade policy."
+    )
+    assert (
+        run_single_paper_analysis_command(
+            options,
+            extractor=FakePDFExtractor(),
+            generator=FakeGenerator(response_text=response),
+            storage=storage,
+        )
+        == CLIExitCode.SUCCESS
+    )
+    paper_id = storage.list_early_section_records()[0].paper.paper_id
+    assert storage.delete_early_section_record(paper_id)
+    extractor = FakePDFExtractor(
+        raise_error=PDFParserError(pdf_path, RuntimeError("backfill parser failure"))
+    )
+    generator = FakeGenerator(raise_error=AssertionError("must not generate"))
+    capsys.readouterr()
+
+    code = run_single_paper_analysis_command(
+        options, extractor=extractor, generator=generator, storage=storage
+    )
+
+    assert code == CLIExitCode.SUCCESS
+    assert extractor.call_count == 1
+    assert generator.call_count == 0
+    assert storage.get_early_section_record(paper_id) is None
+    assert "Outcome: not_eligible" in capsys.readouterr().out
+
+
+def test_ineligible_analysis_does_not_reuse_stale_library(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    options = _make_options(pdf_path, tmp_path)
+    eligible_storage = SQLiteStorage(":memory:")
+    eligible_storage.initialize()
+    response = _make_success_response_json(
+        "Abstract\nWe evaluate trade policy.", "We evaluate trade policy."
+    )
+    assert (
+        run_single_paper_analysis_command(
+            options,
+            extractor=FakePDFExtractor(),
+            generator=FakeGenerator(response_text=response),
+            storage=eligible_storage,
+        )
+        == CLIExitCode.SUCCESS
+    )
+    stale_library = eligible_storage.list_early_section_records()[0]
+
+    storage = SQLiteStorage(":memory:")
+    storage.initialize()
+    assert (
+        run_single_paper_analysis_command(
+            options,
+            extractor=FakePDFExtractor(pages_text=["", ""]),
+            generator=FakeGenerator(),
+            storage=storage,
+        )
+        == CLIExitCode.HALTED_OR_UNAVAILABLE
+    )
+    storage.save_early_section_record(stale_library)
+    extractor = FakePDFExtractor()
+    generator = FakeGenerator(raise_error=AssertionError("must not generate"))
+    capsys.readouterr()
+
+    code = run_single_paper_analysis_command(
+        options, extractor=extractor, generator=generator, storage=storage
+    )
+
+    assert code == CLIExitCode.HALTED_OR_UNAVAILABLE
+    assert extractor.call_count == 0
+    assert generator.call_count == 0
+    assert "Outcome: not_eligible" in capsys.readouterr().out
+
+
+def test_corrupt_library_fails_visibly_without_rebuild(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    storage = SQLiteStorage(":memory:")
+    storage.initialize()
+    response = _make_success_response_json(
+        "Abstract\nWe evaluate trade policy.", "We evaluate trade policy."
+    )
+    options = _make_options(pdf_path, tmp_path)
+    assert (
+        run_single_paper_analysis_command(
+            options,
+            extractor=FakePDFExtractor(),
+            generator=FakeGenerator(response_text=response),
+            storage=storage,
+        )
+        == CLIExitCode.SUCCESS
+    )
+    connection = storage._conn
+    assert connection is not None
+    connection.execute("UPDATE early_section_records SET markdown = 'corrupt'")
+    connection.commit()
+    extractor = FakePDFExtractor()
+    generator = FakeGenerator(raise_error=AssertionError("must not generate"))
+    capsys.readouterr()
+
+    code = run_single_paper_analysis_command(
+        options, extractor=extractor, generator=generator, storage=storage
+    )
+
+    assert code == CLIExitCode.UNEXPECTED_ERROR
+    assert "markdown_sha256 does not match" in capsys.readouterr().err
+    assert extractor.call_count == 0
+    assert generator.call_count == 0
+
+
+def test_changed_conversion_budget_replaces_library_only(
+    tmp_path: Path,
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    db_path = tmp_path / "conversion-replace.db"
+    options = _make_options(pdf_path, tmp_path, db_path=db_path)
+    storage = SQLiteStorage(db_path)
+    storage.initialize()
+    response = _make_success_response_json(
+        "Abstract\nWe evaluate trade policy.", "We evaluate trade policy."
+    )
+    assert (
+        run_single_paper_analysis_command(
+            options,
+            extractor=FakePDFExtractor(),
+            generator=FakeGenerator(response_text=response),
+            storage=storage,
+        )
+        == CLIExitCode.SUCCESS
+    )
+    original = storage.list_early_section_records()[0]
+    changed = AnalyzeCommandOptions(
+        **{
+            name: getattr(options, name)
+            for name in options.__dataclass_fields__
+            if name != "max_passage_characters"
+        },
+        max_passage_characters=20,
+    )
+    extractor = FakePDFExtractor()
+    generator = FakeGenerator(raise_error=AssertionError("must not generate"))
+
+    code = run_single_paper_analysis_command(
+        changed, extractor=extractor, generator=generator, storage=storage
+    )
+
+    assert code == CLIExitCode.SUCCESS
+    replacement = storage.list_early_section_records()[0]
+    assert generator.call_count == 0
+    assert extractor.call_count == 1
+    assert replacement.paper.paper_id == original.paper.paper_id
+    assert replacement.settings_fingerprint != original.settings_fingerprint
+    assert replacement.created_at == original.created_at
+
+
+def test_invalid_conversion_budget_is_typed_configuration_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    options = _make_options(pdf_path, tmp_path)
+    invalid = AnalyzeCommandOptions(
+        **{
+            name: getattr(options, name)
+            for name in options.__dataclass_fields__
+            if name != "max_passage_characters"
+        },
+        max_passage_characters=0,
+    )
+
+    assert run_single_paper_analysis_command(invalid) == 2
+    assert "max_passage_characters" in capsys.readouterr().err
+
+
+def test_introduction_only_analysis_populates_library(tmp_path: Path) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    storage = SQLiteStorage(":memory:")
+    storage.initialize()
+
+    code = run_single_paper_analysis_command(
+        _make_options(pdf_path, tmp_path),
+        extractor=FakePDFExtractor(
+            pages_text=["1. Introduction\n" + "Introduction evidence. " * 30]
+        ),
+        generator=FakeGenerator(abstained=True),
+        storage=storage,
+    )
+
+    assert code == CLIExitCode.HALTED_OR_UNAVAILABLE
+    library = storage.list_early_section_records()[0]
+    assert {passage.section_heading for passage in library.passages} == {"Introduction"}
+
+
+def test_no_detected_early_section_is_inspectable_without_empty_record(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    storage = SQLiteStorage(":memory:")
+    storage.initialize()
+
+    options = _make_options(pdf_path, tmp_path)
+    code = run_single_paper_analysis_command(
+        options,
+        extractor=FakePDFExtractor(pages_text=["Unheaded discussion text. " * 30]),
+        generator=FakeGenerator(),
+        storage=storage,
+    )
+
+    assert code == CLIExitCode.HALTED_OR_UNAVAILABLE
+    assert storage.list_single_paper_analyses()
+    assert storage.list_early_section_records() == ()
+    assert "Outcome: no_usable_sections" in capsys.readouterr().out
+
+    extractor = FakePDFExtractor()
+    generator = FakeGenerator(raise_error=AssertionError("must not generate"))
+    code = run_single_paper_analysis_command(
+        options, extractor=extractor, generator=generator, storage=storage
+    )
+
+    assert code == CLIExitCode.HALTED_OR_UNAVAILABLE
+    assert extractor.call_count == 0
+    assert generator.call_count == 0
+    assert storage.list_early_section_records() == ()
+    assert "Outcome: no_usable_sections" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
+        "single_paper_analyses",
+        "single_paper_analysis_warnings",
+        "single_paper_analysis_sections",
+        "single_paper_analysis_questions",
+        "single_paper_analysis_evidence",
+        "early_section_records",
+        "passages",
+        "passage_provenance",
+        "passage_source_fragments",
+    ],
+)
+def test_coordinated_write_failure_rolls_back_analysis_and_library(
+    table: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    storage = SQLiteStorage(":memory:")
+    storage.initialize()
+    connection = storage._conn
+    assert connection is not None
+    connection.execute(
+        f"""CREATE TRIGGER fail_{table} BEFORE INSERT ON {table}
+        BEGIN SELECT RAISE(ABORT, 'injected {table} failure'); END"""
+    )
+    response = _make_success_response_json(
+        "Abstract\nWe evaluate trade policy.", "We evaluate trade policy."
+    )
+
+    code = run_single_paper_analysis_command(
+        _make_options(pdf_path, tmp_path),
+        extractor=FakePDFExtractor(),
+        generator=FakeGenerator(response_text=response),
+        storage=storage,
+    )
+
+    assert code == CLIExitCode.UNEXPECTED_ERROR
+    assert f"injected {table} failure" in capsys.readouterr().err
+    assert storage.list_single_paper_analyses() == ()
+    assert storage.list_early_section_records() == ()

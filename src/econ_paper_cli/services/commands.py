@@ -67,6 +67,8 @@ def run_analyze(args: Namespace) -> int:
             args, "research_question_policy_version", None
         ),
         single_paper_policy_version=getattr(args, "single_paper_policy_version", None),
+        conversion_policy_version=getattr(args, "conversion_policy_version", None),
+        max_passage_characters=getattr(args, "max_passage_characters", 1200),
     )
 
     return run_single_paper_analysis_command(options)

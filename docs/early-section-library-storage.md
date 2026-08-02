@@ -1,10 +1,10 @@
 # Early-section library storage
 
 Issue 48 adds a durable storage boundary for successful Abstract/Introduction
-conversion results. It does not connect that boundary to `econpapers analyze`.
-Callers explicitly project a successful extraction, section detection, and
-conversion into an `EarlySectionLibraryRecord`, then pass that record to a
-`StorageBackend`.
+conversion results. Issue 50 connects it to `econpapers analyze`. Callers may
+still explicitly project a successful extraction, section detection, and
+conversion into an `EarlySectionLibraryRecord`, while command orchestration now
+performs that projection and persistence for eligible PDFs.
 
 ## Record and projection contract
 
@@ -81,3 +81,22 @@ for `EarlySectionLibraryRecord`. The existing generic paper-record and
 single-paper-analysis operations remain available. No Markdown file, PDF copy,
 retrieval index, model call, subprocess, or network request is created by this
 workflow.
+
+## Analysis orchestration and reuse
+
+For newly executed analysis, conversion consumes the exact transient extraction
+and section-detection objects already produced by the five-stage workflow. Both
+immutable records are prepared with one injected timestamp, then
+`save_analysis_and_early_section` writes and strictly reads them in one
+transaction. A failure in either representation rolls back both.
+
+Exact reuse requires both the checksum/settings-matched analysis and a strictly
+validated early-section record with the requested conversion fingerprint. If
+only the analysis exists, or the conversion fingerprint changed, the command
+re-extracts and redetects sections from the currently verified PDF and replaces
+only the library record; it does not initialize or invoke the generator.
+Preflight failure, extraction failure, `LIKELY_NEEDS_OCR`, and `UNUSABLE` remain
+analysis-only and report `NOT_ELIGIBLE`. A valid extraction with no usable
+Abstract or Introduction reports `NO_USABLE_SECTIONS` without creating an empty
+record. A question-extraction halt does not block otherwise eligible library
+population.

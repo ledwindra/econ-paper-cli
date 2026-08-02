@@ -50,6 +50,10 @@ from econ_paper_cli.domain.ingestion import (
     IngestionPreflightResult,
     PreflightCandidate,
 )
+from econ_paper_cli.domain.library_population import (
+    LibraryPopulationResult,
+    LibraryPopulationStatus,
+)
 from econ_paper_cli.domain.papers import Paper
 from econ_paper_cli.domain.passages import Passage
 from econ_paper_cli.domain.pdf_conversion import (
@@ -148,6 +152,8 @@ __all__ = [
     "IngestionUnsupportedFileError",
     "IngestionValidationError",
     "IngestionWarning",
+    "LibraryPopulationResult",
+    "LibraryPopulationStatus",
     "Paper",
     "PaperRecord",
     "PaperValidationError",

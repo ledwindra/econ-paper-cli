@@ -17,12 +17,15 @@ from econ_paper_cli.adapters.filesystem import (
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.domain import (
     DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+    LibraryPopulationResult,
+    LibraryPopulationStatus,
     PDFDocumentMetadata,
     PDFExtractionResult,
     SinglePaperAnalysisFailureCode,
     SinglePaperAnalysisRecord,
     SinglePaperAnalysisStage,
     SinglePaperAnalysisStatus,
+    compute_conversion_paper_id,
 )
 from econ_paper_cli.domain.pdf_extraction import ExtractedPDFPage
 from econ_paper_cli.protocols.generation import (
@@ -51,31 +54,34 @@ from econ_paper_cli.services.single_paper_analysis_cli import (
 class FakePDFExtractor(PDFExtractor):
     """Fake extractor returning two pages of synthetic text."""
 
-    def __init__(self, raise_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        raise_error: Exception | None = None,
+        pages_text: tuple[str, ...] | None = None,
+    ) -> None:
         self.call_count = 0
         self.called_paths: list[Path] = []
         self._raise = raise_error
+        self._pages_text = pages_text
 
     def extract(self, pdf_path: Path) -> PDFExtractionResult:
         if self._raise is not None:
             raise self._raise
         self.call_count += 1
         self.called_paths.append(pdf_path)
-        pages = (
-            ExtractedPDFPage(
-                page_number=1,
-                text="Abstract\nWe study trade effects.\n\n1. Introduction\nTrade policy on page 1.",
-            ),
-            ExtractedPDFPage(
-                page_number=2,
-                text="1. Introduction (continued)\nTrade policy on page 2.",
-            ),
+        page_texts = self._pages_text or (
+            "Abstract\nWe study trade effects.\n\n1. Introduction\nTrade policy on page 1.",
+            "1. Introduction (continued)\nTrade policy on page 2.",
+        )
+        pages = tuple(
+            ExtractedPDFPage(page_number=index, text=text)
+            for index, text in enumerate(page_texts, start=1)
         )
         meta = PDFDocumentMetadata(title=f"Paper: {pdf_path.name}")
         return PDFExtractionResult(
             source_path=pdf_path.resolve(),
             pages=pages,
-            page_count=2,
+            page_count=len(pages),
             metadata=meta,
             extraction_method="fake",
             parser_version="0.0",
@@ -457,6 +463,78 @@ def test_second_run_reuses_all_exact_durable_records(
     out2 = capsys.readouterr().out
     assert "Reused (exact):      2" in out2
     assert "Newly analyzed:      0" in out2
+
+
+def test_second_no_section_batch_run_reuses_negative_outcome(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    _write_pdf(papers_dir / "paper.pdf")
+    storage = SQLiteStorage(":memory:")
+    storage.initialize()
+    options = _make_opts(papers_dir, tmp_path)
+    no_sections = ("Unheaded discussion text. " * 30,)
+
+    code1 = run_single_paper_analysis_command(
+        options,
+        extractor=FakePDFExtractor(pages_text=no_sections),
+        generator=CountingFakeGenerator(),
+        storage=storage,
+    )
+    capsys.readouterr()
+    extractor = FakePDFExtractor()
+    generator = CountingFakeGenerator()
+    code2 = run_single_paper_analysis_command(
+        options, extractor=extractor, generator=generator, storage=storage
+    )
+
+    assert code1 == code2 == CLIExitCode.HALTED_OR_UNAVAILABLE
+    assert extractor.call_count == 0
+    assert generator.call_count == 0
+    output = capsys.readouterr().out
+    assert "Reused (exact):      1" in output
+    assert "Library no sections: 1" in output
+
+
+def test_batch_backfill_typed_extraction_failure_is_not_eligible(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    pdf_path = _write_pdf(papers_dir / "paper.pdf").resolve()
+    storage = SQLiteStorage(":memory:")
+    storage.initialize()
+    options = _make_opts(papers_dir, tmp_path)
+    assert (
+        run_single_paper_analysis_command(
+            options,
+            extractor=FakePDFExtractor(),
+            generator=CountingFakeGenerator(),
+            storage=storage,
+        )
+        == CLIExitCode.SUCCESS
+    )
+    paper_id = storage.list_early_section_records()[0].paper.paper_id
+    assert storage.delete_early_section_record(paper_id)
+    generator = CountingFakeGenerator()
+    capsys.readouterr()
+
+    code = run_single_paper_analysis_command(
+        options,
+        extractor=FakePDFExtractor(
+            raise_error=PDFParserError(pdf_path, RuntimeError("backfill failed"))
+        ),
+        generator=generator,
+        storage=storage,
+    )
+
+    assert code == CLIExitCode.SUCCESS
+    assert generator.call_count == 0
+    assert storage.get_early_section_record(paper_id) is None
+    output = capsys.readouterr().out
+    assert "Library ineligible:  1" in output
+    assert "Unexpected failures: 0" in output
 
 
 # ---------------------------------------------------------------------------
@@ -1007,7 +1085,22 @@ def test_directory_output_is_exact_and_reuses_record_formatter(
         "\n".join(
             (
                 f"=== [{BatchOutcomeKind.NEWLY_ANALYZED.value}] {path} ===",
-                format_analysis_record_output(records_by_path[path], db),
+                format_analysis_record_output(
+                    records_by_path[path],
+                    db,
+                    LibraryPopulationResult(
+                        LibraryPopulationStatus.STORED,
+                        paper_id=(
+                            library := storage.get_early_section_record(
+                                compute_conversion_paper_id(
+                                    records_by_path[path].content_checksum or ""
+                                )
+                            )
+                        ).paper.paper_id,
+                        conversion_fingerprint=library.settings_fingerprint,
+                        passage_count=len(library.passages),
+                    ),
+                ),
             )
         )
         for path in paths
@@ -1024,6 +1117,11 @@ def test_directory_output_is_exact_and_reuses_record_formatter(
             "Halted/unavailable:  0",
             "Typed failures:      0",
             "Unexpected failures: 0",
+            "Library stored:      2",
+            "Library reused:      0",
+            "Library no sections: 0",
+            "Library ineligible:  0",
+            "Library failed:      0",
         )
     )
     assert capsys.readouterr().out == "\n\n".join((*item_sections, summary)) + "\n"

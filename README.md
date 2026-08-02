@@ -64,7 +64,7 @@ econpapers setup
 econpapers chat
 econpapers status
 econpapers update
-econpapers analyze TARGET_PATH --llama-cpp-path EXECUTABLE_PATH --model-path MODEL_PATH --model-id MODEL_ID --model-bytes BYTES --model-checksum SHA256
+econpapers analyze TARGET_PATH --llama-cpp-path EXECUTABLE_PATH --model-path MODEL_PATH --model-id MODEL_ID --model-bytes BYTES --model-checksum SHA256 [--max-passage-characters 1200]
 ```
 
 The first four commands are deterministic placeholders. `econpapers analyze`
@@ -73,7 +73,11 @@ processes unique PDF content in deterministic path order, persists structured
 research-question evidence and provenance to SQLite, and resumes exact prior
 analyses when the checksum and canonical settings match. The runtime and GGUF
 model must already exist at the explicit paths; the command downloads nothing
-and never modifies source PDFs.
+and never modifies source PDFs. Eligible analyses also persist deterministic
+Abstract/Introduction Markdown, passages, and exact source-fragment provenance.
+Exact analysis-plus-library reuse and library-only backfill are decided before
+the local model adapter is initialized, so those paths do not need accessible
+model artifacts or invoke generation.
 
 ### Intended future workflow
 
@@ -188,7 +192,7 @@ The storage layer is implemented as a database-independent protocol (`StorageBac
 - **Transactions & rollback:** all writes for a paper record execute within a single atomic SQLite transaction (`BEGIN IMMEDIATE`), with full rollback on failure.
 - **Deduplication & idempotency:** deterministic replacement and checksum-aware duplicate detection (`content_checksum`), raising `ChecksumConflictError` on conflicting paper identifiers.
 - **Versioning & migrations:** schema version tracking with forward migrations (`schema_migrations` table) and transaction rollback on migration failure.
-- **Early-section records:** schema version 4 stores generated Abstract/Introduction Markdown, stable passages, conversion identity, and ordered page-local provenance fragments without writing external Markdown files. The projection/storage boundary is not yet connected to `econpapers analyze`; see [`docs/early-section-library-storage.md`](docs/early-section-library-storage.md).
+- **Early-section records:** schema version 4 stores generated Abstract/Introduction Markdown, stable passages, conversion identity, and ordered page-local provenance fragments without writing external Markdown files. `econpapers analyze` now populates this representation, reuses exact compatible records, and backfills legacy analysis-only records without rerunning research-question generation; see [`docs/early-section-library-storage.md`](docs/early-section-library-storage.md).
 - **Cross-platform paths:** automatic data directory and database path resolution for Windows (`%LOCALAPPDATA%`), macOS (`~/Library/Application Support`), and Linux (`${XDG_DATA_HOME:-~/.local/share}`), with `ECONPAPERS_LIBRARY_DIR` environment variable override.
 
 ## Repository direction
