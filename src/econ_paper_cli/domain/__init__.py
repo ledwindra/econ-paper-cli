@@ -92,6 +92,7 @@ from econ_paper_cli.domain.pdf_sections import (
     PDFHeadingCandidate,
     PDFSection,
     PDFSectionBoundaryEvidence,
+    PDFSectionBoundaryEvidenceType,
     PDFSectionDetectionMethod,
     PDFSectionDetectionResult,
     PDFSectionKind,
@@ -99,6 +100,7 @@ from econ_paper_cli.domain.pdf_sections import (
     PDFSectionSpan,
     PDFSectionWarning,
     PDFSectionWarningCode,
+    get_canonical_section_label,
 )
 from econ_paper_cli.domain.research_question import (
     DEFAULT_RESEARCH_QUESTION_SETTINGS,
@@ -200,6 +202,7 @@ __all__ = [
     "PDFHeadingCandidate",
     "PDFSection",
     "PDFSectionBoundaryEvidence",
+    "PDFSectionBoundaryEvidenceType",
     "PDFSectionDetectionMethod",
     "PDFSectionDetectionResult",
     "PDFSectionKind",
@@ -208,6 +211,7 @@ __all__ = [
     "PDFSectionValidationError",
     "PDFSectionWarning",
     "PDFSectionWarningCode",
+    "get_canonical_section_label",
     "DEFAULT_PDF_SECTION_SETTINGS",
     "PreflightCandidate",
     "RedistributionStatus",

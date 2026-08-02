@@ -21,6 +21,7 @@ from econ_paper_cli.domain.pdf_quality import (
     PDFQualityWarningCode,
 )
 from econ_paper_cli.domain.pdf_sections import (
+    PDFSectionBoundaryEvidenceType,
     PDFSectionDetectionMethod,
     PDFSectionKind,
     PDFSectionSettings,
@@ -64,7 +65,7 @@ from econ_paper_cli.protocols.storage import (
     StorageValidationError,
 )
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 _MIGRATIONS: list[tuple[int, str, list[str]]] = [
     (
@@ -89,7 +90,6 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );""",
-            "CREATE INDEX IF NOT EXISTS idx_papers_checksum ON papers(content_checksum);",
             """CREATE TABLE IF NOT EXISTS source_provenance (
                 paper_id TEXT PRIMARY KEY,
                 source_path TEXT NOT NULL,
@@ -116,7 +116,6 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 ordinal_position INTEGER NOT NULL,
                 FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE
             );""",
-            "CREATE INDEX IF NOT EXISTS idx_passages_paper_ordinal ON passages(paper_id, ordinal_position);",
             """CREATE TABLE IF NOT EXISTS ingestion_warnings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 paper_id TEXT NOT NULL,
@@ -367,6 +366,12 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 WHEN 'introduction' THEN 'Introduction'
                 ELSE heading_text
             END;""",
+        ],
+    ),
+    (
+        6,
+        "Add section boundary evidence table for unheaded front-matter structure",
+        [
             """CREATE TABLE IF NOT EXISTS single_paper_analysis_section_boundary_evidence (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 analysis_id TEXT NOT NULL,
@@ -1585,7 +1590,7 @@ class SQLiteStorage(StorageBackend):
                             b_ev.page_number,
                             b_ev.start_character_offset,
                             b_ev.end_character_offset,
-                            b_ev.evidence_type,
+                            b_ev.evidence_type.value,
                             b_ev.description,
                             b_ev.ordinal_position,
                         ),
@@ -1765,7 +1770,9 @@ class SQLiteStorage(StorageBackend):
                         page_number=bev["page_number"],
                         start_character_offset=bev["start_character_offset"],
                         end_character_offset=bev["end_character_offset"],
-                        evidence_type=bev["evidence_type"],
+                        evidence_type=PDFSectionBoundaryEvidenceType(
+                            bev["evidence_type"]
+                        ),
                         description=bev["description"],
                         ordinal_position=bev["ordinal_position"],
                     )

@@ -19,11 +19,32 @@ _DISPLAY_LABELS = {
 }
 
 
+def get_canonical_section_label(kind: PDFSectionKind) -> str:
+    """Return the canonical display label for a PDFSectionKind."""
+    if not isinstance(kind, PDFSectionKind):
+        raise PDFSectionValidationError(
+            f"kind must be a PDFSectionKind instance, got {type(kind).__name__}."
+        )
+    return _DISPLAY_LABELS[kind]
+
+
 class PDFSectionDetectionMethod(str, Enum):
     """How a section's boundaries were determined."""
 
     EXPLICIT_HEADING = "explicit_heading"
     IMPLICIT_FRONT_MATTER = "implicit_front_matter"
+
+
+class PDFSectionBoundaryEvidenceType(str, Enum):
+    """Stable identifiers for section boundary evidence cues in closed vocabulary."""
+
+    TITLE_BLOCK = "title_block"
+    AUTHOR_BLOCK = "author_block"
+    ABSTRACT_HEADING = "abstract_heading"
+    INTRODUCTION_HEADING = "introduction_heading"
+    FIRST_SECTION_HEADING = "first_section_heading"
+    PAGE_BOUNDARY = "page_boundary"
+    UNHEADED_PARAGRAPH_BREAK = "unheaded_paragraph_break"
 
 
 class PDFSectionWarningCode(str, Enum):
@@ -172,7 +193,7 @@ class PDFSectionBoundaryEvidence:
     page_number: int
     start_character_offset: int
     end_character_offset: int
-    evidence_type: str
+    evidence_type: PDFSectionBoundaryEvidenceType
     description: str
 
     def __post_init__(self) -> None:
@@ -183,7 +204,22 @@ class PDFSectionBoundaryEvidence:
             raise PDFSectionValidationError(
                 "start_character_offset cannot exceed end_character_offset."
             )
-        _validate_nonempty_text("evidence_type", self.evidence_type)
+        if not isinstance(self.evidence_type, PDFSectionBoundaryEvidenceType):
+            if isinstance(self.evidence_type, str):
+                try:
+                    object.__setattr__(
+                        self,
+                        "evidence_type",
+                        PDFSectionBoundaryEvidenceType(self.evidence_type),
+                    )
+                except ValueError:
+                    raise PDFSectionValidationError(
+                        f"evidence_type '{self.evidence_type}' is not a recognized PDFSectionBoundaryEvidenceType."
+                    )
+            else:
+                raise PDFSectionValidationError(
+                    "evidence_type must be a PDFSectionBoundaryEvidenceType instance or valid string."
+                )
         _validate_nonempty_text("description", self.description)
 
 
@@ -222,6 +258,26 @@ class PDFSection:
             raise PDFSectionValidationError(
                 "boundary_evidence must be a tuple of PDFSectionBoundaryEvidence instances."
             )
+
+        if self.boundary_evidence:
+            ev_keys = [
+                (
+                    ev.page_number,
+                    ev.start_character_offset,
+                    ev.end_character_offset,
+                    ev.evidence_type.value,
+                    ev.description,
+                )
+                for ev in self.boundary_evidence
+            ]
+            if len(set(ev_keys)) != len(ev_keys):
+                raise PDFSectionValidationError(
+                    "boundary_evidence items must be unique."
+                )
+            if ev_keys != sorted(ev_keys):
+                raise PDFSectionValidationError(
+                    "boundary_evidence items must be ordered deterministically by page_number, start_character_offset, end_character_offset, evidence_type, and description."
+                )
 
         if self.detection_method is PDFSectionDetectionMethod.EXPLICIT_HEADING:
             _validate_nonempty_text("observed_heading_text", self.observed_heading_text)

@@ -771,31 +771,31 @@ def test_forward_migration_and_rollback() -> None:
     assert storage.get_schema_version() == CURRENT_SCHEMA_VERSION
 
     # Define a valid custom migration after the current production schema
-    migration_v5 = [
+    migration_v7 = [
         (
-            5,
+            7,
             "Add test metadata column",
             ["ALTER TABLE papers ADD COLUMN notes TEXT;"],
         )
     ]
-    storage._run_migrations(custom_migrations=migration_v5)
-    assert storage.get_schema_version() == 5
+    storage._run_migrations(custom_migrations=migration_v7)
+    assert storage.get_schema_version() == 7
 
     # Define the next failing custom migration
-    migration_v6_failing = [
+    migration_v8_failing = [
         (
-            6,
+            8,
             "Failing migration statement",
             ["INVALID SQL STATEMENT syntax error;"],
         )
     ]
     with pytest.raises(
-        StorageMigrationError, match="Migration to schema version 6 failed"
+        StorageMigrationError, match="Migration to schema version 8 failed"
     ):
-        storage._run_migrations(custom_migrations=migration_v6_failing)
+        storage._run_migrations(custom_migrations=migration_v8_failing)
 
-    # Version remains at 5 (rolled back)
-    assert storage.get_schema_version() == 5
+    # Version remains at 7 (rolled back)
+    assert storage.get_schema_version() == 7
     storage.close()
 
 
@@ -1058,6 +1058,219 @@ def test_v4_to_v5_schema_migration_canonical_heading_and_observed_heading(
     assert cur_bev.fetchone()[0] == 0
 
     # Retrieve record through domain storage API
+    rec = storage.get_single_paper_analysis(exact_id)
+    assert rec is not None
+    assert len(rec.sections) == 1
+    sec = rec.sections[0]
+    assert sec.section_kind is PDFSectionKind.INTRODUCTION
+    assert sec.heading_text == "Introduction"
+    assert sec.observed_heading_text == "1. Introduction"
+    assert sec.detection_method is PDFSectionDetectionMethod.EXPLICIT_HEADING
+    assert sec.boundary_evidence == ()
+
+    storage.close()
+
+
+def test_v5_to_v6_schema_migration_creates_boundary_evidence_table(
+    tmp_path: Path,
+) -> None:
+    """Schema v5 database without boundary evidence table migrates to schema v6, preserving existing v5 rows and creating the evidence table."""
+    from econ_paper_cli.domain import (
+        DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+        PDFSectionDetectionMethod,
+        PDFSectionKind,
+        compute_analysis_id,
+        compute_settings_fingerprint,
+    )
+
+    db_file = tmp_path / "v5_migration_test.db"
+    conn = sqlite3.connect(str(db_file))
+
+    # Create exact schema version 5 (v5 has detection_method & observed_heading_text, but NO evidence table)
+    conn.executescript(
+        """
+        CREATE TABLE schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL,
+            description TEXT NOT NULL
+        );
+        CREATE TABLE papers (
+            paper_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            authors_json TEXT NOT NULL,
+            year INTEGER,
+            abstract TEXT,
+            source_name TEXT NOT NULL,
+            source_identifier TEXT NOT NULL,
+            source_url TEXT,
+            content_checksum TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE single_paper_analyses (
+            analysis_id TEXT PRIMARY KEY,
+            content_checksum TEXT COLLATE NOCASE,
+            source_path TEXT NOT NULL,
+            policy_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            failed_stage TEXT,
+            failure_code TEXT,
+            error_message TEXT,
+            completed_stages_json TEXT NOT NULL,
+            skipped_stages_json TEXT NOT NULL,
+            quality_status TEXT,
+            quality_settings_json TEXT NOT NULL,
+            section_settings_json TEXT NOT NULL,
+            research_question_settings_json TEXT NOT NULL,
+            settings_fingerprint TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE single_paper_analysis_warnings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            analysis_id TEXT NOT NULL,
+            warning_domain TEXT NOT NULL,
+            warning_code TEXT NOT NULL,
+            details TEXT,
+            page_numbers_json TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(analysis_id) REFERENCES single_paper_analyses(analysis_id) ON DELETE CASCADE
+        );
+        CREATE TABLE single_paper_analysis_sections (
+            analysis_id TEXT NOT NULL,
+            section_kind TEXT NOT NULL,
+            heading_text TEXT NOT NULL,
+            detection_method TEXT NOT NULL DEFAULT 'explicit_heading',
+            observed_heading_text TEXT,
+            page_start INTEGER NOT NULL,
+            page_end INTEGER NOT NULL,
+            ordinal_position INTEGER NOT NULL,
+            PRIMARY KEY(analysis_id, section_kind),
+            FOREIGN KEY(analysis_id) REFERENCES single_paper_analyses(analysis_id) ON DELETE CASCADE,
+            CONSTRAINT uq_analysis_section_ordinal UNIQUE(analysis_id, ordinal_position)
+        );
+        CREATE TABLE single_paper_analysis_section_spans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            analysis_id TEXT NOT NULL,
+            section_kind TEXT NOT NULL,
+            page_number INTEGER NOT NULL,
+            start_character_offset INTEGER NOT NULL,
+            end_character_offset INTEGER NOT NULL,
+            ordinal_position INTEGER NOT NULL,
+            FOREIGN KEY(analysis_id, section_kind) REFERENCES single_paper_analysis_sections(analysis_id, section_kind) ON DELETE CASCADE,
+            CONSTRAINT uq_analysis_section_span_ordinal UNIQUE(analysis_id, section_kind, ordinal_position)
+        );
+        CREATE TABLE single_paper_analysis_questions (
+            analysis_id TEXT PRIMARY KEY,
+            question_text TEXT,
+            kind TEXT NOT NULL,
+            sections_used_json TEXT NOT NULL,
+            FOREIGN KEY(analysis_id) REFERENCES single_paper_analyses(analysis_id) ON DELETE CASCADE
+        );
+        CREATE TABLE single_paper_analysis_evidence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            analysis_id TEXT NOT NULL,
+            section_kind TEXT NOT NULL,
+            excerpt_text TEXT NOT NULL,
+            page_number INTEGER NOT NULL,
+            start_character_offset INTEGER NOT NULL,
+            end_character_offset INTEGER NOT NULL,
+            ordinal_position INTEGER NOT NULL,
+            FOREIGN KEY(analysis_id, section_kind) REFERENCES single_paper_analysis_sections(analysis_id, section_kind) ON DELETE CASCADE,
+            CONSTRAINT uq_analysis_evidence_ordinal UNIQUE(analysis_id, ordinal_position)
+        );
+        INSERT INTO schema_migrations VALUES (1, '2026-07-31T20:00:00Z', 'Migration v1');
+        INSERT INTO schema_migrations VALUES (2, '2026-07-31T20:00:00Z', 'Migration v2');
+        INSERT INTO schema_migrations VALUES (3, '2026-07-31T20:00:00Z', 'Migration v3');
+        INSERT INTO schema_migrations VALUES (4, '2026-07-31T20:00:00Z', 'Migration v4');
+        INSERT INTO schema_migrations VALUES (5, '2026-07-31T20:00:00Z', 'Migration v5');
+        """
+    )
+
+    pdf_path = str((tmp_path / "v5_paper.pdf").resolve())
+    ck = "e" * 64
+    fp = compute_settings_fingerprint(DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS)
+    exact_id = compute_analysis_id(ck, DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS, pdf_path)
+
+    conn.execute(
+        """INSERT INTO single_paper_analyses (
+            analysis_id, content_checksum, source_path, policy_version,
+            status, failed_stage, failure_code, error_message,
+            completed_stages_json, skipped_stages_json, quality_status,
+            quality_settings_json, section_settings_json, research_question_settings_json,
+            settings_fingerprint, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            exact_id,
+            ck,
+            pdf_path,
+            "single-paper-analysis-v1",
+            "success",
+            None,
+            None,
+            None,
+            '["preflight","extraction","quality_assessment","section_detection","question_extraction"]',
+            "[]",
+            "usable",
+            json.dumps(
+                dataclasses.asdict(
+                    DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.quality_settings
+                )
+            ),
+            json.dumps(
+                dataclasses.asdict(
+                    DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.section_settings
+                )
+            ),
+            json.dumps(
+                dataclasses.asdict(
+                    DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.research_question_settings
+                )
+            ),
+            fp,
+            "2026-08-01T20:00:00Z",
+            "2026-08-01T20:00:00Z",
+        ),
+    )
+    conn.execute(
+        """INSERT INTO single_paper_analysis_sections (
+            analysis_id, section_kind, heading_text, detection_method, observed_heading_text, page_start, page_end, ordinal_position
+        ) VALUES (?, 'introduction', 'Introduction', 'explicit_heading', '1. Introduction', 1, 1, 0)""",
+        (exact_id,),
+    )
+    conn.execute(
+        """INSERT INTO single_paper_analysis_section_spans (
+            analysis_id, section_kind, page_number, start_character_offset, end_character_offset, ordinal_position
+        ) VALUES (?, 'introduction', 1, 0, 100, 0)""",
+        (exact_id,),
+    )
+    conn.execute(
+        """INSERT INTO single_paper_analysis_questions VALUES (?, 'What is the question?', 'explicit', '["introduction"]');""",
+        (exact_id,),
+    )
+    conn.execute(
+        """INSERT INTO single_paper_analysis_evidence VALUES (1, ?, 'introduction', 'Excerpt text', 1, 0, 12, 0);""",
+        (exact_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    # Open schema v5 DB with current SQLiteStorage adapter -> triggers migration to schema v6
+    storage = SQLiteStorage(db_file)
+    storage.initialize()
+    assert storage.get_schema_version() == CURRENT_SCHEMA_VERSION
+    assert storage.get_schema_version() == 6
+
+    # Verify boundary evidence table was created by migration 6
+    raw_conn = storage._conn
+    assert raw_conn is not None
+    cur = raw_conn.execute(
+        "SELECT COUNT(*) FROM single_paper_analysis_section_boundary_evidence WHERE analysis_id = ?",
+        (exact_id,),
+    )
+    assert cur.fetchone()[0] == 0
+
+    # Retrieve existing v5 analysis record to prove read-back functionality
     rec = storage.get_single_paper_analysis(exact_id)
     assert rec is not None
     assert len(rec.sections) == 1

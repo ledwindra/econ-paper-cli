@@ -35,13 +35,14 @@ from econ_paper_cli.domain.pdf_quality import (
     PDFQualityWarning,
 )
 from econ_paper_cli.domain.pdf_sections import (
-    _DISPLAY_LABELS,
     DEFAULT_PDF_SECTION_SETTINGS,
+    PDFSectionBoundaryEvidenceType,
     PDFSectionDetectionMethod,
     PDFSectionDetectionResult,
     PDFSectionKind,
     PDFSectionSettings,
     PDFSectionWarning,
+    get_canonical_section_label,
 )
 from econ_paper_cli.domain.research_question import (
     DEFAULT_RESEARCH_QUESTION_SETTINGS,
@@ -652,7 +653,7 @@ class SinglePaperAnalysisSectionBoundaryEvidenceRecord:
     page_number: int
     start_character_offset: int
     end_character_offset: int
-    evidence_type: str
+    evidence_type: PDFSectionBoundaryEvidenceType
     description: str
     ordinal_position: int
 
@@ -664,7 +665,22 @@ class SinglePaperAnalysisSectionBoundaryEvidenceRecord:
             raise SinglePaperAnalysisValidationError(
                 "start_character_offset cannot exceed end_character_offset."
             )
-        _validate_nonempty_text("evidence_type", self.evidence_type)
+        if not isinstance(self.evidence_type, PDFSectionBoundaryEvidenceType):
+            if isinstance(self.evidence_type, str):
+                try:
+                    object.__setattr__(
+                        self,
+                        "evidence_type",
+                        PDFSectionBoundaryEvidenceType(self.evidence_type),
+                    )
+                except ValueError:
+                    raise SinglePaperAnalysisValidationError(
+                        f"evidence_type '{self.evidence_type}' is not a recognized PDFSectionBoundaryEvidenceType."
+                    )
+            else:
+                raise SinglePaperAnalysisValidationError(
+                    "evidence_type must be a PDFSectionBoundaryEvidenceType instance or valid string."
+                )
         _validate_nonempty_text("description", self.description)
         _validate_nonnegative_int("ordinal_position", self.ordinal_position)
 
@@ -696,7 +712,7 @@ class SinglePaperAnalysisSectionRecord:
                 "section_kind must be a PDFSectionKind instance."
             )
         _validate_nonempty_text("heading_text", self.heading_text)
-        expected_label = _DISPLAY_LABELS[self.section_kind]
+        expected_label = get_canonical_section_label(self.section_kind)
         if self.heading_text != expected_label:
             raise SinglePaperAnalysisValidationError(
                 f"heading_text '{self.heading_text}' must match canonical label "
@@ -713,6 +729,26 @@ class SinglePaperAnalysisSectionRecord:
             raise SinglePaperAnalysisValidationError(
                 "boundary_evidence must be a tuple of SinglePaperAnalysisSectionBoundaryEvidenceRecord instances."
             )
+
+        if self.boundary_evidence:
+            ev_keys = [
+                (
+                    ev.page_number,
+                    ev.start_character_offset,
+                    ev.end_character_offset,
+                    ev.evidence_type.value,
+                    ev.description,
+                )
+                for ev in self.boundary_evidence
+            ]
+            if len(set(ev_keys)) != len(ev_keys):
+                raise SinglePaperAnalysisValidationError(
+                    "boundary_evidence items must be unique."
+                )
+            if ev_keys != sorted(ev_keys):
+                raise SinglePaperAnalysisValidationError(
+                    "boundary_evidence items must be ordered deterministically by page_number, start_character_offset, end_character_offset, evidence_type, and description."
+                )
 
         if self.detection_method is PDFSectionDetectionMethod.EXPLICIT_HEADING:
             _validate_nonempty_text("observed_heading_text", self.observed_heading_text)

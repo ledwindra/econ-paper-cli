@@ -388,6 +388,7 @@ def test_implicit_section_roundtrip_and_restart(tmp_path: Path) -> None:
         PDFQualityMeasurements,
         PDFSection,
         PDFSectionBoundaryEvidence,
+        PDFSectionBoundaryEvidenceType,
         PDFSectionDetectionResult,
         PDFSectionSpan,
         PreflightCandidate,
@@ -463,7 +464,7 @@ def test_implicit_section_roundtrip_and_restart(tmp_path: Path) -> None:
         page_number=1,
         start_character_offset=0,
         end_character_offset=34,
-        evidence_type="title_block",
+        evidence_type=PDFSectionBoundaryEvidenceType.TITLE_BLOCK,
         description="Implicit front-matter inferred from title block boundaries",
     )
 
@@ -528,7 +529,10 @@ def test_implicit_section_roundtrip_and_restart(tmp_path: Path) -> None:
     assert sec_rec.detection_method is PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER
     assert sec_rec.observed_heading_text is None
     assert len(sec_rec.boundary_evidence) == 1
-    assert sec_rec.boundary_evidence[0].evidence_type == "title_block"
+    assert (
+        sec_rec.boundary_evidence[0].evidence_type
+        is PDFSectionBoundaryEvidenceType.TITLE_BLOCK
+    )
 
     # 2. Save to SQLite database file and close
     db_file = tmp_path / "implicit_restart.db"
@@ -553,7 +557,10 @@ def test_implicit_section_roundtrip_and_restart(tmp_path: Path) -> None:
     assert r_sec.boundary_evidence[0].page_number == 1
     assert r_sec.boundary_evidence[0].start_character_offset == 0
     assert r_sec.boundary_evidence[0].end_character_offset == 34
-    assert r_sec.boundary_evidence[0].evidence_type == "title_block"
+    assert (
+        r_sec.boundary_evidence[0].evidence_type
+        is PDFSectionBoundaryEvidenceType.TITLE_BLOCK
+    )
     assert (
         r_sec.boundary_evidence[0].description
         == "Implicit front-matter inferred from title block boundaries"

@@ -9,6 +9,7 @@ from econ_paper_cli.domain import (
     PDFHeadingCandidate,
     PDFSection,
     PDFSectionBoundaryEvidence,
+    PDFSectionBoundaryEvidenceType,
     PDFSectionDetectionMethod,
     PDFSectionDetectionResult,
     PDFSectionKind,
@@ -76,18 +77,18 @@ def test_section_boundary_evidence_validation() -> None:
         page_number=1,
         start_character_offset=0,
         end_character_offset=50,
-        evidence_type="title_block",
+        evidence_type=PDFSectionBoundaryEvidenceType.TITLE_BLOCK,
         description="Implicit front-matter inferred from title block and abstract text",
     )
     assert ev.page_number == 1
-    assert ev.evidence_type == "title_block"
+    assert ev.evidence_type is PDFSectionBoundaryEvidenceType.TITLE_BLOCK
 
     with pytest.raises(PDFSectionValidationError, match="page_number"):
         PDFSectionBoundaryEvidence(
             page_number=0,
             start_character_offset=0,
             end_character_offset=50,
-            evidence_type="title_block",
+            evidence_type=PDFSectionBoundaryEvidenceType.TITLE_BLOCK,
             description="Desc",
         )
 
@@ -96,7 +97,16 @@ def test_section_boundary_evidence_validation() -> None:
             page_number=1,
             start_character_offset=60,
             end_character_offset=50,
-            evidence_type="title_block",
+            evidence_type=PDFSectionBoundaryEvidenceType.TITLE_BLOCK,
+            description="Desc",
+        )
+
+    with pytest.raises(PDFSectionValidationError, match="evidence_type"):
+        PDFSectionBoundaryEvidence(
+            page_number=1,
+            start_character_offset=0,
+            end_character_offset=50,
+            evidence_type="invalid_custom_type_string",
             description="Desc",
         )
 
@@ -112,7 +122,7 @@ def test_implicit_section_requires_none_observed_heading_and_boundary_evidence()
         page_number=1,
         start_character_offset=0,
         end_character_offset=20,
-        evidence_type="implicit_header",
+        evidence_type=PDFSectionBoundaryEvidenceType.TITLE_BLOCK,
         description="Implicit front-matter evidence",
     )
 
@@ -164,6 +174,58 @@ def test_implicit_section_requires_none_observed_heading_and_boundary_evidence()
     assert len(implicit_sec.boundary_evidence) == 1
 
 
+def test_section_boundary_evidence_uniqueness_and_ordering_rejection() -> None:
+    span = PDFSectionSpan(
+        page_number=1, start_character_offset=0, end_character_offset=20
+    )
+    text = "A" * 20
+    ev1 = PDFSectionBoundaryEvidence(
+        page_number=1,
+        start_character_offset=0,
+        end_character_offset=10,
+        evidence_type=PDFSectionBoundaryEvidenceType.TITLE_BLOCK,
+        description="First evidence anchor",
+    )
+    ev2 = PDFSectionBoundaryEvidence(
+        page_number=1,
+        start_character_offset=11,
+        end_character_offset=20,
+        evidence_type=PDFSectionBoundaryEvidenceType.FIRST_SECTION_HEADING,
+        description="Second evidence anchor",
+    )
+
+    # Duplicate evidence items rejected
+    with pytest.raises(
+        PDFSectionValidationError, match="boundary_evidence items must be unique"
+    ):
+        PDFSection(
+            kind=PDFSectionKind.ABSTRACT,
+            detection_method=PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER,
+            observed_heading_text=None,
+            start_page_number=1,
+            end_page_number=1,
+            spans=(span,),
+            text=text,
+            boundary_evidence=(ev1, ev1),
+        )
+
+    # Out-of-order evidence items rejected
+    with pytest.raises(
+        PDFSectionValidationError,
+        match="boundary_evidence items must be ordered deterministically",
+    ):
+        PDFSection(
+            kind=PDFSectionKind.ABSTRACT,
+            detection_method=PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER,
+            observed_heading_text=None,
+            start_page_number=1,
+            end_page_number=1,
+            spans=(span,),
+            text=text,
+            boundary_evidence=(ev2, ev1),
+        )
+
+
 def test_explicit_section_requires_observed_heading_and_forbids_boundary_evidence() -> (
     None
 ):
@@ -175,7 +237,7 @@ def test_explicit_section_requires_observed_heading_and_forbids_boundary_evidenc
         page_number=1,
         start_character_offset=0,
         end_character_offset=20,
-        evidence_type="implicit_header",
+        evidence_type=PDFSectionBoundaryEvidenceType.TITLE_BLOCK,
         description="Implicit front-matter evidence",
     )
 

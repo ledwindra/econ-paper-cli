@@ -82,7 +82,7 @@ def test_fresh_schema_atomic_round_trip_restart_and_bm25(tmp_path: Path) -> None
     storage = SQLiteStorage(database)
 
     storage.save_early_section_record(record)
-    assert storage.get_schema_version() == CURRENT_SCHEMA_VERSION == 5
+    assert storage.get_schema_version() == CURRENT_SCHEMA_VERSION == 6
     assert storage.get_early_section_record(record.paper.paper_id) == record
     generic_record = storage.get_paper_record(record.paper.paper_id)
     assert generic_record is not None
@@ -340,5 +340,5 @@ def test_v3_migration_preserves_legacy_markdown_path(tmp_path: Path) -> None:
         "SELECT markdown_path, parser_version FROM source_provenance WHERE paper_id = 'legacy'"
     ).fetchone()
     assert tuple(row) == ("/legacy.md", "legacy-unknown")
-    assert storage.get_schema_version() == 5
+    assert storage.get_schema_version() == 6
     storage.close()
