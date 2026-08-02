@@ -160,7 +160,8 @@ Not yet implemented:
 
 ## 10. End-to-end MVP orchestration
 
-- Connect setup, status, update, chat, follow-up, and evidence inspection
+- One-shot cited chat over the local early-section library (implemented)
+- Connect setup, status, update, follow-up, and evidence inspection
 - Connect the approved library, ingestion, retrieval, and generation adapters
 - Verify offline operation, privacy, restart safety, and cross-platform behavior
 - Document artifact licenses and release procedures

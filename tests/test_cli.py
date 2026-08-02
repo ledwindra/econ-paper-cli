@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from econ_paper_cli.cli import build_parser, main
+from econ_paper_cli.services import commands
 
 
 @pytest.mark.parametrize(
@@ -11,7 +12,6 @@ from econ_paper_cli.cli import build_parser, main
     [
         ("setup", "Setup is not implemented yet. No artifacts were downloaded."),
         ("status", "Status checks are not implemented yet."),
-        ("chat", "Chat is not implemented yet."),
         ("update", "Updates are not implemented yet. No network request was made."),
     ],
 )
@@ -32,6 +32,27 @@ def test_help_lists_available_commands(capsys: pytest.CaptureFixture[str]) -> No
     output = capsys.readouterr().out
     for command in ("setup", "status", "chat", "update", "analyze"):
         assert command in output
+
+
+def test_chat_help_lists_all_options(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["chat", "--help"])
+
+    assert exit_info.value.code == 0
+    output = capsys.readouterr().out
+    for flag in (
+        "QUESTION",
+        "--llama-cpp-path",
+        "--model-path",
+        "--model-id",
+        "--model-bytes",
+        "--model-checksum",
+        "--threads",
+        "--timeout",
+        "--db-path",
+        "--top-k",
+    ):
+        assert flag in output
 
 
 def test_analyze_help_lists_all_options(capsys: pytest.CaptureFixture[str]) -> None:
@@ -78,6 +99,60 @@ def test_analyze_parser_accepts_file_or_directory_target(target: str) -> None:
 
     assert arguments.target_path == Path(target)
     assert arguments.max_passage_characters == 1200
+
+
+def test_chat_parser_accepts_question_and_configuration() -> None:
+    arguments = build_parser().parse_args(
+        [
+            "chat",
+            "What is the research question?",
+            "--llama-cpp-path",
+            "llama-completion",
+            "--model-path",
+            "model.gguf",
+            "--model-id",
+            "local-model",
+            "--model-bytes",
+            "100",
+            "--model-checksum",
+            "a" * 64,
+            "--top-k",
+            "3",
+        ]
+    )
+
+    assert arguments.question == "What is the research question?"
+    assert arguments.top_k == 3
+
+
+def test_chat_command_dispatches_to_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_chat(args: object) -> int:
+        captured["args"] = args
+        return 7
+
+    monkeypatch.setattr(commands, "run_chat", fake_run_chat)
+    assert (
+        main(
+            [
+                "chat",
+                "What is the research question?",
+                "--llama-cpp-path",
+                "llama-completion",
+                "--model-path",
+                "model.gguf",
+                "--model-id",
+                "local-model",
+                "--model-bytes",
+                "100",
+                "--model-checksum",
+                "a" * 64,
+            ]
+        )
+        == 7
+    )
+    assert getattr(captured["args"], "question") == "What is the research question?"
 
 
 def test_analyze_parser_accepts_conversion_settings() -> None:
