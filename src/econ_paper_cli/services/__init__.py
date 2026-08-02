@@ -1,5 +1,8 @@
 """Application services used by user-facing adapters."""
 
+from econ_paper_cli.services.early_section_library import (
+    project_early_section_library_record,
+)
 from econ_paper_cli.services.ingestion import (
     discover_pdf_paths,
     run_ingestion_preflight,
@@ -27,6 +30,7 @@ __all__ = [
     "run_ingestion_preflight",
     "discover_pdf_paths",
     "extract_pdf",
+    "project_early_section_library_record",
     "assess_pdf_extraction_quality",
     "convert_pdf_early_sections",
     "detect_pdf_sections",

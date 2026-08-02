@@ -6,8 +6,14 @@ from pathlib import Path
 
 from econ_paper_cli.adapters.storage_paths import get_default_db_path
 from econ_paper_cli.domain.corpora import Corpus
+from econ_paper_cli.domain.early_section_library import (
+    EarlySectionLibraryRecord,
+    StoredPassageProvenance,
+    StoredPassageSourceFragment,
+)
 from econ_paper_cli.domain.papers import Paper
 from econ_paper_cli.domain.passages import Passage
+from econ_paper_cli.domain.pdf_conversion import PDFConversionSettings
 from econ_paper_cli.domain.pdf_quality import (
     PDFQualitySettings,
     PDFQualityStatus,
@@ -56,7 +62,7 @@ from econ_paper_cli.protocols.storage import (
     StorageValidationError,
 )
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 _MIGRATIONS: list[tuple[int, str, list[str]]] = [
     (
@@ -281,6 +287,68 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 CONSTRAINT uq_analysis_evidence_ordinal UNIQUE(analysis_id, ordinal_position)
             );""",
             "CREATE INDEX IF NOT EXISTS idx_analysis_evidence_analysis_id ON single_paper_analysis_evidence(analysis_id);",
+        ],
+    ),
+    (
+        4,
+        "Early-section Markdown and exact passage provenance persistence",
+        [
+            """CREATE TABLE source_provenance_v4 (
+                paper_id TEXT PRIMARY KEY,
+                source_path TEXT NOT NULL,
+                source_format TEXT NOT NULL,
+                source_file_size INTEGER NOT NULL,
+                content_checksum TEXT NOT NULL COLLATE NOCASE,
+                markdown_path TEXT,
+                extraction_method TEXT NOT NULL,
+                parser_version TEXT NOT NULL DEFAULT 'legacy-unknown',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE
+            );""",
+            """INSERT INTO source_provenance_v4 (
+                paper_id, source_path, source_format, source_file_size,
+                content_checksum, markdown_path, extraction_method,
+                parser_version, created_at
+            ) SELECT
+                paper_id, source_path, source_format, source_file_size,
+                LOWER(content_checksum), markdown_path, extraction_method,
+                'legacy-unknown', created_at
+            FROM source_provenance;""",
+            "DROP TABLE source_provenance;",
+            "ALTER TABLE source_provenance_v4 RENAME TO source_provenance;",
+            """CREATE TABLE early_section_records (
+                paper_id TEXT PRIMARY KEY,
+                conversion_policy_version TEXT NOT NULL,
+                settings_fingerprint TEXT NOT NULL,
+                max_passage_characters INTEGER NOT NULL,
+                markdown TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE
+            );""",
+            """CREATE TABLE passage_provenance (
+                passage_id TEXT PRIMARY KEY,
+                paper_id TEXT NOT NULL,
+                section_kind TEXT NOT NULL,
+                ordinal_position INTEGER NOT NULL,
+                FOREIGN KEY(passage_id) REFERENCES passages(passage_id) ON DELETE CASCADE,
+                FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE,
+                CONSTRAINT uq_passage_provenance_ordinal UNIQUE(paper_id, ordinal_position)
+            );""",
+            "CREATE INDEX idx_passage_provenance_paper_ordinal ON passage_provenance(paper_id, ordinal_position);",
+            """CREATE TABLE passage_source_fragments (
+                passage_id TEXT NOT NULL,
+                ordinal_position INTEGER NOT NULL,
+                page_number INTEGER NOT NULL,
+                start_character_offset INTEGER NOT NULL,
+                end_character_offset INTEGER NOT NULL,
+                passage_start_character_offset INTEGER NOT NULL,
+                passage_end_character_offset INTEGER NOT NULL,
+                source_text TEXT NOT NULL,
+                PRIMARY KEY(passage_id, ordinal_position),
+                FOREIGN KEY(passage_id) REFERENCES passage_provenance(passage_id) ON DELETE CASCADE
+            );""",
+            "CREATE INDEX idx_passage_fragments_passage_ordinal ON passage_source_fragments(passage_id, ordinal_position);",
         ],
     ),
 ]
@@ -873,6 +941,360 @@ class SQLiteStorage(StorageBackend):
             return int(row["c"]) if row else 0
         except sqlite3.Error as err:
             raise StorageConnectionError(f"Failed to count passages: {err}.") from err
+
+    def save_early_section_record(self, record: EarlySectionLibraryRecord) -> None:
+        """Persist or replace a complete early-section record atomically."""
+        if not isinstance(record, EarlySectionLibraryRecord):
+            raise TypeError("record must be an EarlySectionLibraryRecord instance.")
+        conn = self._ensure_initialized()
+        paper = record.paper
+        provenance = record.source_provenance
+
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conflict = conn.execute(
+                """SELECT paper_id FROM papers
+                   WHERE LOWER(content_checksum) = LOWER(?) AND paper_id <> ?""",
+                (provenance.content_checksum, paper.paper_id),
+            ).fetchone()
+            if conflict is not None:
+                raise ChecksumConflictError(
+                    f"Content checksum '{provenance.content_checksum}' is already "
+                    f"associated with paper_id '{conflict['paper_id']}'."
+                )
+
+            existing = conn.execute(
+                "SELECT created_at FROM papers WHERE paper_id = ?", (paper.paper_id,)
+            ).fetchone()
+            created_at = (
+                existing["created_at"] if existing is not None else record.created_at
+            )
+            conn.execute("DELETE FROM papers WHERE paper_id = ?", (paper.paper_id,))
+
+            conn.execute(
+                """INSERT INTO papers (
+                    paper_id, title, authors_json, year, abstract,
+                    source_name, source_identifier, source_url,
+                    content_checksum, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    paper.paper_id,
+                    paper.title,
+                    json.dumps(list(paper.authors)),
+                    paper.year,
+                    paper.abstract,
+                    paper.source_name,
+                    paper.source_identifier,
+                    paper.source_url,
+                    provenance.content_checksum.lower(),
+                    created_at,
+                    record.updated_at,
+                ),
+            )
+            conn.execute(
+                """INSERT INTO source_provenance (
+                    paper_id, source_path, source_format, source_file_size,
+                    content_checksum, markdown_path, extraction_method,
+                    parser_version, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    paper.paper_id,
+                    provenance.source_path,
+                    provenance.source_format,
+                    provenance.source_file_size,
+                    provenance.content_checksum.lower(),
+                    provenance.markdown_path,
+                    provenance.extraction_method,
+                    record.parser_version,
+                    created_at,
+                ),
+            )
+            conn.execute(
+                """INSERT INTO conversion_settings (
+                    paper_id, conversion_version, ocr_enabled, parameters_json
+                ) VALUES (?, ?, 0, ?)""",
+                (
+                    paper.paper_id,
+                    record.conversion_settings.policy_version,
+                    json.dumps(
+                        {
+                            "max_passage_characters": record.conversion_settings.max_passage_characters
+                        },
+                        sort_keys=True,
+                    ),
+                ),
+            )
+            conn.execute(
+                """INSERT INTO early_section_records (
+                    paper_id, conversion_policy_version, settings_fingerprint,
+                    max_passage_characters, markdown, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    paper.paper_id,
+                    record.conversion_settings.policy_version,
+                    record.settings_fingerprint,
+                    record.conversion_settings.max_passage_characters,
+                    record.markdown,
+                    created_at,
+                    record.updated_at,
+                ),
+            )
+
+            for passage, passage_provenance in zip(
+                record.passages, record.passage_provenance, strict=True
+            ):
+                conn.execute(
+                    """INSERT INTO passages (
+                        passage_id, paper_id, text, section_heading,
+                        page_start, page_end, ordinal_position
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        passage.passage_id,
+                        passage.paper_id,
+                        passage.text,
+                        passage.section_heading,
+                        passage.page_start,
+                        passage.page_end,
+                        passage.ordinal_position,
+                    ),
+                )
+                conn.execute(
+                    """INSERT INTO passage_provenance (
+                        passage_id, paper_id, section_kind, ordinal_position
+                    ) VALUES (?, ?, ?, ?)""",
+                    (
+                        passage_provenance.passage_id,
+                        paper.paper_id,
+                        passage_provenance.section_kind.value,
+                        passage.ordinal_position,
+                    ),
+                )
+                for fragment_ordinal, fragment in enumerate(
+                    passage_provenance.fragments
+                ):
+                    conn.execute(
+                        """INSERT INTO passage_source_fragments (
+                            passage_id, ordinal_position, page_number,
+                            start_character_offset, end_character_offset,
+                            passage_start_character_offset,
+                            passage_end_character_offset, source_text
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            passage.passage_id,
+                            fragment_ordinal,
+                            fragment.page_number,
+                            fragment.start_character_offset,
+                            fragment.end_character_offset,
+                            fragment.passage_start_character_offset,
+                            fragment.passage_end_character_offset,
+                            fragment.source_text,
+                        ),
+                    )
+
+            conn.execute(
+                """INSERT INTO ingestion_completions (
+                    paper_id, status, completed_at, passage_count,
+                    warning_count, error_message
+                ) VALUES (?, 'completed', ?, ?, 0, NULL)""",
+                (paper.paper_id, record.updated_at, len(record.passages)),
+            )
+
+            expected = dataclasses.replace(
+                record,
+                source_provenance=dataclasses.replace(
+                    record.source_provenance, created_at=created_at
+                ),
+                created_at=created_at,
+            )
+            read_back = self.get_early_section_record(paper.paper_id)
+            if read_back != expected:
+                raise StorageValidationError(
+                    f"Strict read-back mismatch for early-section record '{paper.paper_id}'."
+                )
+            conn.commit()
+        except Exception as error:
+            conn.rollback()
+            if isinstance(error, sqlite3.Error):
+                raise StorageTransactionError(
+                    f"Failed to save early-section record '{paper.paper_id}': {error}."
+                ) from error
+            raise
+
+    def get_early_section_record(
+        self, paper_id: str
+    ) -> EarlySectionLibraryRecord | None:
+        """Retrieve and strictly validate an early-section record."""
+        conn = self._ensure_initialized()
+        try:
+            early_row = conn.execute(
+                "SELECT * FROM early_section_records WHERE paper_id = ?", (paper_id,)
+            ).fetchone()
+            if early_row is None:
+                return None
+            paper_storage_row = conn.execute(
+                """SELECT content_checksum, created_at, updated_at
+                   FROM papers WHERE paper_id = ?""",
+                (paper_id,),
+            ).fetchone()
+            if paper_storage_row is None:
+                raise StorageValidationError(
+                    f"Missing paper row for early-section record '{paper_id}'."
+                )
+            if (
+                paper_storage_row["created_at"] != early_row["created_at"]
+                or paper_storage_row["updated_at"] != early_row["updated_at"]
+            ):
+                raise StorageValidationError(
+                    f"Timestamp rows disagree for early-section record '{paper_id}'."
+                )
+            paper = self.get_paper(paper_id)
+            if paper is None:
+                raise StorageValidationError(
+                    f"Missing paper row for early-section record '{paper_id}'."
+                )
+            source_row = conn.execute(
+                "SELECT * FROM source_provenance WHERE paper_id = ?", (paper_id,)
+            ).fetchone()
+            if source_row is None:
+                raise StorageValidationError(
+                    f"Missing source provenance for early-section record '{paper_id}'."
+                )
+            if paper_storage_row["content_checksum"] != source_row["content_checksum"]:
+                raise StorageValidationError(
+                    f"Checksum rows disagree for early-section record '{paper_id}'."
+                )
+            settings_row = conn.execute(
+                "SELECT * FROM conversion_settings WHERE paper_id = ?", (paper_id,)
+            ).fetchone()
+            if settings_row is None:
+                raise StorageValidationError(
+                    f"Missing conversion settings for early-section record '{paper_id}'."
+                )
+            generic_parameters = json.loads(settings_row["parameters_json"])
+            if (
+                settings_row["conversion_version"]
+                != early_row["conversion_policy_version"]
+                or settings_row["ocr_enabled"] != 0
+                or generic_parameters
+                != {"max_passage_characters": early_row["max_passage_characters"]}
+            ):
+                raise StorageValidationError(
+                    f"Conversion settings rows disagree for early-section record '{paper_id}'."
+                )
+            source_provenance = SourceProvenance(
+                source_path=source_row["source_path"],
+                source_format=source_row["source_format"],
+                source_file_size=source_row["source_file_size"],
+                content_checksum=source_row["content_checksum"],
+                markdown_path=source_row["markdown_path"],
+                extraction_method=source_row["extraction_method"],
+                created_at=source_row["created_at"],
+            )
+            passages = self.get_passages(paper_id)
+            provenance_rows = conn.execute(
+                """SELECT * FROM passage_provenance
+                   WHERE paper_id = ? ORDER BY ordinal_position ASC""",
+                (paper_id,),
+            ).fetchall()
+            stored_provenance = []
+            for expected_ordinal, provenance_row in enumerate(provenance_rows):
+                if provenance_row["ordinal_position"] != expected_ordinal:
+                    raise StorageValidationError(
+                        f"Passage provenance ordinals are not contiguous for '{paper_id}'."
+                    )
+                fragment_rows = conn.execute(
+                    """SELECT * FROM passage_source_fragments
+                       WHERE passage_id = ? ORDER BY ordinal_position ASC""",
+                    (provenance_row["passage_id"],),
+                ).fetchall()
+                for fragment_ordinal, fragment_row in enumerate(fragment_rows):
+                    if fragment_row["ordinal_position"] != fragment_ordinal:
+                        raise StorageValidationError(
+                            "Passage source fragment ordinals are not contiguous for "
+                            f"'{provenance_row['passage_id']}'."
+                        )
+                stored_provenance.append(
+                    StoredPassageProvenance(
+                        passage_id=provenance_row["passage_id"],
+                        section_kind=PDFSectionKind(provenance_row["section_kind"]),
+                        fragments=tuple(
+                            StoredPassageSourceFragment(
+                                page_number=row["page_number"],
+                                start_character_offset=row["start_character_offset"],
+                                end_character_offset=row["end_character_offset"],
+                                passage_start_character_offset=row[
+                                    "passage_start_character_offset"
+                                ],
+                                passage_end_character_offset=row[
+                                    "passage_end_character_offset"
+                                ],
+                                source_text=row["source_text"],
+                            )
+                            for row in fragment_rows
+                        ),
+                    )
+                )
+            return EarlySectionLibraryRecord(
+                paper=paper,
+                source_provenance=source_provenance,
+                parser_version=source_row["parser_version"],
+                conversion_settings=PDFConversionSettings(
+                    policy_version=early_row["conversion_policy_version"],
+                    max_passage_characters=early_row["max_passage_characters"],
+                ),
+                settings_fingerprint=early_row["settings_fingerprint"],
+                markdown=early_row["markdown"],
+                passages=passages,
+                passage_provenance=tuple(stored_provenance),
+                created_at=early_row["created_at"],
+                updated_at=early_row["updated_at"],
+            )
+        except StorageValidationError:
+            raise
+        except (sqlite3.Error, ValueError, TypeError) as error:
+            raise StorageValidationError(
+                f"Failed to load early-section record '{paper_id}': {error}."
+            ) from error
+
+    def list_early_section_records(self) -> tuple[EarlySectionLibraryRecord, ...]:
+        """Return early-section records ordered by paper_id."""
+        conn = self._ensure_initialized()
+        try:
+            rows = conn.execute(
+                "SELECT paper_id FROM early_section_records ORDER BY paper_id ASC"
+            ).fetchall()
+        except sqlite3.Error as error:
+            raise StorageValidationError(
+                f"Failed to list early-section records: {error}."
+            ) from error
+        records = tuple(self.get_early_section_record(row["paper_id"]) for row in rows)
+        if any(record is None for record in records):
+            raise StorageValidationError(
+                "An early-section record disappeared during list reconstruction."
+            )
+        return tuple(record for record in records if record is not None)
+
+    def delete_early_section_record(self, paper_id: str) -> bool:
+        """Delete an early-section record and its shared paper representation."""
+        conn = self._ensure_initialized()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            exists = conn.execute(
+                "SELECT 1 FROM early_section_records WHERE paper_id = ?", (paper_id,)
+            ).fetchone()
+            if exists is None:
+                conn.commit()
+                return False
+            conn.execute("DELETE FROM papers WHERE paper_id = ?", (paper_id,))
+            conn.commit()
+            return True
+        except Exception as error:
+            conn.rollback()
+            if isinstance(error, sqlite3.Error):
+                raise StorageTransactionError(
+                    f"Failed to delete early-section record '{paper_id}': {error}."
+                ) from error
+            raise
 
     def save_single_paper_analysis(self, record: SinglePaperAnalysisRecord) -> None:
         """Persist or replace a single-paper analysis record in a single transaction."""

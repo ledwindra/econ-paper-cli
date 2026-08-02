@@ -8,9 +8,15 @@ from econ_paper_cli.domain.artifacts import (
 )
 from econ_paper_cli.domain.citations import Citation
 from econ_paper_cli.domain.corpora import Corpus, CorpusValidationError
+from econ_paper_cli.domain.early_section_library import (
+    EarlySectionLibraryRecord,
+    StoredPassageProvenance,
+    StoredPassageSourceFragment,
+)
 from econ_paper_cli.domain.errors import (
     CitationValidationError,
     DomainError,
+    EarlySectionLibraryValidationError,
     EvidenceValidationError,
     IngestionEmptyDirectoryError,
     IngestionError,
@@ -126,6 +132,8 @@ __all__ = [
     "Corpus",
     "CorpusValidationError",
     "DomainError",
+    "EarlySectionLibraryRecord",
+    "EarlySectionLibraryValidationError",
     "EvidenceValidationError",
     "ExtractedPDFPage",
     "IngestionCompletion",
@@ -213,4 +221,6 @@ __all__ = [
     "RetrievalEvidence",
     "SourceProvenance",
     "StorageRecordValidationError",
+    "StoredPassageProvenance",
+    "StoredPassageSourceFragment",
 ]

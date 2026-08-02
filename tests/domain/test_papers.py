@@ -85,11 +85,17 @@ def test_paper_required_text_fields(field: str, value: object) -> None:
         Paper.from_mapping(valid_paper_mapping(**{field: value}))
 
 
-@pytest.mark.parametrize("authors", [[], ["  "], "Author One", [123]])
+@pytest.mark.parametrize("authors", [["  "], "Author One", [123]])
 def test_paper_authors_validation(authors: object) -> None:
-    """Test that authors must be a non-empty list/tuple of non-empty strings."""
+    """Test that each supplied author must be a non-empty string."""
     with pytest.raises(PaperValidationError, match="authors|author"):
         Paper.from_mapping(valid_paper_mapping(authors=authors))
+
+
+def test_paper_allows_empty_authors_for_unknown_metadata() -> None:
+    """Unknown authors are represented honestly as an empty tuple."""
+    paper = Paper.from_mapping(valid_paper_mapping(authors=[]))
+    assert paper.authors == ()
 
 
 @pytest.mark.parametrize("year", [1799, 2101, "2003", True, 2003.5])

@@ -768,32 +768,32 @@ def test_forward_migration_and_rollback() -> None:
     storage.initialize()
     assert storage.get_schema_version() == CURRENT_SCHEMA_VERSION
 
-    # Define a valid migration 3
-    migration_v3 = [
+    # Define a valid custom migration after the current production schema
+    migration_v5 = [
         (
-            3,
+            5,
             "Add test metadata column",
             ["ALTER TABLE papers ADD COLUMN notes TEXT;"],
         )
     ]
-    storage._run_migrations(custom_migrations=migration_v3)
-    assert storage.get_schema_version() == 3
+    storage._run_migrations(custom_migrations=migration_v5)
+    assert storage.get_schema_version() == 5
 
-    # Define a failing migration 4
-    migration_v4_failing = [
+    # Define the next failing custom migration
+    migration_v6_failing = [
         (
-            4,
+            6,
             "Failing migration statement",
             ["INVALID SQL STATEMENT syntax error;"],
         )
     ]
     with pytest.raises(
-        StorageMigrationError, match="Migration to schema version 4 failed"
+        StorageMigrationError, match="Migration to schema version 6 failed"
     ):
-        storage._run_migrations(custom_migrations=migration_v4_failing)
+        storage._run_migrations(custom_migrations=migration_v6_failing)
 
-    # Version remains at 3 (rolled back)
-    assert storage.get_schema_version() == 3
+    # Version remains at 5 (rolled back)
+    assert storage.get_schema_version() == 5
     storage.close()
 
 

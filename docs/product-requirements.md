@@ -8,9 +8,11 @@ Implementation status and milestone progress are tracked in
 
 The automatic ingestion and hybrid local-library requirements below are
 approved future product requirements. They are not currently implemented. The
-current CLI does not perform full-document ingestion, create Markdown, or build
-a production retrieval index. Its early-section PDF analysis records do use
-SQLite for durable local persistence.
+current CLI does not perform full-document ingestion, persist conversion output,
+or build a production retrieval index. Pure services can create early-section
+Markdown and persist it with stable passages and exact fragment provenance in
+SQLite, but that storage workflow is not yet connected to the CLI. Early-section
+research-question analysis records use a separate durable SQLite path.
 
 Issue 12 implements a configurable local `llama.cpp` subprocess adapter and a
 model-independent synthetic generation benchmark. Issue 13 evaluated the two

@@ -21,7 +21,7 @@ class SourceProvenance:
     source_format: str
     source_file_size: int
     content_checksum: str
-    markdown_path: str
+    markdown_path: str | None
     extraction_method: str
     created_at: str
 
@@ -31,7 +31,8 @@ class SourceProvenance:
         _validate_nonempty_text("source_format", self.source_format)
         _validate_positive_int("source_file_size", self.source_file_size)
         _validate_checksum(self.content_checksum)
-        _validate_nonempty_text("markdown_path", self.markdown_path)
+        if self.markdown_path is not None:
+            _validate_nonempty_text("markdown_path", self.markdown_path)
         _validate_nonempty_text("extraction_method", self.extraction_method)
         _validate_nonempty_text("created_at", self.created_at)
 
@@ -68,7 +69,7 @@ class SourceProvenance:
             source_format=cast(str, data["source_format"]),
             source_file_size=cast(int, data["source_file_size"]),
             content_checksum=cast(str, data["content_checksum"]),
-            markdown_path=cast(str, data["markdown_path"]),
+            markdown_path=cast(str | None, data["markdown_path"]),
             extraction_method=cast(str, data["extraction_method"]),
             created_at=cast(str, data["created_at"]),
         )

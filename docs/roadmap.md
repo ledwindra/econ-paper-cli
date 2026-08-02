@@ -141,14 +141,19 @@ Completed:
   per-file outcomes
 - Convert detected Abstract and Introduction spans into deterministic,
   inspectable Markdown and stable passages with exact page-local provenance
+- Project successful early-section conversion into an immutable library record
+  and persist Markdown, passages, parser/conversion identity, and exact fragment
+  provenance atomically in SQLite schema version 4
+- Reconstruct persisted passages after restart through `load_corpus()` for use
+  by the existing in-memory BM25 adapter
 
 Not yet implemented:
 
 - Connect preflight eligibility decisions to extraction orchestration
 - Add supported OCR and connect extraction-quality outcomes to orchestration
 - Extend conversion beyond the currently supported Abstract and Introduction
-- Populate SQLite through the storage protocol and refresh rebuildable
-  retrieval state
+- Connect early-section conversion persistence to analysis/directory
+  orchestration and refresh rebuildable retrieval state
 - Verify offline, restart-safe, and cross-platform behavior
 
 ## 10. End-to-end MVP orchestration

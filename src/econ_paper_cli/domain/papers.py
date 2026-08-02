@@ -76,9 +76,7 @@ class Paper:
 
         raw_authors = data["authors"]
         if not isinstance(raw_authors, (list, tuple)):
-            raise PaperValidationError(
-                "authors must be a non-empty sequence of strings."
-            )
+            raise PaperValidationError("authors must be a sequence of strings.")
         authors = tuple(cast(Sequence[object], raw_authors))
 
         return cls(
@@ -159,10 +157,8 @@ def _validate_source_url(value: object) -> str | None:
 
 
 def _validate_authors(value: object) -> None:
-    if not isinstance(value, tuple) or not value:
-        raise PaperValidationError(
-            "authors must be a non-empty tuple of non-empty strings."
-        )
+    if not isinstance(value, tuple):
+        raise PaperValidationError("authors must be a tuple of strings.")
     for author in value:
         if not isinstance(author, str) or not author.strip():
             raise PaperValidationError("Each author must be a non-empty string.")

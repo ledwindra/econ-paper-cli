@@ -188,6 +188,7 @@ The storage layer is implemented as a database-independent protocol (`StorageBac
 - **Transactions & rollback:** all writes for a paper record execute within a single atomic SQLite transaction (`BEGIN IMMEDIATE`), with full rollback on failure.
 - **Deduplication & idempotency:** deterministic replacement and checksum-aware duplicate detection (`content_checksum`), raising `ChecksumConflictError` on conflicting paper identifiers.
 - **Versioning & migrations:** schema version tracking with forward migrations (`schema_migrations` table) and transaction rollback on migration failure.
+- **Early-section records:** schema version 4 stores generated Abstract/Introduction Markdown, stable passages, conversion identity, and ordered page-local provenance fragments without writing external Markdown files. The projection/storage boundary is not yet connected to `econpapers analyze`; see [`docs/early-section-library-storage.md`](docs/early-section-library-storage.md).
 - **Cross-platform paths:** automatic data directory and database path resolution for Windows (`%LOCALAPPDATA%`), macOS (`~/Library/Application Support`), and Linux (`${XDG_DATA_HOME:-~/.local/share}`), with `ECONPAPERS_LIBRARY_DIR` environment variable override.
 
 ## Repository direction
