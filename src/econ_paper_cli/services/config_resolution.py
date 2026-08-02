@@ -207,3 +207,16 @@ class LazyConfigLoader:
         if self._error is not None:
             raise self._error
         return self._value
+
+    def peek(self) -> LocalRuntimeModelConfig | None:
+        """Return the cached configuration if a load already happened.
+
+        Never triggers ``backend.load()``. Used to honor durable optional
+        defaults (threads, timeout) that a config load already performed for
+        an unrelated reason — e.g. resolving a database-path fallback —
+        without forcing a load merely to check them on a path that would
+        otherwise be genuinely configuration-independent.
+        """
+        if self._loaded and self._error is None:
+            return self._value
+        return None

@@ -432,7 +432,14 @@ def _build_llama_cpp_generator(
     lazy_config: LazyConfigLoader,
 ) -> Generator:
     del options  # Resolution uses overrides/lazy_config, not raw CLI options.
-    durable_config = None if identity_fully_specified(overrides) else lazy_config.get()
+    # A fully-specified CLI identity never forces a load. But if a load
+    # already happened for another reason (e.g. resolving --db-path), its
+    # optional threads/timeout defaults still apply per CLI > config >
+    # default precedence — they are not discarded just because identity
+    # itself didn't need them.
+    durable_config = (
+        lazy_config.peek() if identity_fully_specified(overrides) else lazy_config.get()
+    )
     resolved = resolve_runtime_model_config(overrides, durable_config)
     config = LlamaCppConfig(
         executable_path=resolved.executable_path,

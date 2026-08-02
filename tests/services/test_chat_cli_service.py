@@ -32,8 +32,13 @@ from econ_paper_cli.protocols import (
 from econ_paper_cli.services.chat_command import (
     ChatCommandOptions,
     ChatTerminalOutcome,
+    _build_llama_cpp_generator,
     execute_chat_command,
     format_chat_command_output,
+)
+from econ_paper_cli.services.config_resolution import (
+    LazyConfigLoader,
+    RuntimeModelOverrides,
 )
 from econ_paper_cli.services.early_section_library import (
     project_early_section_library_record,
@@ -964,3 +969,92 @@ def test_partial_override_on_no_matches_path_is_rejected_eagerly(
     assert result.outcome is ChatTerminalOutcome.FAILED
     assert result.exit_code == 2
     assert "Partial runtime/model override" in (result.error_message or "")
+
+
+def _config_for_threads_timeout(
+    tmp_path: Path, **overrides: object
+) -> LocalRuntimeModelConfig:
+    base: dict[str, object] = {
+        "executable_path": tmp_path / "config-exe",
+        "model_path": tmp_path / "config-model.gguf",
+        "model_id": "config-model",
+        "model_bytes": 10,
+        "model_checksum": "a" * 64,
+        "threads": 8,
+        "timeout_seconds": 60.0,
+    }
+    base.update(overrides)
+    return LocalRuntimeModelConfig(**base)
+
+
+def test_build_generator_honors_durable_threads_and_timeout_when_config_loaded(
+    tmp_path: Path,
+) -> None:
+    """A fully-specified CLI identity must still pick up durable threads/timeout
+    when the config was already loaded for another reason (db-path fallback)."""
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(_config_for_threads_timeout(tmp_path))
+    lazy_config = LazyConfigLoader(config_backend)
+    lazy_config.get()  # Simulate an earlier load for --db-path resolution.
+
+    overrides = RuntimeModelOverrides(
+        executable_path=tmp_path / "cli-exe",
+        model_path=tmp_path / "cli-model.gguf",
+        model_id="cli-model",
+        model_bytes=99,
+        model_checksum="b" * 64,
+    )
+    generator = _build_llama_cpp_generator(
+        ChatCommandOptions(question="trade policy"), overrides, lazy_config
+    )
+
+    assert generator._config.threads == 8
+    assert generator._config.timeout_seconds == 60.0
+
+
+def test_build_generator_explicit_cli_threads_and_timeout_override_durable_config(
+    tmp_path: Path,
+) -> None:
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(_config_for_threads_timeout(tmp_path))
+    lazy_config = LazyConfigLoader(config_backend)
+    lazy_config.get()
+
+    overrides = RuntimeModelOverrides(
+        executable_path=tmp_path / "cli-exe",
+        model_path=tmp_path / "cli-model.gguf",
+        model_id="cli-model",
+        model_bytes=99,
+        model_checksum="b" * 64,
+        threads=2,
+        timeout=15.0,
+    )
+    generator = _build_llama_cpp_generator(
+        ChatCommandOptions(question="trade policy"), overrides, lazy_config
+    )
+
+    assert generator._config.threads == 2
+    assert generator._config.timeout_seconds == 15.0
+
+
+def test_build_generator_no_config_loaded_retains_documented_defaults(
+    tmp_path: Path,
+) -> None:
+    """When lazy_config was never loaded (peek() is used, not get()), a fully
+    specified CLI identity falls back to documented defaults, not durable
+    config values that were never actually read."""
+    lazy_config = LazyConfigLoader(RaisingConfigBackend())
+
+    overrides = RuntimeModelOverrides(
+        executable_path=tmp_path / "cli-exe",
+        model_path=tmp_path / "cli-model.gguf",
+        model_id="cli-model",
+        model_bytes=99,
+        model_checksum="b" * 64,
+    )
+    generator = _build_llama_cpp_generator(
+        ChatCommandOptions(question="trade policy"), overrides, lazy_config
+    )
+
+    assert generator._config.threads is None
+    assert generator._config.timeout_seconds == 300.0

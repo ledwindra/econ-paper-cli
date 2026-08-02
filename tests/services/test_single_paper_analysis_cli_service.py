@@ -9,7 +9,11 @@ import pytest
 
 from econ_paper_cli.adapters.bm25 import BM25Retriever
 from econ_paper_cli.adapters.config_storage import JSONConfigStorage
-from econ_paper_cli.adapters.llama_cpp import ProcessResult
+from econ_paper_cli.adapters.llama_cpp import (
+    LlamaCppConfig,
+    LlamaCppReadinessError,
+    ProcessResult,
+)
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.domain import (
     PDFDocumentMetadata,
@@ -1722,3 +1726,154 @@ def test_partial_override_on_reuse_only_path_is_rejected_eagerly(
 
     assert code == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
     assert "Partial runtime/model override" in capsys.readouterr().err
+
+
+class _ConfigCapturingGenerator:
+    """LlamaCppGenerator double that records its config and stops before any
+    subprocess or extraction work, to isolate resolution behavior."""
+
+    captured_configs: list[LlamaCppConfig] = []
+
+    def __init__(self, config: LlamaCppConfig) -> None:
+        type(self).captured_configs.append(config)
+
+    def check_readiness(self) -> None:
+        raise LlamaCppReadinessError("stop after capturing config")
+
+
+def test_full_cli_identity_honors_durable_threads_and_timeout_when_config_loaded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fully-specified CLI identity must still pick up durable threads/timeout
+    when a config load already happened for another reason (db-path fallback)."""
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(
+        LocalRuntimeModelConfig(
+            executable_path=tmp_path / "config-exe",
+            model_path=tmp_path / "config-model.gguf",
+            model_id="config-model",
+            model_bytes=10,
+            model_checksum="a" * 64,
+            threads=8,
+            timeout_seconds=60.0,
+            db_path=tmp_path / "resolved-from-config.db",
+        )
+    )
+    cli_exe = tmp_path / "cli-exe"
+    cli_exe.write_bytes(b"dummy")
+    cli_model_content = b"cli_override_model_bytes"
+    cli_model = tmp_path / "cli-model.gguf"
+    cli_model.write_bytes(cli_model_content)
+    options = AnalyzeCommandOptions(
+        target_path=pdf_path,
+        # db_path intentionally omitted: resolving it forces a config load.
+        executable_path=cli_exe,
+        model_path=cli_model,
+        model_id="cli-model",
+        model_bytes=len(cli_model_content),
+        model_checksum=hashlib.sha256(cli_model_content).hexdigest(),
+    )
+
+    _ConfigCapturingGenerator.captured_configs = []
+    monkeypatch.setattr(
+        "econ_paper_cli.services.single_paper_analysis_cli.LlamaCppGenerator",
+        _ConfigCapturingGenerator,
+    )
+
+    run_single_paper_analysis_command(
+        options, extractor=FakePDFExtractor(), config_backend=config_backend
+    )
+
+    assert len(_ConfigCapturingGenerator.captured_configs) == 1
+    captured = _ConfigCapturingGenerator.captured_configs[0]
+    assert captured.threads == 8
+    assert captured.timeout_seconds == 60.0
+
+
+def test_explicit_cli_threads_and_timeout_override_durable_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(
+        LocalRuntimeModelConfig(
+            executable_path=tmp_path / "config-exe",
+            model_path=tmp_path / "config-model.gguf",
+            model_id="config-model",
+            model_bytes=10,
+            model_checksum="a" * 64,
+            threads=8,
+            timeout_seconds=60.0,
+            db_path=tmp_path / "resolved-from-config.db",
+        )
+    )
+    cli_exe = tmp_path / "cli-exe"
+    cli_exe.write_bytes(b"dummy")
+    cli_model_content = b"cli_override_model_bytes"
+    cli_model = tmp_path / "cli-model.gguf"
+    cli_model.write_bytes(cli_model_content)
+    options = AnalyzeCommandOptions(
+        target_path=pdf_path,
+        executable_path=cli_exe,
+        model_path=cli_model,
+        model_id="cli-model",
+        model_bytes=len(cli_model_content),
+        model_checksum=hashlib.sha256(cli_model_content).hexdigest(),
+        threads=2,
+        timeout=15.0,
+    )
+
+    _ConfigCapturingGenerator.captured_configs = []
+    monkeypatch.setattr(
+        "econ_paper_cli.services.single_paper_analysis_cli.LlamaCppGenerator",
+        _ConfigCapturingGenerator,
+    )
+
+    run_single_paper_analysis_command(
+        options, extractor=FakePDFExtractor(), config_backend=config_backend
+    )
+
+    assert len(_ConfigCapturingGenerator.captured_configs) == 1
+    captured = _ConfigCapturingGenerator.captured_configs[0]
+    assert captured.threads == 2
+    assert captured.timeout_seconds == 15.0
+
+
+def test_no_config_full_cli_identity_retains_documented_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A full CLI identity plus an explicit --db-path never loads config at
+    all, so threads/timeout fall back to their documented defaults."""
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    cli_exe = tmp_path / "cli-exe"
+    cli_exe.write_bytes(b"dummy")
+    cli_model_content = b"cli_only_model_bytes"
+    cli_model = tmp_path / "cli-model.gguf"
+    cli_model.write_bytes(cli_model_content)
+    options = AnalyzeCommandOptions(
+        target_path=pdf_path,
+        db_path=tmp_path / "no-config.db",
+        executable_path=cli_exe,
+        model_path=cli_model,
+        model_id="cli-model",
+        model_bytes=len(cli_model_content),
+        model_checksum=hashlib.sha256(cli_model_content).hexdigest(),
+    )
+
+    _ConfigCapturingGenerator.captured_configs = []
+    monkeypatch.setattr(
+        "econ_paper_cli.services.single_paper_analysis_cli.LlamaCppGenerator",
+        _ConfigCapturingGenerator,
+    )
+
+    run_single_paper_analysis_command(
+        options,
+        extractor=FakePDFExtractor(),
+        config_backend=RaisingConfigBackend(),
+    )
+
+    assert len(_ConfigCapturingGenerator.captured_configs) == 1
+    captured = _ConfigCapturingGenerator.captured_configs[0]
+    assert captured.threads is None
+    assert captured.timeout_seconds == 300.0

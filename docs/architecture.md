@@ -421,16 +421,27 @@ five arguments as optional.
 Durable configuration is read through `config_resolution.LazyConfigLoader`,
 which loads a `ConfigBackend` at most once per invocation and caches either
 the resulting value or the raised `ConfigError`, so a later access never
-re-triggers a load. `analyze` and `chat` only call it when actually needed —
-for a database-path fallback (skipped entirely when `--db-path` is explicit),
-or inside generator construction (skipped when all five identity arguments are
-already CLI-specified, via `config_resolution.identity_fully_specified`).
-Existing lazy-model-resolution guarantees are preserved exactly: exact
-analysis-plus-library reuse, generator-free library backfill, and the
-`EMPTY_LIBRARY`/`NO_MATCHES` chat outcomes still require neither configuration
-nor accessible runtime/model artifacts even when combined with an explicit
-`--db-path` and a fully-specified runtime/model override, because no code path
-they can take ever calls `LazyConfigLoader.get()`.
+re-triggers a load. `analyze` and `chat` only force a load (`.get()`) when
+actually needed — for a database-path fallback (skipped entirely when
+`--db-path` is explicit), or inside generator construction when the CLI
+identity is incomplete. Existing lazy-model-resolution guarantees are
+preserved exactly: exact analysis-plus-library reuse, generator-free library
+backfill, and the `EMPTY_LIBRARY`/`NO_MATCHES` chat outcomes still require
+neither configuration nor accessible runtime/model artifacts even when
+combined with an explicit `--db-path` and a fully-specified runtime/model
+override, because no code path they can take ever calls
+`LazyConfigLoader.get()`.
+
+When the CLI identity is fully specified, generator construction still calls
+`LazyConfigLoader.peek()` — never `.get()` — so a config load that already
+happened for an unrelated reason (resolving `--db-path`) still supplies its
+optional `threads`/`timeout_seconds` defaults per the documented CLI > config
+> default precedence, without that same identity-complete path ever forcing
+a load merely to check them. `peek()` returns `None` when nothing has been
+loaded yet, so a fully-specified identity combined with an explicit
+`--db-path` (which never triggers `.get()`) correctly falls back to the
+command's own documented defaults rather than silently reading durable
+configuration it was never supposed to touch.
 
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.

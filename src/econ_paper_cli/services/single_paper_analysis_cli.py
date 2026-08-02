@@ -959,8 +959,14 @@ def run_single_paper_analysis_command(
             if cached_generator is not None:
                 return cached_generator
             try:
+                # A fully-specified CLI identity never forces a load. But if
+                # a load already happened for another reason (e.g. resolving
+                # --db-path), its optional threads/timeout defaults still
+                # apply per CLI > config > default precedence.
                 needed_config = (
-                    None if identity_fully_specified(overrides) else lazy_config.get()
+                    lazy_config.peek()
+                    if identity_fully_specified(overrides)
+                    else lazy_config.get()
                 )
                 resolved = resolve_runtime_model_config(overrides, needed_config)
                 cfg = LlamaCppConfig(
