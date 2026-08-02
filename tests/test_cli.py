@@ -7,21 +7,53 @@ from econ_paper_cli.cli import build_parser, main
 from econ_paper_cli.services import commands
 
 
-@pytest.mark.parametrize(
-    ("command", "expected_output"),
-    [
-        ("setup", "Setup is not implemented yet. No artifacts were downloaded."),
-        ("status", "Status checks are not implemented yet."),
-        ("update", "Updates are not implemented yet. No network request was made."),
-    ],
-)
-def test_placeholder_commands_succeed(
-    command: str,
-    expected_output: str,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    assert main([command]) == 0
-    assert capsys.readouterr().out.strip() == expected_output
+def test_update_placeholder_succeeds(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["update"]) == 0
+    assert (
+        capsys.readouterr().out.strip()
+        == "Updates are not implemented yet. No network request was made."
+    )
+
+
+def test_status_command_dispatches_to_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_status(args: object) -> int:
+        captured["args"] = args
+        return 0
+
+    monkeypatch.setattr(commands, "run_status", fake_run_status)
+    assert main(["status"]) == 0
+    assert "args" in captured
+
+
+def test_setup_command_dispatches_to_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_setup(args: object) -> int:
+        captured["args"] = args
+        return 0
+
+    monkeypatch.setattr(commands, "run_setup", fake_run_setup)
+    assert (
+        main(
+            [
+                "setup",
+                "--llama-cpp-path",
+                "llama-completion",
+                "--model-path",
+                "model.gguf",
+                "--model-id",
+                "local-model",
+                "--model-bytes",
+                "100",
+                "--model-checksum",
+                "a" * 64,
+            ]
+        )
+        == 0
+    )
+    assert getattr(captured["args"], "model_id") == "local-model"
 
 
 def test_help_lists_available_commands(capsys: pytest.CaptureFixture[str]) -> None:
@@ -190,6 +222,68 @@ def test_analyze_missing_required_arguments_fails(
     assert exit_info.value.code == 2
     err = capsys.readouterr().err
     assert "the following arguments are required" in err
+
+
+def test_analyze_parser_accepts_no_runtime_model_arguments() -> None:
+    arguments = build_parser().parse_args(["analyze", "paper.pdf"])
+
+    assert arguments.target_path == Path("paper.pdf")
+    assert arguments.llama_cpp_path is None
+    assert arguments.model_path is None
+    assert arguments.model_id is None
+    assert arguments.model_bytes is None
+    assert arguments.model_checksum is None
+
+
+def test_chat_parser_accepts_no_runtime_model_arguments() -> None:
+    arguments = build_parser().parse_args(["chat", "What is the effect?"])
+
+    assert arguments.question == "What is the effect?"
+    assert arguments.llama_cpp_path is None
+    assert arguments.model_path is None
+    assert arguments.model_id is None
+    assert arguments.model_bytes is None
+    assert arguments.model_checksum is None
+
+
+def test_setup_parser_requires_all_runtime_model_arguments(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        build_parser().parse_args(["setup"])
+
+    assert exit_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "the following arguments are required" in err
+
+
+def test_setup_help_lists_all_options(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["setup", "--help"])
+
+    assert exit_info.value.code == 0
+    output = capsys.readouterr().out
+    for flag in (
+        "--llama-cpp-path",
+        "--model-path",
+        "--model-id",
+        "--model-bytes",
+        "--model-checksum",
+        "--threads",
+        "--timeout",
+        "--config-path",
+    ):
+        assert flag in output
+
+
+def test_status_help_lists_all_options(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["status", "--help"])
+
+    assert exit_info.value.code == 0
+    output = capsys.readouterr().out
+    for flag in ("--db-path", "--config-path"):
+        assert flag in output
 
 
 def test_no_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None:

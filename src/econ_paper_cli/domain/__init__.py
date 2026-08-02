@@ -27,6 +27,7 @@ from econ_paper_cli.domain.errors import (
     IngestionReadError,
     IngestionUnsupportedFileError,
     IngestionValidationError,
+    LocalConfigValidationError,
     PaperValidationError,
     PassageValidationError,
     PDFConversionValidationError,
@@ -53,6 +54,10 @@ from econ_paper_cli.domain.ingestion import (
 from econ_paper_cli.domain.library_population import (
     LibraryPopulationResult,
     LibraryPopulationStatus,
+)
+from econ_paper_cli.domain.local_config import (
+    LOCAL_CONFIG_SCHEMA_VERSION,
+    LocalRuntimeModelConfig,
 )
 from econ_paper_cli.domain.papers import Paper
 from econ_paper_cli.domain.passages import Passage
@@ -154,6 +159,9 @@ __all__ = [
     "IngestionWarning",
     "LibraryPopulationResult",
     "LibraryPopulationStatus",
+    "LOCAL_CONFIG_SCHEMA_VERSION",
+    "LocalConfigValidationError",
+    "LocalRuntimeModelConfig",
     "Paper",
     "PaperRecord",
     "PaperValidationError",

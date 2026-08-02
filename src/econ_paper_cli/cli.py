@@ -17,14 +17,42 @@ def build_parser() -> ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     command_definitions: tuple[tuple[str, str, CommandHandler], ...] = (
-        ("setup", "Prepare local artifacts (placeholder).", commands.run_setup),
-        ("status", "Report local readiness (placeholder).", commands.run_status),
-        ("chat", "Answer one question from the local library.", commands.run_chat),
         ("update", "Update local artifacts (placeholder).", commands.run_update),
     )
     for name, help_text, handler in command_definitions:
         command_parser = subparsers.add_parser(name, help=help_text)
         command_parser.set_defaults(handler=handler)
+
+    setup_parser = subparsers.add_parser(
+        "setup",
+        help="Validate and durably persist local runtime/model configuration.",
+    )
+    _add_runtime_model_arguments(setup_parser, required=True)
+    setup_parser.add_argument(
+        "--config-path",
+        type=Path,
+        default=None,
+        help="Optional local configuration file path override.",
+    )
+    setup_parser.set_defaults(handler=commands.run_setup)
+
+    status_parser = subparsers.add_parser(
+        "status",
+        help="Report local configuration, runtime readiness, and library state.",
+    )
+    status_parser.add_argument(
+        "--db-path",
+        type=Path,
+        default=None,
+        help="Optional SQLite database path override.",
+    )
+    status_parser.add_argument(
+        "--config-path",
+        type=Path,
+        default=None,
+        help="Optional local configuration file path override.",
+    )
+    status_parser.set_defaults(handler=commands.run_status)
 
     analyze_parser = subparsers.add_parser(
         "analyze",
@@ -36,59 +64,18 @@ def build_parser() -> ArgumentParser:
         type=Path,
         help="Path to a local PDF file or a directory containing PDF files.",
     )
-    analyze_parser.add_argument(
-        "--llama-cpp-path",
-        "--executable-path",
-        dest="llama_cpp_path",
-        required=True,
-        type=Path,
-        help="Path to the local llama.cpp executable.",
-    )
-    analyze_parser.add_argument(
-        "--model-path",
-        required=True,
-        type=Path,
-        help="Path to the local GGUF model file.",
-    )
-    analyze_parser.add_argument(
-        "--model-id",
-        required=True,
-        type=str,
-        help="Identifier for the model.",
-    )
-    analyze_parser.add_argument(
-        "--model-bytes",
-        "--expected-model-size-bytes",
-        dest="model_bytes",
-        required=True,
-        type=int,
-        help="Expected size of the model file in bytes.",
-    )
-    analyze_parser.add_argument(
-        "--model-checksum",
-        "--expected-model-sha256",
-        dest="model_checksum",
-        required=True,
-        type=str,
-        help="Expected SHA-256 checksum of the model file.",
-    )
-    analyze_parser.add_argument(
-        "--threads",
-        type=int,
-        default=None,
-        help="Optional thread count for llama.cpp execution.",
-    )
-    analyze_parser.add_argument(
-        "--timeout",
-        type=float,
-        default=None,
-        help="Optional timeout in seconds for generation.",
-    )
+    _add_runtime_model_arguments(analyze_parser, required=False)
     analyze_parser.add_argument(
         "--db-path",
         type=Path,
         default=None,
         help="Optional SQLite database path override.",
+    )
+    analyze_parser.add_argument(
+        "--config-path",
+        type=Path,
+        default=None,
+        help="Optional local configuration file path override.",
     )
     analyze_parser.add_argument(
         "--quality-policy-version",
@@ -128,66 +115,27 @@ def build_parser() -> ArgumentParser:
     )
     analyze_parser.set_defaults(handler=commands.run_analyze)
 
-    chat_parser = subparsers.choices["chat"]
+    chat_parser = subparsers.add_parser(
+        "chat", help="Answer one question from the local library."
+    )
     chat_parser.add_argument(
         "question",
         metavar="QUESTION",
         type=str,
         help="One question to answer from the stored local corpus.",
     )
-    chat_parser.add_argument(
-        "--llama-cpp-path",
-        "--executable-path",
-        dest="llama_cpp_path",
-        required=True,
-        type=Path,
-        help="Path to the local llama.cpp executable.",
-    )
-    chat_parser.add_argument(
-        "--model-path",
-        required=True,
-        type=Path,
-        help="Path to the local GGUF model file.",
-    )
-    chat_parser.add_argument(
-        "--model-id",
-        required=True,
-        type=str,
-        help="Identifier for the model.",
-    )
-    chat_parser.add_argument(
-        "--model-bytes",
-        "--expected-model-size-bytes",
-        dest="model_bytes",
-        required=True,
-        type=int,
-        help="Expected size of the model file in bytes.",
-    )
-    chat_parser.add_argument(
-        "--model-checksum",
-        "--expected-model-sha256",
-        dest="model_checksum",
-        required=True,
-        type=str,
-        help="Expected SHA-256 checksum of the model file.",
-    )
-    chat_parser.add_argument(
-        "--threads",
-        type=int,
-        default=None,
-        help="Optional thread count for llama.cpp execution.",
-    )
-    chat_parser.add_argument(
-        "--timeout",
-        type=float,
-        default=None,
-        help="Optional timeout in seconds for generation.",
-    )
+    _add_runtime_model_arguments(chat_parser, required=False)
     chat_parser.add_argument(
         "--db-path",
         type=Path,
         default=None,
         help="Optional SQLite database path override.",
+    )
+    chat_parser.add_argument(
+        "--config-path",
+        type=Path,
+        default=None,
+        help="Optional local configuration file path override.",
     )
     chat_parser.add_argument(
         "--top-k",
@@ -198,6 +146,72 @@ def build_parser() -> ArgumentParser:
     chat_parser.set_defaults(handler=commands.run_chat)
 
     return parser
+
+
+def _add_runtime_model_arguments(parser: ArgumentParser, *, required: bool) -> None:
+    """Add the shared runtime/model identity and option flags to a subparser.
+
+    When ``required`` is False (``analyze``/``chat``), omitting all five
+    identity flags falls back to durable configuration written by
+    ``econpapers setup``; supplying any of them requires supplying all five
+    together for one coherent, explicitly verified identity.
+    """
+    identity_help_suffix = (
+        "" if required else " (falls back to durable `econpapers setup` configuration)"
+    )
+    parser.add_argument(
+        "--llama-cpp-path",
+        "--executable-path",
+        dest="llama_cpp_path",
+        required=required,
+        default=None,
+        type=Path,
+        help=f"Path to the local llama.cpp executable.{identity_help_suffix}",
+    )
+    parser.add_argument(
+        "--model-path",
+        required=required,
+        default=None,
+        type=Path,
+        help=f"Path to the local GGUF model file.{identity_help_suffix}",
+    )
+    parser.add_argument(
+        "--model-id",
+        required=required,
+        default=None,
+        type=str,
+        help=f"Identifier for the model.{identity_help_suffix}",
+    )
+    parser.add_argument(
+        "--model-bytes",
+        "--expected-model-size-bytes",
+        dest="model_bytes",
+        required=required,
+        default=None,
+        type=int,
+        help=f"Expected size of the model file in bytes.{identity_help_suffix}",
+    )
+    parser.add_argument(
+        "--model-checksum",
+        "--expected-model-sha256",
+        dest="model_checksum",
+        required=required,
+        default=None,
+        type=str,
+        help=f"Expected SHA-256 checksum of the model file.{identity_help_suffix}",
+    )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="Optional thread count for llama.cpp execution.",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="Optional timeout in seconds for generation.",
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:

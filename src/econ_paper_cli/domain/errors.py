@@ -153,3 +153,7 @@ class ResearchQuestionValidationError(DomainError):
 
 class SinglePaperAnalysisValidationError(DomainError):
     """Raised when a single-paper analysis domain object fails validation."""
+
+
+class LocalConfigValidationError(DomainError):
+    """Raised when local runtime/model configuration data is structurally invalid."""

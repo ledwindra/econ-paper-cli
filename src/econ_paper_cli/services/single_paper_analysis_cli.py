@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from econ_paper_cli.adapters.config_storage import JSONConfigStorage
 from econ_paper_cli.adapters.filesystem import (
     FileInspectionResult,
     VerificationError,
@@ -20,7 +21,6 @@ from econ_paper_cli.adapters.llama_cpp import (
 )
 from econ_paper_cli.adapters.pypdf_extractor import PyPDFExtractor
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
-from econ_paper_cli.adapters.storage_paths import get_default_db_path
 from econ_paper_cli.domain import (
     DEFAULT_PDF_CONVERSION_SETTINGS,
     DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
@@ -48,6 +48,7 @@ from econ_paper_cli.domain.pdf_conversion import (
 )
 from econ_paper_cli.domain.pdf_quality import PDFQualityStatus
 from econ_paper_cli.domain.single_paper_analysis import compute_analysis_id
+from econ_paper_cli.protocols.config import ConfigBackend, ConfigError
 from econ_paper_cli.protocols.generation import Generator
 from econ_paper_cli.protocols.pdf_extraction import PDFExtractionError, PDFExtractor
 from econ_paper_cli.protocols.storage import StorageBackend, StorageConnectionError
@@ -55,6 +56,12 @@ from econ_paper_cli.services.analysis_library import (
     prepare_analysis_library,
     prepare_analysis_record,
     prepare_early_section_library,
+)
+from econ_paper_cli.services.config_resolution import (
+    ConfigResolutionError,
+    RuntimeModelOverrides,
+    resolve_db_path,
+    resolve_runtime_model_config,
 )
 from econ_paper_cli.services.ingestion import (
     discover_pdf_paths,
@@ -264,14 +271,15 @@ class AnalyzeCommandOptions:
     """Parsed options for the PDF analysis CLI command."""
 
     target_path: Path
-    executable_path: Path
-    model_path: Path
-    model_id: str
-    model_bytes: int
-    model_checksum: str
+    executable_path: Path | None = None
+    model_path: Path | None = None
+    model_id: str | None = None
+    model_bytes: int | None = None
+    model_checksum: str | None = None
     threads: int | None = None
     timeout: float | None = None
     db_path: Path | str | None = None
+    config_path: Path | None = None
     quality_policy_version: str | None = None
     section_policy_version: str | None = None
     research_question_policy_version: str | None = None
@@ -866,6 +874,7 @@ def run_single_paper_analysis_command(
     extractor: PDFExtractor | None = None,
     generator: Generator | None = None,
     storage: StorageBackend | None = None,
+    config_backend: ConfigBackend | None = None,
     file_inspector: Callable[[Path], FileInspectionResult] = inspect_local_file,
     timestamp_provider: Callable[[], str] = lambda: datetime.now(
         timezone.utc
@@ -888,9 +897,26 @@ def run_single_paper_analysis_command(
             sys.stderr.write(f"Configuration error: invalid policy version: {err}\n")
             return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
 
-        target_db_path = (
-            options.db_path if options.db_path is not None else get_default_db_path()
+        # Durable configuration is only ever read here; it is never mutated by
+        # analyze, and reuse/backfill paths below never require it.
+        overrides = RuntimeModelOverrides(
+            executable_path=options.executable_path,
+            model_path=options.model_path,
+            model_id=options.model_id,
+            model_bytes=options.model_bytes,
+            model_checksum=options.model_checksum,
+            threads=options.threads,
+            timeout=options.timeout,
+            db_path=Path(options.db_path) if options.db_path is not None else None,
         )
+        try:
+            config_reader = config_backend or JSONConfigStorage(options.config_path)
+            durable_config = config_reader.load()
+        except ConfigError as err:
+            sys.stderr.write(f"Configuration error: {err}\n")
+            return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+
+        target_db_path = resolve_db_path(overrides, durable_config)
 
         # 2. Initialize storage
         if storage is None:
@@ -920,21 +946,21 @@ def run_single_paper_analysis_command(
             if cached_generator is not None:
                 return cached_generator
             try:
+                resolved = resolve_runtime_model_config(overrides, durable_config)
                 cfg = LlamaCppConfig(
-                    executable_path=options.executable_path,
-                    model_path=options.model_path,
-                    model_id=options.model_id,
-                    model_expected_size_bytes=options.model_bytes,
-                    model_sha256=options.model_checksum,
-                    threads=options.threads,
-                    timeout_seconds=options.timeout
-                    if options.timeout is not None
-                    else 300.0,
+                    executable_path=resolved.executable_path,
+                    model_path=resolved.model_path,
+                    model_id=resolved.model_id,
+                    model_expected_size_bytes=resolved.model_bytes,
+                    model_sha256=resolved.model_checksum,
+                    threads=resolved.threads,
+                    timeout_seconds=resolved.timeout_seconds,
                 )
                 gen = LlamaCppGenerator(cfg)
                 gen.check_readiness()
                 cached_generator = gen
             except (
+                ConfigResolutionError,
                 LlamaCppConfigurationError,
                 LlamaCppReadinessError,
                 VerificationError,

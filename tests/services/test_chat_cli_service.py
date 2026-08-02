@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from econ_paper_cli.adapters import BM25Retriever
+from econ_paper_cli.adapters.config_storage import JSONConfigStorage
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.domain import (
     Citation,
@@ -20,6 +21,7 @@ from econ_paper_cli.domain import (
     PDFSectionKind,
     PDFSectionSpan,
 )
+from econ_paper_cli.domain.local_config import LocalRuntimeModelConfig
 from econ_paper_cli.protocols import (
     AbstentionReason,
     FindingKind,
@@ -709,3 +711,157 @@ def test_unexpected_storage_exception_is_reported_as_failed() -> None:
     assert result.outcome is ChatTerminalOutcome.FAILED
     assert result.exit_code == 3
     assert "storage boom" in (result.error_message or "")
+
+
+# --- Issue 54: durable runtime/model configuration resolution -------------
+
+
+def _no_identity_options(
+    tmp_path: Path, question: str = "trade policy"
+) -> ChatCommandOptions:
+    return ChatCommandOptions(
+        question=question,
+        db_path=tmp_path / "chat.db",
+        top_k=2,
+    )
+
+
+def test_empty_library_does_not_require_configuration(tmp_path: Path) -> None:
+    storage = SQLiteStorage(tmp_path / "empty.db")
+    missing_config = JSONConfigStorage(tmp_path / "no-such-dir" / "config.json")
+
+    result = execute_chat_command(
+        _no_identity_options(tmp_path),
+        storage=storage,
+        config_backend=missing_config,
+    )
+
+    assert result.outcome is ChatTerminalOutcome.EMPTY_LIBRARY
+    assert missing_config.load() is None
+
+
+def test_no_matches_does_not_require_configuration(tmp_path: Path) -> None:
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(_record(tmp_path))
+    missing_config = JSONConfigStorage(tmp_path / "no-such-dir" / "config.json")
+
+    result = execute_chat_command(
+        _no_identity_options(tmp_path, question="astronomy and astrophysics"),
+        storage=storage,
+        config_backend=missing_config,
+    )
+
+    assert result.outcome is ChatTerminalOutcome.NO_MATCHES
+    assert missing_config.load() is None
+
+
+def test_matched_chat_resolves_generator_from_durable_config(tmp_path: Path) -> None:
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(_record(tmp_path))
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(
+        LocalRuntimeModelConfig(
+            executable_path=tmp_path / "configured-exe",
+            model_path=tmp_path / "configured-model.gguf",
+            model_id="configured-model",
+            model_bytes=42,
+            model_checksum="d" * 64,
+        )
+    )
+    generator = FakeGenerator(
+        GenerationResponse(
+            answer_text="Trade policy evidence supports a descriptive answer.",
+            citations=(),
+            generation_method="fake-generator",
+            abstained=True,
+            abstention_reason=AbstentionReason.INSUFFICIENT_EVIDENCE,
+            finding_kinds=(),
+        )
+    )
+
+    result = execute_chat_command(
+        _no_identity_options(tmp_path),
+        storage=storage,
+        config_backend=config_backend,
+        generator_provider=lambda _: generator,
+    )
+
+    assert result.outcome is ChatTerminalOutcome.ABSTAINED
+    assert generator.call_count == 1
+
+
+def test_partial_cli_override_returns_failed_with_typed_exit_code(
+    tmp_path: Path,
+) -> None:
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(_record(tmp_path))
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(
+        LocalRuntimeModelConfig(
+            executable_path=tmp_path / "configured-exe",
+            model_path=tmp_path / "configured-model.gguf",
+            model_id="configured-model",
+            model_bytes=42,
+            model_checksum="d" * 64,
+        )
+    )
+    options = ChatCommandOptions(
+        question="trade policy",
+        db_path=tmp_path / "chat.db",
+        model_id="cli-only-model-id",
+    )
+
+    result = execute_chat_command(
+        options,
+        storage=storage,
+        config_backend=config_backend,
+    )
+
+    assert result.outcome is ChatTerminalOutcome.FAILED
+    assert result.exit_code == 2
+    assert "Partial runtime/model override" in (result.error_message or "")
+
+
+def test_no_cli_and_no_config_returns_failed_with_typed_exit_code(
+    tmp_path: Path,
+) -> None:
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(_record(tmp_path))
+    missing_config = JSONConfigStorage(tmp_path / "absent" / "config.json")
+
+    result = execute_chat_command(
+        _no_identity_options(tmp_path),
+        storage=storage,
+        config_backend=missing_config,
+    )
+
+    assert result.outcome is ChatTerminalOutcome.FAILED
+    assert result.exit_code == 2
+    assert "No runtime/model configuration is available" in (result.error_message or "")
+
+
+def test_db_path_resolution_prefers_cli_then_config_then_default(
+    tmp_path: Path,
+) -> None:
+    config_db_path = tmp_path / "config-chosen.db"
+    storage = SQLiteStorage(config_db_path)
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(
+        LocalRuntimeModelConfig(
+            executable_path=tmp_path / "configured-exe",
+            model_path=tmp_path / "configured-model.gguf",
+            model_id="configured-model",
+            model_bytes=42,
+            model_checksum="d" * 64,
+            db_path=config_db_path,
+        )
+    )
+    options = ChatCommandOptions(question="trade policy")
+
+    result = execute_chat_command(
+        options,
+        storage=storage,
+        config_backend=config_backend,
+    )
+
+    assert result.db_path == config_db_path

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TextIO
 
 from econ_paper_cli.adapters.bm25 import BM25Retriever
+from econ_paper_cli.adapters.config_storage import JSONConfigStorage
 from econ_paper_cli.adapters.llama_cpp import (
     LlamaCppConfig,
     LlamaCppConfigurationError,
@@ -22,6 +23,7 @@ from econ_paper_cli.adapters.storage_paths import get_default_db_path
 from econ_paper_cli.domain import Corpus, RetrievalEvidence
 from econ_paper_cli.domain.corpora import CorpusValidationError
 from econ_paper_cli.domain.errors import CitationValidationError
+from econ_paper_cli.domain.local_config import LocalRuntimeModelConfig
 from econ_paper_cli.protocols import (
     GenerationRequest,
     GenerationRequestValidationError,
@@ -37,8 +39,14 @@ from econ_paper_cli.protocols import (
     StorageValidationError,
     validate_generation_response,
 )
+from econ_paper_cli.protocols.config import ConfigBackend, ConfigError
 from econ_paper_cli.protocols.generation import FindingKind
 from econ_paper_cli.protocols.retrieval import validate_retrieval_results
+from econ_paper_cli.services.config_resolution import (
+    RuntimeModelOverrides,
+    resolve_db_path,
+    resolve_runtime_model_config,
+)
 
 CHAT_EVIDENCE_SCOPE = "Evidence scope: stored Abstract and Introduction passages only."
 DEFAULT_CHAT_TOP_K = 10
@@ -71,14 +79,15 @@ class ChatCommandOptions:
     """Parsed options for one-shot chat execution."""
 
     question: str
-    executable_path: Path
-    model_path: Path
-    model_id: str
-    model_bytes: int
-    model_checksum: str
+    executable_path: Path | None = None
+    model_path: Path | None = None
+    model_id: str | None = None
+    model_bytes: int | None = None
+    model_checksum: str | None = None
     threads: int | None = None
     timeout: float | None = None
     db_path: Path | None = None
+    config_path: Path | None = None
     top_k: int = DEFAULT_CHAT_TOP_K
 
     def __post_init__(self) -> None:
@@ -130,6 +139,7 @@ def execute_chat_command(
     options: ChatCommandOptions,
     *,
     storage: StorageBackend | None = None,
+    config_backend: ConfigBackend | None = None,
     retriever_factory: Callable[[Corpus], object] = BM25Retriever,
     generator_provider: Callable[[ChatCommandOptions], Generator] | None = None,
 ) -> ChatCommandResult:
@@ -137,10 +147,36 @@ def execute_chat_command(
     if not isinstance(options, ChatCommandOptions):
         raise TypeError("options must be a ChatCommandOptions instance.")
 
-    db_path = options.db_path or get_default_db_path()
+    question = options.question
+    overrides = RuntimeModelOverrides(
+        executable_path=options.executable_path,
+        model_path=options.model_path,
+        model_id=options.model_id,
+        model_bytes=options.model_bytes,
+        model_checksum=options.model_checksum,
+        threads=options.threads,
+        timeout=options.timeout,
+        db_path=options.db_path,
+    )
+
+    try:
+        config_reader = config_backend or JSONConfigStorage(options.config_path)
+        durable_config = config_reader.load()
+    except ConfigError as error:
+        return ChatCommandResult(
+            outcome=ChatTerminalOutcome.FAILED,
+            exit_code=2,
+            question=question,
+            db_path=options.db_path or get_default_db_path(),
+            top_k=options.top_k,
+            error_message=str(error),
+        )
+
+    # Reading durable configuration here never mutates it and never requires
+    # accessible model/runtime artifacts; only building a generator below does.
+    db_path = resolve_db_path(overrides, durable_config)
     storage_backend = storage or SQLiteStorage(db_path, read_only=True)
     owns_storage = storage is None
-    question = options.question
 
     try:
         storage_backend.initialize()
@@ -178,7 +214,9 @@ def execute_chat_command(
                 no_answer_reason="BM25 returned no evidence for the question.",
             )
 
-        provider = generator_provider or _build_llama_cpp_generator
+        provider = generator_provider or (
+            lambda opts: _build_llama_cpp_generator(opts, overrides, durable_config)
+        )
         generator = provider(options)
         request = GenerationRequest(question=question, evidence=evidence)
         response = validate_generation_response(request, generator.generate(request))
@@ -281,6 +319,7 @@ def run_chat_command(
     options: ChatCommandOptions,
     *,
     storage: StorageBackend | None = None,
+    config_backend: ConfigBackend | None = None,
     retriever_factory: Callable[[Corpus], object] = BM25Retriever,
     generator_provider: Callable[[ChatCommandOptions], Generator] | None = None,
     stdout: TextIO | None = None,
@@ -290,6 +329,7 @@ def run_chat_command(
     result = execute_chat_command(
         options,
         storage=storage,
+        config_backend=config_backend,
         retriever_factory=retriever_factory,
         generator_provider=generator_provider,
     )
@@ -367,15 +407,21 @@ def format_chat_command_output(result: ChatCommandResult) -> str:
     return "\n".join(lines)
 
 
-def _build_llama_cpp_generator(options: ChatCommandOptions) -> Generator:
+def _build_llama_cpp_generator(
+    options: ChatCommandOptions,
+    overrides: RuntimeModelOverrides,
+    durable_config: LocalRuntimeModelConfig | None,
+) -> Generator:
+    del options  # Resolution uses overrides/durable_config, not raw CLI options.
+    resolved = resolve_runtime_model_config(overrides, durable_config)
     config = LlamaCppConfig(
-        executable_path=options.executable_path,
-        model_path=options.model_path,
-        model_id=options.model_id,
-        model_expected_size_bytes=options.model_bytes,
-        model_sha256=options.model_checksum,
-        threads=options.threads,
-        timeout_seconds=options.timeout if options.timeout is not None else 300.0,
+        executable_path=resolved.executable_path,
+        model_path=resolved.model_path,
+        model_id=resolved.model_id,
+        model_expected_size_bytes=resolved.model_bytes,
+        model_sha256=resolved.model_checksum,
+        threads=resolved.threads,
+        timeout_seconds=resolved.timeout_seconds,
     )
     return LlamaCppGenerator(config)
 
