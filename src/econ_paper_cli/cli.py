@@ -114,6 +114,18 @@ def build_parser() -> ArgumentParser:
         default=None,
         help="Optional single paper analysis policy version override.",
     )
+    analyze_parser.add_argument(
+        "--conversion-policy-version",
+        type=str,
+        default=None,
+        help="Optional early-section conversion policy version override.",
+    )
+    analyze_parser.add_argument(
+        "--max-passage-characters",
+        type=int,
+        default=1200,
+        help="Maximum characters per stored early-section passage (default: 1200).",
+    )
     analyze_parser.set_defaults(handler=commands.run_analyze)
 
     return parser

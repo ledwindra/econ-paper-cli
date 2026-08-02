@@ -17,12 +17,15 @@ from econ_paper_cli.adapters.filesystem import (
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.domain import (
     DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+    LibraryPopulationResult,
+    LibraryPopulationStatus,
     PDFDocumentMetadata,
     PDFExtractionResult,
     SinglePaperAnalysisFailureCode,
     SinglePaperAnalysisRecord,
     SinglePaperAnalysisStage,
     SinglePaperAnalysisStatus,
+    compute_conversion_paper_id,
 )
 from econ_paper_cli.domain.pdf_extraction import ExtractedPDFPage
 from econ_paper_cli.protocols.generation import (
@@ -1007,7 +1010,22 @@ def test_directory_output_is_exact_and_reuses_record_formatter(
         "\n".join(
             (
                 f"=== [{BatchOutcomeKind.NEWLY_ANALYZED.value}] {path} ===",
-                format_analysis_record_output(records_by_path[path], db),
+                format_analysis_record_output(
+                    records_by_path[path],
+                    db,
+                    LibraryPopulationResult(
+                        LibraryPopulationStatus.STORED,
+                        paper_id=(
+                            library := storage.get_early_section_record(
+                                compute_conversion_paper_id(
+                                    records_by_path[path].content_checksum or ""
+                                )
+                            )
+                        ).paper.paper_id,
+                        conversion_fingerprint=library.settings_fingerprint,
+                        passage_count=len(library.passages),
+                    ),
+                ),
             )
         )
         for path in paths
@@ -1024,6 +1042,11 @@ def test_directory_output_is_exact_and_reuses_record_formatter(
             "Halted/unavailable:  0",
             "Typed failures:      0",
             "Unexpected failures: 0",
+            "Library stored:      2",
+            "Library reused:      0",
+            "Library no sections: 0",
+            "Library ineligible:  0",
+            "Library failed:      0",
         )
     )
     assert capsys.readouterr().out == "\n\n".join((*item_sections, summary)) + "\n"

@@ -6,13 +6,11 @@ Implementation status and milestone progress are tracked in
 [`docs/architecture.md`](architecture.md) and
 [`docs/roadmap.md`](roadmap.md).
 
-The automatic ingestion and hybrid local-library requirements below are
-approved future product requirements. They are not currently implemented. The
-current CLI does not perform full-document ingestion, persist conversion output,
-or build a production retrieval index. Pure services can create early-section
-Markdown and persist it with stable passages and exact fragment provenance in
-SQLite, but that storage workflow is not yet connected to the CLI. Early-section
-research-question analysis records use a separate durable SQLite path.
+The automatic full-document ingestion and hybrid local-library requirements
+below remain future product requirements. The current CLI does not perform
+full-document ingestion or build a persistent retrieval index. It does persist
+detected Abstract and Introduction Markdown with stable passages and exact
+fragment provenance in SQLite alongside research-question analysis records.
 
 Issue 12 implements a configurable local `llama.cpp` subprocess adapter and a
 model-independent synthetic generation benchmark. Issue 13 evaluated the two
@@ -64,6 +62,15 @@ path and a deterministic aggregate summary. Processing remains sequential and
 offline, and source PDFs are never modified. Candidate checksum/preflight and
 storage failures are isolated per path so successfully completed records and
 later candidates remain visible.
+
+Eligible candidates also populate the schema-v4 early-section library. Newly
+executed analysis reuses its extraction and section-detection results and writes
+both complete records in one transaction. Exact compatible repeats call neither
+the extractor nor generator. A legacy analysis-only record, or one whose
+conversion fingerprint changed, runs only extraction, quality assessment,
+section detection, conversion, and library persistence. Preflight, extraction,
+and unusable-quality outcomes remain analysis-only. Conversion uses
+`early-section-markdown-v1` and a configurable passage budget (default 1,200).
 
 Process exit code semantics:
 - `0`: Every unique analysis succeeds or reuses an exact successful record.

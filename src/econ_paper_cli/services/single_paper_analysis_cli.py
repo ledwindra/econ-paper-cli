@@ -4,6 +4,7 @@ import enum
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from econ_paper_cli.adapters.filesystem import (
@@ -21,7 +22,12 @@ from econ_paper_cli.adapters.pypdf_extractor import PyPDFExtractor
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.adapters.storage_paths import get_default_db_path
 from econ_paper_cli.domain import (
+    DEFAULT_PDF_CONVERSION_SETTINGS,
     DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+    LibraryPopulationResult,
+    LibraryPopulationStatus,
+    PDFConversionSettings,
+    PDFConversionValidationError,
     PDFQualitySettings,
     PDFQualityValidationError,
     PDFSectionSettings,
@@ -36,20 +42,29 @@ from econ_paper_cli.domain import (
 )
 from econ_paper_cli.domain.errors import IngestionError
 from econ_paper_cli.domain.ingestion import IngestionPreflightResult, PreflightCandidate
+from econ_paper_cli.domain.pdf_conversion import (
+    compute_conversion_paper_id,
+    compute_conversion_settings_fingerprint,
+)
+from econ_paper_cli.domain.pdf_quality import PDFQualityStatus
 from econ_paper_cli.domain.single_paper_analysis import compute_analysis_id
 from econ_paper_cli.protocols.generation import Generator
 from econ_paper_cli.protocols.pdf_extraction import PDFExtractor
 from econ_paper_cli.protocols.storage import StorageBackend, StorageConnectionError
+from econ_paper_cli.services.analysis_library import (
+    prepare_analysis_library,
+    prepare_analysis_record,
+    prepare_early_section_library,
+)
 from econ_paper_cli.services.ingestion import (
     discover_pdf_paths,
     run_ingestion_preflight,
 )
+from econ_paper_cli.services.pdf_quality import assess_pdf_extraction_quality
+from econ_paper_cli.services.pdf_section_detection import detect_pdf_sections
 from econ_paper_cli.services.single_paper_analysis import (
     analyze_single_paper,
     build_preflight_failure_result,
-)
-from econ_paper_cli.services.single_paper_analysis_storage import (
-    save_single_paper_analysis_result,
 )
 
 
@@ -60,6 +75,10 @@ class CLIExitCode:
     HALTED_OR_UNAVAILABLE = 1
     TYPED_FAILURE_OR_CONFIG_ERROR = 2
     UNEXPECTED_ERROR = 3
+
+
+class _GeneratorSetupError(RuntimeError):
+    """Typed boundary error for lazily initialized local generation."""
 
 
 class BatchOutcomeKind(str, enum.Enum):
@@ -81,6 +100,7 @@ class BatchItemOutcome:
     record: SinglePaperAnalysisRecord | None = None
     duplicate_of: Path | None = None
     error: str | None = None
+    library_result: LibraryPopulationResult | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.path, Path):
@@ -93,7 +113,11 @@ class BatchItemOutcome:
                 raise TypeError(
                     "duplicate_of must be a pathlib.Path for a batch duplicate."
                 )
-            if self.record is not None or self.error is not None:
+            if (
+                self.record is not None
+                or self.error is not None
+                or self.library_result is not None
+            ):
                 raise ValueError(
                     "A batch duplicate cannot include a record or error message."
                 )
@@ -108,6 +132,13 @@ class BatchItemOutcome:
                 raise ValueError(
                     "An unexpected failure cannot include a record or duplicate path."
                 )
+            if (
+                self.library_result is not None
+                and self.library_result.status is not LibraryPopulationStatus.FAILED
+            ):
+                raise ValueError(
+                    "unexpected failures may only carry a FAILED library outcome."
+                )
             return
 
         if not isinstance(self.record, SinglePaperAnalysisRecord):
@@ -119,6 +150,8 @@ class BatchItemOutcome:
             raise ValueError(
                 "A durable-record outcome cannot include duplicate or error details."
             )
+        if not isinstance(self.library_result, LibraryPopulationResult):
+            raise TypeError("durable-record outcomes require a library_result.")
         is_success = self.record.status is SinglePaperAnalysisStatus.SUCCESS
         if self.kind is BatchOutcomeKind.NEWLY_ANALYZED and not is_success:
             raise ValueError("newly_analyzed requires a successful durable record.")
@@ -140,6 +173,11 @@ class BatchResult:
     halted: int
     typed_failures: int
     unexpected_failures: int
+    library_stored: int = 0
+    library_reused: int = 0
+    library_no_usable_sections: int = 0
+    library_not_eligible: int = 0
+    library_failed: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.items, tuple) or not all(
@@ -157,6 +195,11 @@ class BatchResult:
             "halted",
             "typed_failures",
             "unexpected_failures",
+            "library_stored",
+            "library_reused",
+            "library_no_usable_sections",
+            "library_not_eligible",
+            "library_failed",
         ):
             value = getattr(self, field_name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -189,6 +232,21 @@ class BatchResult:
             "unexpected_failures": sum(
                 item.kind is BatchOutcomeKind.UNEXPECTED_FAILURE for item in self.items
             ),
+            "library_stored": _count_library_status(
+                self.items, LibraryPopulationStatus.STORED
+            ),
+            "library_reused": _count_library_status(
+                self.items, LibraryPopulationStatus.REUSED
+            ),
+            "library_no_usable_sections": _count_library_status(
+                self.items, LibraryPopulationStatus.NO_USABLE_SECTIONS
+            ),
+            "library_not_eligible": _count_library_status(
+                self.items, LibraryPopulationStatus.NOT_ELIGIBLE
+            ),
+            "library_failed": _count_library_status(
+                self.items, LibraryPopulationStatus.FAILED
+            ),
         }
         for field_name, expected_value in expected.items():
             if getattr(self, field_name) != expected_value:
@@ -218,11 +276,14 @@ class AnalyzeCommandOptions:
     section_policy_version: str | None = None
     research_question_policy_version: str | None = None
     single_paper_policy_version: str | None = None
+    conversion_policy_version: str | None = None
+    max_passage_characters: int = 1200
 
 
 def format_analysis_record_output(
     record: SinglePaperAnalysisRecord,
     db_path: Path | str,
+    library_result: LibraryPopulationResult | None = None,
 ) -> str:
     """Render deterministic, inspectable terminal output from a durable analysis record."""
     lines: list[str] = [
@@ -287,6 +348,18 @@ def format_analysis_record_output(
             det_str = f" - {ow.details}" if ow.details else ""
             lines.append(f"[orchestration] {ow.code.value}{det_str}")
 
+    if library_result is not None:
+        lines.extend(
+            (
+                "\n--- Early-Section Library ---",
+                f"Outcome: {library_result.status.value}",
+                f"Paper ID: {library_result.paper_id or 'N/A'}",
+                "Conversion Fingerprint: "
+                f"{library_result.conversion_fingerprint or 'N/A'}",
+                f"Passage Count: {library_result.passage_count}",
+            )
+        )
+
     return "\n".join(lines)
 
 
@@ -301,7 +374,9 @@ def format_batch_result_output(result: BatchResult, db_path: Path | str) -> str:
         elif item.kind == BatchOutcomeKind.UNEXPECTED_FAILURE:
             sections.append(f"{header}\nError: {item.error}")
         elif item.record is not None:
-            record_str = format_analysis_record_output(item.record, db_path)
+            record_str = format_analysis_record_output(
+                item.record, db_path, item.library_result
+            )
             sections.append(f"{header}\n{record_str}")
         else:
             sections.append(header)
@@ -317,6 +392,11 @@ def format_batch_result_output(result: BatchResult, db_path: Path | str) -> str:
         f"Halted/unavailable:  {result.halted}",
         f"Typed failures:      {result.typed_failures}",
         f"Unexpected failures: {result.unexpected_failures}",
+        f"Library stored:      {result.library_stored}",
+        f"Library reused:      {result.library_reused}",
+        f"Library no sections: {result.library_no_usable_sections}",
+        f"Library ineligible:  {result.library_not_eligible}",
+        f"Library failed:      {result.library_failed}",
     ]
     sections.append("\n".join(summary_lines))
     return "\n\n".join(sections)
@@ -354,6 +434,26 @@ def _build_settings(options: AnalyzeCommandOptions) -> SinglePaperAnalysisSettin
     )
 
 
+def _build_conversion_settings(options: AnalyzeCommandOptions) -> PDFConversionSettings:
+    """Build and validate conversion settings from command options."""
+    return PDFConversionSettings(
+        policy_version=(
+            options.conversion_policy_version
+            or DEFAULT_PDF_CONVERSION_SETTINGS.policy_version
+        ),
+        max_passage_characters=options.max_passage_characters,
+    )
+
+
+def _count_library_status(
+    items: tuple[BatchItemOutcome, ...], status: LibraryPopulationStatus
+) -> int:
+    return sum(
+        item.library_result is not None and item.library_result.status is status
+        for item in items
+    )
+
+
 def _batch_exit_code(result: BatchResult) -> int:
     """Derive aggregate exit code from batch result."""
     if result.unexpected_failures > 0:
@@ -379,33 +479,17 @@ def _is_typed_failure(status: SinglePaperAnalysisStatus) -> bool:
     )
 
 
-def _analyze_and_persist_one(
-    pdf_path: Path,
-    extractor: PDFExtractor,
-    generator: Generator,
-    storage: StorageBackend,
-    settings: SinglePaperAnalysisSettings,
-    preflight_result: IngestionPreflightResult,
-) -> BatchItemOutcome:
-    """Run analysis for one candidate path, persist, and return a BatchItemOutcome."""
-    result = analyze_single_paper(
-        pdf_path,
-        extractor,
-        generator,
-        settings=settings,
-        preflight_result=preflight_result,
-    )
-    return _persist_result(pdf_path, result, storage, settings)
-
-
-def _persist_result(
+def _persist_analysis_only(
     pdf_path: Path,
     result: SinglePaperAnalysisResult,
     storage: StorageBackend,
     settings: SinglePaperAnalysisSettings,
+    *,
+    timestamp: str,
 ) -> BatchItemOutcome:
-    """Persist one result and require strict durable read-back."""
-    record = save_single_paper_analysis_result(storage, result, settings=settings)
+    """Persist an analysis-only terminal result with explicit timing."""
+    record = prepare_analysis_record(result, settings, timestamp=timestamp)
+    storage.save_single_paper_analysis(record)
     durable = storage.get_single_paper_analysis(record.analysis_id)
     if durable is None:
         raise RuntimeError(
@@ -416,7 +500,12 @@ def _persist_result(
         if durable.status is SinglePaperAnalysisStatus.SUCCESS
         else BatchOutcomeKind.TYPED_TERMINAL
     )
-    return BatchItemOutcome(path=pdf_path, kind=kind, record=durable)
+    return BatchItemOutcome(
+        path=pdf_path,
+        kind=kind,
+        record=durable,
+        library_result=LibraryPopulationResult(LibraryPopulationStatus.NOT_ELIGIBLE),
+    )
 
 
 def _single_candidate_preflight(
@@ -433,13 +522,173 @@ def _single_candidate_preflight(
     )
 
 
+def _inspection_from_candidate(candidate: PreflightCandidate) -> FileInspectionResult:
+    return FileInspectionResult(
+        file_path=candidate.source_path,
+        size_bytes=candidate.file_size_bytes,
+        sha256=candidate.content_checksum,
+    )
+
+
+def _analysis_is_library_eligible(record: SinglePaperAnalysisRecord) -> bool:
+    return (
+        record.content_checksum is not None
+        and record.quality_status
+        not in (PDFQualityStatus.LIKELY_NEEDS_OCR, PDFQualityStatus.UNUSABLE, None)
+        and record.status
+        not in (
+            SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
+            SinglePaperAnalysisStatus.EXTRACTION_FAILED,
+            SinglePaperAnalysisStatus.QUALITY_HALTED,
+        )
+    )
+
+
+def _process_candidate(
+    pdf_path: Path,
+    candidate: PreflightCandidate,
+    extractor: PDFExtractor,
+    generator_provider: Callable[[], Generator],
+    storage: StorageBackend,
+    analysis_settings: SinglePaperAnalysisSettings,
+    conversion_settings: PDFConversionSettings,
+    timestamp_provider: Callable[[], str],
+) -> BatchItemOutcome:
+    """Reuse, backfill, or newly analyze one inspected candidate."""
+    inspection = _inspection_from_candidate(candidate)
+    checksum = candidate.content_checksum
+    analysis_id = compute_analysis_id(checksum, analysis_settings, pdf_path)
+    paper_id = compute_conversion_paper_id(checksum)
+    conversion_fingerprint = compute_conversion_settings_fingerprint(
+        conversion_settings
+    )
+    existing_analysis = storage.get_single_paper_analysis(analysis_id)
+    existing_library = storage.get_early_section_record(paper_id)
+
+    if existing_analysis is not None:
+        if existing_analysis.content_checksum != checksum:
+            raise RuntimeError(
+                f"Stored analysis '{analysis_id}' does not match current PDF checksum."
+            )
+        if (
+            existing_library is not None
+            and existing_library.settings_fingerprint == conversion_fingerprint
+        ):
+            return BatchItemOutcome(
+                path=pdf_path,
+                kind=BatchOutcomeKind.REUSED,
+                record=existing_analysis,
+                library_result=LibraryPopulationResult(
+                    LibraryPopulationStatus.REUSED,
+                    paper_id=paper_id,
+                    conversion_fingerprint=conversion_fingerprint,
+                    passage_count=len(existing_library.passages),
+                ),
+            )
+        if not _analysis_is_library_eligible(existing_analysis):
+            return BatchItemOutcome(
+                path=pdf_path,
+                kind=BatchOutcomeKind.REUSED,
+                record=existing_analysis,
+                library_result=LibraryPopulationResult(
+                    LibraryPopulationStatus.NOT_ELIGIBLE
+                ),
+            )
+
+        extraction = extractor.extract(candidate.source_path)
+        quality = assess_pdf_extraction_quality(
+            extraction, settings=analysis_settings.quality_settings
+        )
+        if quality.status in (
+            PDFQualityStatus.LIKELY_NEEDS_OCR,
+            PDFQualityStatus.UNUSABLE,
+        ):
+            library_result = LibraryPopulationResult(
+                LibraryPopulationStatus.NOT_ELIGIBLE
+            )
+        else:
+            sections = detect_pdf_sections(
+                extraction, settings=analysis_settings.section_settings
+            )
+            prepared = prepare_early_section_library(
+                inspection,
+                extraction,
+                sections,
+                conversion_settings,
+                timestamp=timestamp_provider(),
+            )
+            library_result = prepared.library_result
+            if prepared.library_record is not None:
+                storage.save_early_section_record(prepared.library_record)
+                durable_library = storage.get_early_section_record(paper_id)
+                if durable_library is None:
+                    raise RuntimeError(
+                        f"Failed to read back early-section record '{paper_id}'."
+                    )
+                library_result = LibraryPopulationResult(
+                    LibraryPopulationStatus.STORED,
+                    paper_id=paper_id,
+                    conversion_fingerprint=durable_library.settings_fingerprint,
+                    passage_count=len(durable_library.passages),
+                )
+        return BatchItemOutcome(
+            path=pdf_path,
+            kind=BatchOutcomeKind.REUSED,
+            record=existing_analysis,
+            library_result=library_result,
+        )
+
+    result = analyze_single_paper(
+        pdf_path,
+        extractor,
+        generator_provider(),
+        settings=analysis_settings,
+        preflight_result=_single_candidate_preflight(candidate),
+    )
+    timestamp = timestamp_provider()
+    prepared = prepare_analysis_library(
+        inspection,
+        result,
+        analysis_settings,
+        conversion_settings,
+        timestamp=timestamp,
+    )
+    if prepared.library_record is None:
+        storage.save_single_paper_analysis(prepared.analysis_record)
+    else:
+        storage.save_analysis_and_early_section(
+            prepared.analysis_record, prepared.library_record
+        )
+    durable = storage.get_single_paper_analysis(prepared.analysis_record.analysis_id)
+    if durable is None:
+        raise RuntimeError(
+            f"Failed to read back persisted analysis record "
+            f"'{prepared.analysis_record.analysis_id}' from storage."
+        )
+    kind = (
+        BatchOutcomeKind.NEWLY_ANALYZED
+        if durable.status is SinglePaperAnalysisStatus.SUCCESS
+        else BatchOutcomeKind.TYPED_TERMINAL
+    )
+    return BatchItemOutcome(
+        path=pdf_path,
+        kind=kind,
+        record=durable,
+        library_result=prepared.library_result,
+    )
+
+
 def run_batch_analysis(
     options: AnalyzeCommandOptions,
     extractor: PDFExtractor,
-    generator: Generator,
+    generator_provider: Callable[[], Generator],
     storage: StorageBackend,
     settings: SinglePaperAnalysisSettings,
+    conversion_settings: PDFConversionSettings,
     file_inspector: Callable[[Path], FileInspectionResult] = inspect_local_file,
+    timestamp_provider: Callable[[], str] = lambda: datetime.now(
+        timezone.utc
+    ).isoformat(),
 ) -> BatchResult:
     """Run deterministic batch analysis over a directory target.
 
@@ -470,7 +719,13 @@ def run_batch_analysis(
                     err,
                     settings=settings,
                 )
-                outcome = _persist_result(pdf_path, result, storage, settings)
+                outcome = _persist_analysis_only(
+                    pdf_path,
+                    result,
+                    storage,
+                    settings,
+                    timestamp=timestamp_provider(),
+                )
                 items.append(outcome)
                 newly_analyzed += 1
                 typed_failures += 1
@@ -484,12 +739,18 @@ def run_batch_analysis(
                 )
                 unexpected_failures += 1
             continue
+        except _GeneratorSetupError:
+            raise
         except Exception as err:
             items.append(
                 BatchItemOutcome(
                     path=pdf_path,
                     kind=BatchOutcomeKind.UNEXPECTED_FAILURE,
                     error=f"{type(err).__name__}: {err}",
+                    library_result=LibraryPopulationResult(
+                        LibraryPopulationStatus.FAILED,
+                        error_message=f"{type(err).__name__}: {err}",
+                    ),
                 )
             )
             unexpected_failures += 1
@@ -512,35 +773,21 @@ def run_batch_analysis(
         seen_checksums[checksum] = pdf_path
 
         try:
-            analysis_id = compute_analysis_id(checksum, settings, pdf_path)
-            existing = storage.get_single_paper_analysis(analysis_id)
-            if existing is not None:
-                items.append(
-                    BatchItemOutcome(
-                        path=pdf_path,
-                        kind=BatchOutcomeKind.REUSED,
-                        record=existing,
-                    )
-                )
-                reused += 1
-                if existing.status is SinglePaperAnalysisStatus.SUCCESS:
-                    successes += 1
-                elif _is_halted(existing.status):
-                    halted += 1
-                elif _is_typed_failure(existing.status):
-                    typed_failures += 1
-                continue
-
-            outcome = _analyze_and_persist_one(
+            outcome = _process_candidate(
                 pdf_path,
+                candidate,
                 extractor,
-                generator,
+                generator_provider,
                 storage,
                 settings,
-                _single_candidate_preflight(candidate),
+                conversion_settings,
+                timestamp_provider,
             )
             items.append(outcome)
-            newly_analyzed += 1
+            if outcome.kind is BatchOutcomeKind.REUSED:
+                reused += 1
+            else:
+                newly_analyzed += 1
             if outcome.record is not None and _is_typed_failure(outcome.record.status):
                 typed_failures += 1
             elif outcome.record is not None:
@@ -549,12 +796,18 @@ def run_batch_analysis(
                 elif _is_halted(outcome.record.status):
                     halted += 1
 
+        except _GeneratorSetupError:
+            raise
         except Exception as err:
             items.append(
                 BatchItemOutcome(
                     path=pdf_path,
                     kind=BatchOutcomeKind.UNEXPECTED_FAILURE,
                     error=f"{type(err).__name__}: {err}",
+                    library_result=LibraryPopulationResult(
+                        LibraryPopulationStatus.FAILED,
+                        error_message=f"{type(err).__name__}: {err}",
+                    ),
                 )
             )
             unexpected_failures += 1
@@ -570,6 +823,21 @@ def run_batch_analysis(
         halted=halted,
         typed_failures=typed_failures,
         unexpected_failures=unexpected_failures,
+        library_stored=_count_library_status(
+            tuple(items), LibraryPopulationStatus.STORED
+        ),
+        library_reused=_count_library_status(
+            tuple(items), LibraryPopulationStatus.REUSED
+        ),
+        library_no_usable_sections=_count_library_status(
+            tuple(items), LibraryPopulationStatus.NO_USABLE_SECTIONS
+        ),
+        library_not_eligible=_count_library_status(
+            tuple(items), LibraryPopulationStatus.NOT_ELIGIBLE
+        ),
+        library_failed=_count_library_status(
+            tuple(items), LibraryPopulationStatus.FAILED
+        ),
     )
 
 
@@ -579,13 +847,18 @@ def run_single_paper_analysis_command(
     generator: Generator | None = None,
     storage: StorageBackend | None = None,
     file_inspector: Callable[[Path], FileInspectionResult] = inspect_local_file,
+    timestamp_provider: Callable[[], str] = lambda: datetime.now(
+        timezone.utc
+    ).isoformat(),
 ) -> int:
     """Execute analysis from CLI options — accepts a single PDF or a directory."""
     try:
         # 1. Build and validate settings
         try:
             settings = _build_settings(options)
+            conversion_settings = _build_conversion_settings(options)
         except (
+            PDFConversionValidationError,
             PDFQualityValidationError,
             PDFSectionValidationError,
             ResearchQuestionValidationError,
@@ -616,8 +889,16 @@ def run_single_paper_analysis_command(
                     sys.stderr.write(f"Database connection error: {err}\n")
                     return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
 
-        # 3. Generator setup & readiness check
-        if generator is None:
+        if extractor is None:
+            extractor = PyPDFExtractor()
+
+        cached_generator = generator
+
+        def get_generator() -> Generator:
+            """Construct and verify the local generator only when analysis needs it."""
+            nonlocal cached_generator
+            if cached_generator is not None:
+                return cached_generator
             try:
                 cfg = LlamaCppConfig(
                     executable_path=options.executable_path,
@@ -632,7 +913,7 @@ def run_single_paper_analysis_command(
                 )
                 gen = LlamaCppGenerator(cfg)
                 gen.check_readiness()
-                generator = gen
+                cached_generator = gen
             except (
                 LlamaCppConfigurationError,
                 LlamaCppReadinessError,
@@ -640,11 +921,8 @@ def run_single_paper_analysis_command(
                 ValueError,
                 FileNotFoundError,
             ) as err:
-                sys.stderr.write(f"Configuration or readiness error: {err}\n")
-                return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
-
-        if extractor is None:
-            extractor = PyPDFExtractor()
+                raise _GeneratorSetupError(str(err)) from err
+            return cached_generator
 
         # 4a. Directory mode — batch analysis
         if options.target_path.is_dir():
@@ -652,38 +930,56 @@ def run_single_paper_analysis_command(
                 batch = run_batch_analysis(
                     options,
                     extractor,
-                    generator,
+                    get_generator,
                     storage,
                     settings,
+                    conversion_settings,
                     file_inspector=file_inspector,
+                    timestamp_provider=timestamp_provider,
                 )
             except IngestionError as err:
                 sys.stderr.write(f"Input preflight error: {err}\n")
+                return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+            except _GeneratorSetupError as err:
+                sys.stderr.write(f"Configuration or readiness error: {err}\n")
                 return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
             output_str = format_batch_result_output(batch, target_db_path)
             sys.stdout.write(f"{output_str}\n")
             return _batch_exit_code(batch)
 
-        # 4b. Single-file mode — existing contract preserved exactly
-        result = analyze_single_paper(
-            options.target_path,
-            extractor,
-            generator,
-            settings=settings,
-        )
-
-        # 5. Persist record to SQLite
-        record = save_single_paper_analysis_result(storage, result, settings=settings)
-
-        # 6. Read back durable record from storage (MUST NOT fall back to transient object)
-        durable_record = storage.get_single_paper_analysis(record.analysis_id)
-        if durable_record is None:
-            raise RuntimeError(
-                f"Failed to read back persisted analysis record '{record.analysis_id}' from storage."
+        try:
+            preflight = run_ingestion_preflight(
+                options.target_path, file_inspector=file_inspector
+            )
+        except IngestionError as err:
+            result = build_preflight_failure_result(
+                options.target_path, err, settings=settings
+            )
+            outcome = _persist_analysis_only(
+                options.target_path,
+                result,
+                storage,
+                settings,
+                timestamp=timestamp_provider(),
+            )
+        else:
+            outcome = _process_candidate(
+                options.target_path,
+                preflight.candidates[0],
+                extractor,
+                get_generator,
+                storage,
+                settings,
+                conversion_settings,
+                timestamp_provider,
             )
 
-        # 7. Render output from durable_record
-        output_str = format_analysis_record_output(durable_record, target_db_path)
+        if outcome.record is None:
+            raise RuntimeError("Single-file analysis did not produce a durable record.")
+        durable_record = outcome.record
+        output_str = format_analysis_record_output(
+            durable_record, target_db_path, outcome.library_result
+        )
         sys.stdout.write(f"{output_str}\n")
 
         # 8. Return exit code based on terminal status
@@ -696,6 +992,9 @@ def run_single_paper_analysis_command(
 
         return CLIExitCode.UNEXPECTED_ERROR
 
+    except _GeneratorSetupError as err:
+        sys.stderr.write(f"Configuration or readiness error: {err}\n")
+        return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
     except Exception as err:
         sys.stderr.write(f"Unexpected internal error: {err}\n")
         return CLIExitCode.UNEXPECTED_ERROR

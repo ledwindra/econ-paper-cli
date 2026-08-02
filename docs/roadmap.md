@@ -144,6 +144,9 @@ Completed:
 - Project successful early-section conversion into an immutable library record
   and persist Markdown, passages, parser/conversion identity, and exact fragment
   provenance atomically in SQLite schema version 4
+- Populate that library during single-file and directory analysis, with exact
+  dual-record reuse, generator-free legacy backfill, configurable deterministic
+  passage sizing, and coordinated analysis/library writes
 - Reconstruct persisted passages after restart through `load_corpus()` for use
   by the existing in-memory BM25 adapter
 
@@ -152,8 +155,7 @@ Not yet implemented:
 - Connect preflight eligibility decisions to extraction orchestration
 - Add supported OCR and connect extraction-quality outcomes to orchestration
 - Extend conversion beyond the currently supported Abstract and Introduction
-- Connect early-section conversion persistence to analysis/directory
-  orchestration and refresh rebuildable retrieval state
+- Refresh rebuildable retrieval state after library changes
 - Verify offline, restart-safe, and cross-platform behavior
 
 ## 10. End-to-end MVP orchestration

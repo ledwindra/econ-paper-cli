@@ -1,5 +1,12 @@
 """Application services used by user-facing adapters."""
 
+from econ_paper_cli.services.analysis_library import (
+    PreparedAnalysisLibrary,
+    PreparedEarlySectionLibrary,
+    prepare_analysis_library,
+    prepare_analysis_record,
+    prepare_early_section_library,
+)
 from econ_paper_cli.services.early_section_library import (
     project_early_section_library_record,
 )
@@ -27,6 +34,11 @@ from econ_paper_cli.services.single_paper_analysis_storage import (
 )
 
 __all__ = [
+    "PreparedAnalysisLibrary",
+    "PreparedEarlySectionLibrary",
+    "prepare_analysis_library",
+    "prepare_analysis_record",
+    "prepare_early_section_library",
     "run_ingestion_preflight",
     "discover_pdf_paths",
     "extract_pdf",

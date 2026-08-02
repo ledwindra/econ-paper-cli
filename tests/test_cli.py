@@ -50,6 +50,8 @@ def test_analyze_help_lists_all_options(capsys: pytest.CaptureFixture[str]) -> N
         "--threads",
         "--timeout",
         "--db-path",
+        "--conversion-policy-version",
+        "--max-passage-characters",
     ):
         assert flag in output
     assert "PDF file or a directory" in output
@@ -75,6 +77,33 @@ def test_analyze_parser_accepts_file_or_directory_target(target: str) -> None:
     )
 
     assert arguments.target_path == Path(target)
+    assert arguments.max_passage_characters == 1200
+
+
+def test_analyze_parser_accepts_conversion_settings() -> None:
+    arguments = build_parser().parse_args(
+        [
+            "analyze",
+            "paper.pdf",
+            "--llama-cpp-path",
+            "llama-completion",
+            "--model-path",
+            "model.gguf",
+            "--model-id",
+            "local-model",
+            "--model-bytes",
+            "100",
+            "--model-checksum",
+            "a" * 64,
+            "--conversion-policy-version",
+            "early-section-markdown-v1",
+            "--max-passage-characters",
+            "800",
+        ]
+    )
+
+    assert arguments.conversion_policy_version == "early-section-markdown-v1"
+    assert arguments.max_passage_characters == 800
 
 
 def test_analyze_missing_required_arguments_fails(

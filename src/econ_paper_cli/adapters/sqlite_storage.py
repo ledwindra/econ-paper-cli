@@ -372,6 +372,7 @@ class SQLiteStorage(StorageBackend):
             self._db_path = db_path
 
         self._conn: sqlite3.Connection | None = None
+        self._coordinated_transaction_active = False
 
     @property
     def db_path(self) -> Path | str:
@@ -952,7 +953,8 @@ class SQLiteStorage(StorageBackend):
         provenance = record.source_provenance
 
         try:
-            conn.execute("BEGIN IMMEDIATE")
+            if not self._coordinated_transaction_active:
+                conn.execute("BEGIN IMMEDIATE")
             conflict = conn.execute(
                 """SELECT paper_id FROM papers
                    WHERE LOWER(content_checksum) = LOWER(?) AND paper_id <> ?""",
@@ -1114,7 +1116,8 @@ class SQLiteStorage(StorageBackend):
                 raise StorageValidationError(
                     f"Strict read-back mismatch for early-section record '{paper.paper_id}'."
                 )
-            conn.commit()
+            if not self._coordinated_transaction_active:
+                conn.commit()
         except Exception as error:
             conn.rollback()
             if isinstance(error, sqlite3.Error):
@@ -1278,6 +1281,43 @@ class SQLiteStorage(StorageBackend):
             )
         return tuple(record for record in records if record is not None)
 
+    def save_analysis_and_early_section(
+        self,
+        analysis: SinglePaperAnalysisRecord,
+        library: EarlySectionLibraryRecord,
+    ) -> None:
+        """Persist complete analysis and library records in one transaction."""
+        if not isinstance(analysis, SinglePaperAnalysisRecord):
+            raise TypeError("analysis must be a SinglePaperAnalysisRecord instance.")
+        if not isinstance(library, EarlySectionLibraryRecord):
+            raise TypeError("library must be an EarlySectionLibraryRecord instance.")
+        if analysis.content_checksum != library.source_provenance.content_checksum:
+            raise StorageValidationError(
+                "analysis and library records must have the same content checksum."
+            )
+        conn = self._ensure_initialized()
+        if self._coordinated_transaction_active:
+            raise StorageTransactionError(
+                "A coordinated transaction is already active."
+            )
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            self._coordinated_transaction_active = True
+            self.save_single_paper_analysis(analysis)
+            self.save_early_section_record(library)
+            durable_analysis = self.get_single_paper_analysis(analysis.analysis_id)
+            durable_library = self.get_early_section_record(library.paper.paper_id)
+            if durable_analysis != analysis or durable_library is None:
+                raise StorageValidationError(
+                    "Strict coordinated read-back did not match prepared records."
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            self._coordinated_transaction_active = False
+
     def delete_early_section_record(self, paper_id: str) -> bool:
         """Delete an early-section record and its shared paper representation."""
         conn = self._ensure_initialized()
@@ -1307,7 +1347,8 @@ class SQLiteStorage(StorageBackend):
         chk = record.content_checksum.lower() if record.content_checksum else None
 
         try:
-            conn.execute("BEGIN IMMEDIATE")
+            if not self._coordinated_transaction_active:
+                conn.execute("BEGIN IMMEDIATE")
 
             # Check if record already exists to preserve created_at / updated_at when equivalent
             cur_ex = conn.execute(
@@ -1491,7 +1532,8 @@ class SQLiteStorage(StorageBackend):
                     ),
                 )
 
-            conn.commit()
+            if not self._coordinated_transaction_active:
+                conn.commit()
         except Exception as err:
             conn.rollback()
             if isinstance(err, sqlite3.Error):
