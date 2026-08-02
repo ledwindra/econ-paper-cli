@@ -2,20 +2,30 @@
 
 A free, open-source, local-first conversational literature search tool for economists.
 
-The goal is to let users ask research questions in natural language and receive synthesized answers backed by inspectable evidence. The following session is an illustration of the intended product, not current behavior:
+The goal is to let users ask research questions in natural language and receive synthesized answers backed by inspectable evidence. After one successful `econpapers setup` and `econpapers analyze`, running bare `econpapers` opens an interactive cited-chat shell over the durable local library:
 
 ```text
-$ econpapers chat
+$ econpapers
+=== econpapers interactive shell ===
+Database Path: ...
+Paper Count: 12
+Passage Count: 34
+Evidence scope: stored Abstract and Introduction passages only.
+Commands: /help, /status, /exit, /quit
+econpapers> Has anyone studied the effect of direct regional elections on infrastructure investment?
+Question: Has anyone studied the effect of direct regional elections on infrastructure investment?
+Outcome: answered
+Answer: ...
 
-> Has anyone studied the effect of direct regional elections on infrastructure investment?
+--- Citations ---
+[e1]
+  Paper Title: ...
+  ...
 
-Answer:
-...
-
-Evidence:
-[1] Author (Year), Paper Title
-    Relevant passage: ...
+econpapers> /exit
 ```
+
+Each question is answered independently against the stored Abstract/Introduction corpus — there is no conversation memory or follow-up rewriting yet (see [Interactive shell](#interactive-shell-issue-56-implemented) below).
 
 ## Product principles
 
@@ -60,6 +70,7 @@ python -m pip install -e .
 The package currently exposes these commands:
 
 ```bash
+econpapers                                                                    # interactive shell
 econpapers setup --llama-cpp-path EXECUTABLE_PATH --model-path MODEL_PATH --model-id MODEL_ID --model-bytes BYTES --model-checksum SHA256 [--threads N] [--timeout SECONDS] [--db-path DB_PATH]
 econpapers status
 econpapers chat QUESTION
@@ -68,6 +79,9 @@ econpapers analyze TARGET_PATH [--max-passage-characters 1200]
 ```
 
 `econpapers update` remains a deterministic placeholder.
+
+Bare `econpapers` (no command) opens the interactive shell described above;
+`econpapers --help` still prints normal CLI help and exits.
 
 `econpapers setup` validates a proposed local `llama.cpp` runtime and GGUF
 model (path, expected size, expected SHA-256 checksum, and optional thread
@@ -104,12 +118,42 @@ initialized, so those paths — and the `chat` `EMPTY_LIBRARY`/`NO_MATCHES`
 outcomes — do not need runtime/model configuration or accessible model
 artifacts.
 
+### Interactive shell (Issue 56 implemented)
+
+Bare `econpapers` opens a plain-text interactive shell instead of printing
+help. It resolves configuration and the database path the same way as
+`analyze`/`chat` (Issue #54 boundaries), opens the configured SQLite library
+read-only exactly once, and builds one session snapshot (strict early-section
+records, one validated `Corpus`, one in-memory `BM25Retriever`). The prompt
+is `econpapers> `.
+
+Each non-empty, non-command line is one independent cited question — exactly
+as `econpapers chat` — normalized, retrieved, and (only if evidence exists)
+generated and citation-validated the same way. The local generator is
+constructed lazily on the first matched question and reused for later matched
+questions in the same process; empty-library and no-match questions never
+construct it, and a typed generator failure is rendered for that question
+without corrupting the session, so the next question can retry.
+
+Built-in commands: `/help` (session help), `/status` (database path,
+paper/passage counts, and generator readiness, read-only), and `/exit`/
+`/quit` (terminate successfully). A blank line just redisplays the prompt.
+EOF exits successfully; `Ctrl-C` while waiting for input exits immediately
+with code 130 and no traceback. The session is strictly read-only: no
+database writes or migrations, no PDF reopening or reanalysis, no
+configuration mutation, and no persistence of questions, answers, or
+citations. The library is a fixed snapshot for the life of the process —
+papers analyzed after the shell opens become visible only after restarting
+`econpapers`. There is no conversation history, follow-up-question rewriting,
+or pronoun resolution in this issue; every question is independent, exactly
+like one-shot `econpapers chat`.
+
 ### Intended future workflow
 
 ```bash
 econpapers setup --llama-cpp-path EXECUTABLE_PATH --model-path MODEL_PATH --model-id MODEL_ID --model-bytes BYTES --model-checksum SHA256
 econpapers ingest /path/to/papers
-econpapers chat "What is the literature on X?"
+econpapers
 ```
 
 The `ingest` example illustrates the intended ordinary-user workflow. Its
@@ -119,18 +163,6 @@ have the application derive checksums, metadata, Markdown, passages,
 provenance, database records, and retrieval state locally. Manual conversion,
 manifest creation, segmentation, identifier assignment, and database insertion
 should not be necessary.
-
-Inside the chat:
-
-```text
-> What is the literature on direct regional elections and public investment?
-
-> :evidence 1
-
-> How credible is the causal identification?
-
-> :quit
-```
 
 ## Local inference adapter
 

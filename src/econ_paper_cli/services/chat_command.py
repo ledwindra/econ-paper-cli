@@ -234,7 +234,7 @@ def execute_chat_command(
             )
 
         provider = generator_provider or (
-            lambda opts: _build_llama_cpp_generator(opts, overrides, lazy_config)
+            lambda opts: _build_llama_cpp_generator(overrides, lazy_config)
         )
         generator = provider(options)
         request = GenerationRequest(question=question, evidence=evidence)
@@ -390,22 +390,7 @@ def format_chat_command_output(result: ChatCommandResult) -> str:
         else:
             lines.append("Finding Kinds: N/A")
         lines.append("\n--- Citations ---")
-        for detail in result.citations:
-            lines.append(f"[{detail.citation_id}]")
-            lines.append(f"  Paper Title: {detail.paper_title}")
-            lines.append(f"  Section Heading: {detail.section_heading or 'N/A'}")
-            if detail.page_start is None:
-                page_range = "N/A"
-            elif detail.page_end is None or detail.page_end == detail.page_start:
-                page_range = str(detail.page_start)
-            else:
-                page_range = f"{detail.page_start}-{detail.page_end}"
-            lines.append(f"  Page Range: {page_range}")
-            lines.append(f"  Paper ID: {detail.paper_id}")
-            lines.append(f"  Passage ID: {detail.passage_id}")
-            lines.append(f"  Retrieval Rank: {detail.retrieval_rank}")
-            lines.append(f"  Retrieval Score: {format(detail.retrieval_score, '.12g')}")
-            lines.append(f"  Source Path: {detail.source_path}")
+        lines.extend(_render_citation_lines(result.citations))
     elif result.outcome in (
         ChatTerminalOutcome.EMPTY_LIBRARY,
         ChatTerminalOutcome.NO_MATCHES,
@@ -426,12 +411,33 @@ def format_chat_command_output(result: ChatCommandResult) -> str:
     return "\n".join(lines)
 
 
+def _render_citation_lines(citations: tuple[ChatCitationDetail, ...]) -> list[str]:
+    """Render the shared per-citation detail block used by one-shot chat and
+    the interactive shell, so both stay byte-for-byte identical."""
+    lines: list[str] = []
+    for detail in citations:
+        lines.append(f"[{detail.citation_id}]")
+        lines.append(f"  Paper Title: {detail.paper_title}")
+        lines.append(f"  Section Heading: {detail.section_heading or 'N/A'}")
+        if detail.page_start is None:
+            page_range = "N/A"
+        elif detail.page_end is None or detail.page_end == detail.page_start:
+            page_range = str(detail.page_start)
+        else:
+            page_range = f"{detail.page_start}-{detail.page_end}"
+        lines.append(f"  Page Range: {page_range}")
+        lines.append(f"  Paper ID: {detail.paper_id}")
+        lines.append(f"  Passage ID: {detail.passage_id}")
+        lines.append(f"  Retrieval Rank: {detail.retrieval_rank}")
+        lines.append(f"  Retrieval Score: {format(detail.retrieval_score, '.12g')}")
+        lines.append(f"  Source Path: {detail.source_path}")
+    return lines
+
+
 def _build_llama_cpp_generator(
-    options: ChatCommandOptions,
     overrides: RuntimeModelOverrides,
     lazy_config: LazyConfigLoader,
 ) -> Generator:
-    del options  # Resolution uses overrides/lazy_config, not raw CLI options.
     # A fully-specified CLI identity never forces a load. But if a load
     # already happened for another reason (e.g. resolving --db-path), its
     # optional threads/timeout defaults still apply per CLI > config >

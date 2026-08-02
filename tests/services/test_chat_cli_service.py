@@ -1004,9 +1004,7 @@ def test_build_generator_honors_durable_threads_and_timeout_when_config_loaded(
         model_bytes=99,
         model_checksum="b" * 64,
     )
-    generator = _build_llama_cpp_generator(
-        ChatCommandOptions(question="trade policy"), overrides, lazy_config
-    )
+    generator = _build_llama_cpp_generator(overrides, lazy_config)
 
     assert generator._config.threads == 8
     assert generator._config.timeout_seconds == 60.0
@@ -1029,9 +1027,7 @@ def test_build_generator_explicit_cli_threads_and_timeout_override_durable_confi
         threads=2,
         timeout=15.0,
     )
-    generator = _build_llama_cpp_generator(
-        ChatCommandOptions(question="trade policy"), overrides, lazy_config
-    )
+    generator = _build_llama_cpp_generator(overrides, lazy_config)
 
     assert generator._config.threads == 2
     assert generator._config.timeout_seconds == 15.0
@@ -1052,9 +1048,7 @@ def test_build_generator_no_config_loaded_retains_documented_defaults(
         model_bytes=99,
         model_checksum="b" * 64,
     )
-    generator = _build_llama_cpp_generator(
-        ChatCommandOptions(question="trade policy"), overrides, lazy_config
-    )
+    generator = _build_llama_cpp_generator(overrides, lazy_config)
 
     assert generator._config.threads is None
     assert generator._config.timeout_seconds == 300.0

@@ -9,6 +9,10 @@ from econ_paper_cli.services.chat_command import (
     ChatCommandOptions,
     run_chat_command,
 )
+from econ_paper_cli.services.interactive_shell import (
+    ShellCommandOptions,
+    run_interactive_shell,
+)
 from econ_paper_cli.services.setup_command import (
     SetupCommandOptions,
     run_setup_command,
@@ -105,6 +109,11 @@ def run_chat(args: Namespace | None = None) -> int:
         return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
 
     return run_chat_command(options)
+
+
+def run_shell(args: Namespace | None = None) -> int:
+    """Enter the bare interactive cited-chat shell over the local library."""
+    return run_interactive_shell(ShellCommandOptions())
 
 
 def run_update(args: Namespace | None = None) -> int:

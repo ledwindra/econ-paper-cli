@@ -1,3 +1,4 @@
+import io
 from importlib import metadata
 from pathlib import Path
 
@@ -5,6 +6,7 @@ import pytest
 
 from econ_paper_cli.cli import build_parser, main
 from econ_paper_cli.services import commands
+from econ_paper_cli.services.interactive_shell import ShellExitCode
 
 
 def test_update_placeholder_succeeds(capsys: pytest.CaptureFixture[str]) -> None:
@@ -344,9 +346,32 @@ def test_status_help_lists_all_options(capsys: pytest.CaptureFixture[str]) -> No
         assert flag in output
 
 
-def test_no_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
+def test_no_command_dispatches_to_shell_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_shell(args: object) -> int:
+        captured["args"] = args
+        return 0
+
+    monkeypatch.setattr(commands, "run_shell", fake_run_shell)
     assert main([]) == 0
-    assert "usage: econpapers" in capsys.readouterr().out
+    assert "args" in captured
+
+
+def test_no_command_enters_shell_and_reports_missing_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """End-to-end: bare invocation with an isolated, empty environment opens
+    the shell and exits with a typed failure for a missing database, rather
+    than hanging on real stdin or touching a real default database."""
+    monkeypatch.setenv("ECONPAPERS_LIBRARY_DIR", str(tmp_path / "lib"))
+    monkeypatch.setenv("ECONPAPERS_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+
+    assert main([]) == ShellExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    assert capsys.readouterr().err.strip() != ""
 
 
 def test_unknown_command_is_rejected(capsys: pytest.CaptureFixture[str]) -> None:

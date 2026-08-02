@@ -13,6 +13,11 @@ def build_parser() -> ArgumentParser:
     parser = ArgumentParser(
         prog="econpapers",
         description="Local-first conversational literature search for economists.",
+        epilog=(
+            "Running `econpapers` with no command opens an interactive "
+            "cited-chat shell over the durable local library. Use "
+            "`econpapers chat QUESTION` for one-shot, non-interactive use."
+        ),
     )
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
@@ -228,6 +233,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         handler: CommandHandler | None = getattr(arguments, "handler", None)
 
         if handler is None:
+            if arguments.command is None:
+                code = commands.run_shell(arguments)
+                return code if isinstance(code, int) else 0
             parser.print_help()
             return 0
 
