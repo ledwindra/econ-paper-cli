@@ -1,5 +1,6 @@
 """Immutable storage contract for converted early PDF sections."""
 
+import hashlib
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ _RECORD_FIELDS = {
     "conversion_settings",
     "settings_fingerprint",
     "markdown",
+    "markdown_sha256",
     "passages",
     "passage_provenance",
     "created_at",
@@ -192,6 +194,7 @@ class EarlySectionLibraryRecord:
     conversion_settings: PDFConversionSettings
     settings_fingerprint: str
     markdown: str
+    markdown_sha256: str
     passages: tuple[Passage, ...]
     passage_provenance: tuple[StoredPassageProvenance, ...]
     created_at: str
@@ -232,6 +235,10 @@ class EarlySectionLibraryRecord:
         ):
             raise EarlySectionLibraryValidationError(
                 "settings_fingerprint must be lowercase SHA-256 hex."
+            )
+        if self.markdown_sha256 != compute_markdown_sha256(self.markdown):
+            raise EarlySectionLibraryValidationError(
+                "markdown_sha256 does not match the exact Markdown bytes."
             )
         if not isinstance(self.passages, tuple) or not isinstance(
             self.passage_provenance, tuple
@@ -350,6 +357,7 @@ class EarlySectionLibraryRecord:
             ),
             settings_fingerprint=cast(str, data["settings_fingerprint"]),
             markdown=cast(str, data["markdown"]),
+            markdown_sha256=cast(str, data["markdown_sha256"]),
             passages=tuple(
                 Passage.from_mapping(cast(Mapping[str, object], passage))
                 for passage in cast(Sequence[object], raw_passages)
@@ -376,6 +384,7 @@ class EarlySectionLibraryRecord:
             },
             "settings_fingerprint": self.settings_fingerprint,
             "markdown": self.markdown,
+            "markdown_sha256": self.markdown_sha256,
             "passages": [passage.to_mapping() for passage in self.passages],
             "passage_provenance": [
                 provenance.to_mapping() for provenance in self.passage_provenance
@@ -383,6 +392,13 @@ class EarlySectionLibraryRecord:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+
+
+def compute_markdown_sha256(markdown: str) -> str:
+    """Return the SHA-256 digest of exact UTF-8 Markdown bytes."""
+    if not isinstance(markdown, str) or not markdown.strip():
+        raise EarlySectionLibraryValidationError("markdown must be a non-empty string.")
+    return hashlib.sha256(markdown.encode("utf-8")).hexdigest()
 
 
 def _validate_mapping_fields(

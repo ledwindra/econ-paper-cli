@@ -322,6 +322,7 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 settings_fingerprint TEXT NOT NULL,
                 max_passage_characters INTEGER NOT NULL,
                 markdown TEXT NOT NULL,
+                markdown_sha256 TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE
@@ -1027,14 +1028,16 @@ class SQLiteStorage(StorageBackend):
             conn.execute(
                 """INSERT INTO early_section_records (
                     paper_id, conversion_policy_version, settings_fingerprint,
-                    max_passage_characters, markdown, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    max_passage_characters, markdown, markdown_sha256,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     paper.paper_id,
                     record.conversion_settings.policy_version,
                     record.settings_fingerprint,
                     record.conversion_settings.max_passage_characters,
                     record.markdown,
+                    record.markdown_sha256,
                     created_at,
                     record.updated_at,
                 ),
@@ -1244,6 +1247,7 @@ class SQLiteStorage(StorageBackend):
                 ),
                 settings_fingerprint=early_row["settings_fingerprint"],
                 markdown=early_row["markdown"],
+                markdown_sha256=early_row["markdown_sha256"],
                 passages=passages,
                 passage_provenance=tuple(stored_provenance),
                 created_at=early_row["created_at"],

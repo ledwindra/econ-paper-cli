@@ -4,6 +4,7 @@ from econ_paper_cli.domain.early_section_library import (
     EarlySectionLibraryRecord,
     StoredPassageProvenance,
     StoredPassageSourceFragment,
+    compute_markdown_sha256,
 )
 from econ_paper_cli.domain.errors import EarlySectionLibraryValidationError
 from econ_paper_cli.domain.papers import Paper
@@ -137,6 +138,7 @@ def project_early_section_library_record(
         conversion_settings=conversion.settings,
         settings_fingerprint=conversion.settings_fingerprint,
         markdown=conversion.markdown,
+        markdown_sha256=compute_markdown_sha256(conversion.markdown),
         passages=conversion.passages,
         passage_provenance=stored_provenance,
         created_at=timestamp,

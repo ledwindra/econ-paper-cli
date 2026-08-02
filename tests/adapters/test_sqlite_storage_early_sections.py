@@ -239,6 +239,24 @@ def test_corrupt_fragment_source_text_fails_strict_read_back() -> None:
     storage.close()
 
 
+def test_corrupt_nonempty_markdown_fails_strict_read_back() -> None:
+    storage = SQLiteStorage(":memory:")
+    record = _record()
+    storage.save_early_section_record(record)
+    conn = storage._conn
+    assert conn is not None
+    conn.execute(
+        "UPDATE early_section_records SET markdown = '# unrelated but non-empty' "
+        "WHERE paper_id = ?",
+        (record.paper.paper_id,),
+    )
+    conn.commit()
+
+    with pytest.raises(StorageValidationError, match="markdown_sha256"):
+        storage.get_early_section_record(record.paper.paper_id)
+    storage.close()
+
+
 def test_list_and_delete_are_scoped_to_early_section_records() -> None:
     storage = SQLiteStorage(":memory:")
     record = _record()

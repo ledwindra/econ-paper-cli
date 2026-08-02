@@ -36,11 +36,13 @@ representations honestly.
 ## Restart-time provenance validation
 
 Each stored passage provenance record contains ordered page-local fragments.
-Schema version 4 also stores the exact source text of each fragment. On read,
+Schema version 4 also stores the exact source text of each fragment and a
+SHA-256 digest of the exact UTF-8 Markdown bytes. On read,
 the adapter reconstructs the immutable record and verifies that every fragment
 text equals the corresponding passage slice and that source and passage
 offsets, pages, sections, ordinals, identities, and settings remain consistent.
-Missing, corrupt, reordered, or ungrounded rows raise `StorageValidationError`;
+The Markdown digest must match before a record is returned. Missing, corrupt,
+reordered, or ungrounded rows raise `StorageValidationError`;
 the adapter never returns a partial record.
 
 This is deliberately narrower than revalidating against the full extraction.
@@ -55,8 +57,8 @@ The version-4 migration:
 
 - makes `source_provenance.markdown_path` nullable and adds parser version;
 - preserves existing non-null legacy Markdown paths;
-- stores conversion policy, settings fingerprint, maximum passage size, and
-  generated Markdown;
+- stores conversion policy, settings fingerprint, maximum passage size,
+  generated Markdown, and its deterministic SHA-256 digest;
 - stores one ordered provenance row per passage; and
 - stores ordered fragments with page number, source offsets, passage offsets,
   and exact source text.

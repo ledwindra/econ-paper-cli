@@ -12,6 +12,7 @@ from econ_paper_cli.domain.early_section_library import (
     EarlySectionLibraryRecord,
     StoredPassageProvenance,
     StoredPassageSourceFragment,
+    compute_markdown_sha256,
 )
 from econ_paper_cli.domain.errors import (
     CitationValidationError,
@@ -217,6 +218,7 @@ __all__ = [
     "compute_conversion_paper_id",
     "compute_conversion_passage_id",
     "compute_conversion_settings_fingerprint",
+    "compute_markdown_sha256",
     "compute_settings_fingerprint",
     "RetrievalEvidence",
     "SourceProvenance",
