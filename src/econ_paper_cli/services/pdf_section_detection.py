@@ -38,14 +38,45 @@ _TOC_DOT_LEADERS_RE = re.compile(r"\.{4,}")
 _CITATION_PATTERNS_RE = re.compile(
     r"\b[A-Z][a-zA-Z]+(?:\s+et\s+al\.)?\s*\(\d{4}\)|\(\s*[A-Z][a-zA-Z]+(?:\s+et\s+al\.)?,\s*\d{4}\s*\)|\[\d+\]"
 )
-_CROSS_REF_PATTERNS_RE = re.compile(
-    r"^(?:Section|Table|Figure|Fig|Equation|Eq|Appendix|Column|Row)\s+\d+",
+_EMBEDDED_CROSS_REF_RE = re.compile(
+    r"\b(?:Section|Table|Figure|Fig|Equation|Eq|Appendix|Column|Row)\s+\d+",
     re.IGNORECASE,
 )
-_DECLARATIVE_PROSE_START_RE = re.compile(
-    r"^(?:We\s+(?:thank|acknowledge|show|find|estimate|evaluate|test|propose)|In\s+this|As\s+shown|The\s+results)\b",
+_PROSE_DEMONSTRATIVE_START_RE = re.compile(
+    r"^(?:This|The|These|Those|That|Here|There|Each|Every|All|Some|Many|Most|Several|We|It|A|An|In|Under|For)\b",
     re.IGNORECASE,
 )
+_LOWERCASE_PROSE_VERBS = {
+    "studies",
+    "predicts",
+    "implies",
+    "shows",
+    "reports",
+    "found",
+    "finds",
+    "suggests",
+    "indicates",
+    "varies",
+    "converges",
+    "increases",
+    "decreases",
+    "differs",
+    "depends",
+    "contains",
+    "presents",
+    "examines",
+    "describes",
+    "thank",
+    "thanks",
+    "acknowledge",
+    "acknowledges",
+    "were",
+    "was",
+    "are",
+    "is",
+    "have",
+    "has",
+}
 
 
 class _LineInfo:
@@ -451,13 +482,22 @@ def _is_genuine_next_top_level_heading(
     if _CITATION_PATTERNS_RE.search(title_part):
         return False
 
-    # 3. Cross-references (e.g. "2 Section 3 reports results", "2 Table 4 reports estimates")
-    if _CROSS_REF_PATTERNS_RE.search(title_part):
+    # 3. Embedded cross-references (e.g. "2 Section 3 reports results", "2 Results in Table 4")
+    if _EMBEDDED_CROSS_REF_RE.search(title_part):
         return False
 
-    # 4. Declarative prose starts (e.g. "2 We thank the editor")
-    if _DECLARATIVE_PROSE_START_RE.search(title_part):
-        return False
+    # 4. Declarative demonstratives and prose verbs (e.g. "2 This paper studies urban growth", "2 The model predicts higher wages")
+    if _PROSE_DEMONSTRATIVE_START_RE.search(title_part):
+        # Check if title contains any active prose verbs
+        lower_words = [w.lower().rstrip(".,;:") for w in words]
+        if any(verb in lower_words for verb in _LOWERCASE_PROSE_VERBS):
+            return False
+
+    # 5. Lowercase active prose verb check for any non-ALL-CAPS candidate
+    if not title_part.isupper():
+        lower_words = [w.lower().rstrip(".,;:") for w in words[1:]]
+        if any(verb in lower_words for verb in _LOWERCASE_PROSE_VERBS):
+            return False
 
     # Must have structural heading context (blank line or page boundary)
     if not is_boundary:

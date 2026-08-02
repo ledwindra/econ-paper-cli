@@ -423,3 +423,63 @@ def test_legitimate_headings_with_results_or_test_words() -> None:
     res = detect_pdf_sections(_extraction(text), settings=DEFAULT_PDF_SECTION_SETTINGS)
     assert len(res.sections) == 2
     assert "Test section text" not in res.sections[1].text
+
+
+def test_roman_i_implicit_vs_explicit_context_split() -> None:
+    from econ_paper_cli.services.pdf_section_detection import (
+        _extract_lines,
+        _find_next_section_candidate,
+    )
+
+    ext = _extraction(
+        "I. Introduction\nIntro prose.\n\nI. Theoretical Framework\nFramework prose.\n\nII. Spatial Equilibrium\n"
+    )
+    lines = _extract_lines(ext)
+
+    # 1. Explicit Intro context (is_implicit_intro=False):
+    # Starting search from line 1 (after I. Introduction):
+    cand_explicit = _find_next_section_candidate(
+        lines, start_index=1, running_headers=set(), is_implicit_intro=False
+    )
+    assert cand_explicit is not None
+    # Must skip 'I. Theoretical Framework' and find 'II. Spatial Equilibrium'
+    assert cand_explicit.line.trimmed == "II. Spatial Equilibrium"
+
+    # 2. Implicit Intro context (is_implicit_intro=True):
+    # Starting search from line 2 (I. Theoretical Framework):
+    cand_implicit = _find_next_section_candidate(
+        lines, start_index=2, running_headers=set(), is_implicit_intro=True
+    )
+    assert cand_implicit is not None
+    # Must accept 'I. Theoretical Framework'
+    assert cand_implicit.line.trimmed == "I. Theoretical Framework"
+
+    # 3. Implicit Intro context (is_implicit_intro=True):
+    # Starting search from line 0 (I. Introduction):
+    cand_implicit_intro = _find_next_section_candidate(
+        lines, start_index=0, running_headers=set(), is_implicit_intro=True
+    )
+    assert cand_implicit_intro is not None
+    # Must NOT select 'I. Introduction' as next boundary, but advance to 'I. Theoretical Framework'
+    assert cand_implicit_intro.line.trimmed == "I. Theoretical Framework"
+
+
+def test_generic_numbered_prose_and_embedded_cross_refs_rejected() -> None:
+    text = (
+        "Abstract\nAbstract text.\n\n"
+        "1. Introduction\nIntro prose.\n\n"
+        "2 This paper studies urban growth\n"
+        "2 The model predicts higher wages\n"
+        "2 These findings imply convergence\n"
+        "2 Results in Table 4 show significant gains\n\n"
+        "2. Our Results\nReal section 2 text.\n"
+    )
+    res = detect_pdf_sections(_extraction(text), settings=DEFAULT_PDF_SECTION_SETTINGS)
+    assert len(res.sections) == 2
+    intro = res.sections[1]
+    assert intro.observed_heading_text == "1. Introduction"
+    assert "2 This paper studies urban growth" in intro.text
+    assert "2 The model predicts higher wages" in intro.text
+    assert "2 These findings imply convergence" in intro.text
+    assert "2 Results in Table 4 show significant gains" in intro.text
+    assert "Real section 2 text" not in intro.text
