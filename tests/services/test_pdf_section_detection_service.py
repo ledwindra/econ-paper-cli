@@ -487,6 +487,8 @@ def test_generic_numbered_prose_and_embedded_cross_refs_rejected() -> None:
 
 
 def test_case_c_unheaded_abstract_and_unheaded_introduction_inference() -> None:
+    from econ_paper_cli.domain import PDFSectionBoundaryEvidenceType
+
     text = (
         "Optimal Monetary Policy in Frictionless Credit Markets\n"
         "Alice Smith and Bob Jones\n"
@@ -506,13 +508,23 @@ def test_case_c_unheaded_abstract_and_unheaded_introduction_inference() -> None:
     assert abs_sec.kind is PDFSectionKind.ABSTRACT
     assert abs_sec.detection_method is PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER
     assert abs_sec.observed_heading_text is None
-    assert len(abs_sec.boundary_evidence) >= 1
+    assert any(
+        e.evidence_type is PDFSectionBoundaryEvidenceType.JEL_CLASSIFICATION_TERMINATOR
+        for e in abs_sec.boundary_evidence
+    )
 
     assert intro_sec.kind is PDFSectionKind.INTRODUCTION
     assert intro_sec.detection_method is PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER
     assert intro_sec.observed_heading_text is None
-    assert len(intro_sec.boundary_evidence) >= 1
     assert "I. Theoretical Framework" not in intro_sec.text
+
+    tf_offset = text.index("I. Theoretical Framework")
+    assert intro_sec.spans[-1].end_character_offset == tf_offset
+    assert any(
+        e.evidence_type is PDFSectionBoundaryEvidenceType.FIRST_SECTION_HEADING
+        and "I. Theoretical Framework" in e.description
+        for e in intro_sec.boundary_evidence
+    )
 
 
 def test_case_f_unheaded_abstract_with_explicit_roman_introduction() -> None:
@@ -550,3 +562,24 @@ def test_case_e_publisher_cover_sheet_rejection() -> None:
     assert len(res.sections) == 2
     assert res.sections[0].start_page_number == 2
     assert res.sections[1].start_page_number == 2
+
+
+def test_running_furniture_excluded_and_exact_source_spans_preserved() -> None:
+    p1 = "Journal of Economic Literature, Vol 60\nAbstract\nAbstract text on page 1.\n\n1. Introduction\nIntro start on page 1.\n"
+    p2 = "Journal of Economic Literature, Vol 60\nIntro continuation on page 2.\nMore intro text.\n\n2. Data\nData section.\n"
+    p3 = "Journal of Economic Literature, Vol 60\nData text on page 3.\n"
+    ext = _extraction(p1, p2, p3)
+    res = detect_pdf_sections(ext, settings=DEFAULT_PDF_SECTION_SETTINGS)
+    assert len(res.sections) == 2
+    intro = res.sections[1]
+    assert intro.observed_heading_text == "1. Introduction"
+    # Verify running header 'Journal of Economic Literature, Vol 60' is excluded from page 2 span
+    assert "Journal of Economic Literature, Vol 60" not in intro.text
+    # Verify non-destructive character concatenation
+    concat_text = "".join(
+        ext.pages[span.page_number - 1].text[
+            span.start_character_offset : span.end_character_offset
+        ]
+        for span in intro.spans
+    )
+    assert intro.text == concat_text

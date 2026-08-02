@@ -242,6 +242,7 @@ def detect_pdf_sections(
                 end_line_index=valid_intro.line_index,
                 all_lines=all_lines,
                 extraction=extraction,
+                running_headers=running_headers,
             )
             if abstract_section is not None:
                 sections_list.append(abstract_section)
@@ -302,6 +303,7 @@ def detect_pdf_sections(
                 all_lines=all_lines,
                 extraction=extraction,
                 boundary_evidence=(title_ev, jel_ev),
+                running_headers=running_headers,
             )
             if implicit_abs is not None:
                 sections_list.append(implicit_abs)
@@ -328,6 +330,7 @@ def detect_pdf_sections(
             end_line_index=end_line_index,
             all_lines=all_lines,
             extraction=extraction,
+            running_headers=running_headers,
         )
         if intro_section is not None:
             sections_list.append(intro_section)
@@ -380,6 +383,7 @@ def detect_pdf_sections(
                 all_lines=all_lines,
                 extraction=extraction,
                 boundary_evidence=(first_sec_ev,),
+                running_headers=running_headers,
             )
             if implicit_intro is not None:
                 sections_list.append(implicit_intro)
@@ -686,6 +690,7 @@ def _build_section(
     end_line_index: int,
     all_lines: list[_LineInfo],
     extraction: PDFExtractionResult,
+    running_headers: set[str] | None = None,
 ) -> PDFSection | None:
     if start_line_index >= len(all_lines) or start_line_index >= end_line_index:
         return None
@@ -694,9 +699,21 @@ def _build_section(
     if not lines_slice:
         return None
 
+    rh = running_headers or set()
     spans_by_page: dict[int, list[tuple[int, int]]] = {}
-    for line in lines_slice:
+    for idx, line in enumerate(lines_slice, start=start_line_index):
         p_num = line.page_number
+        if p_num > 1 and line.trimmed in rh:
+            is_first_line = (
+                idx == 0 or all_lines[idx - 1].page_number != line.page_number
+            )
+            is_last_line = (
+                idx == len(all_lines) - 1
+                or all_lines[idx + 1].page_number != line.page_number
+            )
+            if is_first_line or is_last_line:
+                continue
+
         if p_num not in spans_by_page:
             spans_by_page[p_num] = []
         spans_by_page[p_num].append((line.start_offset, line.line_end_offset))
@@ -750,6 +767,7 @@ def _build_implicit_section(
     all_lines: list[_LineInfo],
     extraction: PDFExtractionResult,
     boundary_evidence: tuple[PDFSectionBoundaryEvidence, ...],
+    running_headers: set[str] | None = None,
 ) -> PDFSection | None:
     if start_line_index >= len(all_lines) or start_line_index >= end_line_index:
         return None
@@ -758,9 +776,21 @@ def _build_implicit_section(
     if not lines_slice:
         return None
 
+    rh = running_headers or set()
     spans_by_page: dict[int, list[tuple[int, int]]] = {}
-    for line in lines_slice:
+    for idx, line in enumerate(lines_slice, start=start_line_index):
         p_num = line.page_number
+        if p_num > 1 and line.trimmed in rh:
+            is_first_line = (
+                idx == 0 or all_lines[idx - 1].page_number != line.page_number
+            )
+            is_last_line = (
+                idx == len(all_lines) - 1
+                or all_lines[idx + 1].page_number != line.page_number
+            )
+            if is_first_line or is_last_line:
+                continue
+
         if p_num not in spans_by_page:
             spans_by_page[p_num] = []
         spans_by_page[p_num].append((line.start_offset, line.line_end_offset))

@@ -16,6 +16,7 @@ from econ_paper_cli.domain import (
     PDFQualityWarningCode,
     PDFSectionDetectionMethod,
     PDFSectionKind,
+    PDFSectionSettings,
     PDFSectionWarning,
     PDFSectionWarningCode,
     ResearchQuestionKind,
@@ -480,7 +481,7 @@ def test_implicit_section_roundtrip_and_restart(tmp_path: Path) -> None:
     )
 
     section_res = PDFSectionDetectionResult(
-        policy_version="pdf-section-detection-v1",
+        policy_version="pdf-section-detection-v2",
         sections=(implicit_section,),
         candidates=(),
         warnings=(PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION),),
@@ -566,3 +567,38 @@ def test_implicit_section_roundtrip_and_restart(tmp_path: Path) -> None:
         == "Implicit front-matter inferred from title block boundaries"
     )
     storage2.close()
+
+
+def test_stale_v1_single_paper_analysis_record_cache_invalidation(
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test content")
+    storage = SQLiteStorage(tmp_path / "test.db")
+    storage.initialize()
+
+    v1_settings = SinglePaperAnalysisSettings(
+        section_settings=PDFSectionSettings(policy_version="pdf-section-detection-v1")
+    )
+    v1_record = _make_success_record(
+        pdf_path, checksum=CHECKSUM_1, settings=v1_settings
+    )
+    storage.save_single_paper_analysis(v1_record)
+
+    # Reopened record reflects stored v1 policy_version
+    retrieved = storage.get_single_paper_analysis(v1_record.analysis_id)
+    assert retrieved is not None
+    assert (
+        retrieved.settings.section_settings.policy_version == "pdf-section-detection-v1"
+    )
+
+    # Current default settings use v2 policy_version -> cache invalidation
+    current_settings = SinglePaperAnalysisSettings()
+    assert (
+        current_settings.section_settings.policy_version == "pdf-section-detection-v2"
+    )
+    assert (
+        retrieved.settings.section_settings.policy_version
+        != current_settings.section_settings.policy_version
+    )
+    storage.close()

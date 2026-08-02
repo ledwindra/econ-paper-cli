@@ -124,7 +124,8 @@ _WARNING_MESSAGES = {
 _WARNING_ORDER = {code: position for position, code in enumerate(PDFSectionWarningCode)}
 
 _CANONICAL_SECTION_SETTINGS: dict[str, dict[str, object]] = {
-    "pdf-section-detection-v1": {}
+    "pdf-section-detection-v1": {},
+    "pdf-section-detection-v2": {},
 }
 
 
@@ -132,7 +133,7 @@ _CANONICAL_SECTION_SETTINGS: dict[str, dict[str, object]] = {
 class PDFSectionSettings:
     """Versioned and validated configuration for section detection."""
 
-    policy_version: str = "pdf-section-detection-v1"
+    policy_version: str = "pdf-section-detection-v2"
 
     def __post_init__(self) -> None:
         _validate_nonempty_text("policy_version", self.policy_version)

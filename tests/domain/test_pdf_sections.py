@@ -339,7 +339,7 @@ def test_section_warning_validation() -> None:
 
 
 def test_settings_canonical_binding() -> None:
-    assert DEFAULT_PDF_SECTION_SETTINGS.policy_version == "pdf-section-detection-v1"
+    assert DEFAULT_PDF_SECTION_SETTINGS.policy_version == "pdf-section-detection-v2"
 
     with pytest.raises(
         PDFSectionValidationError, match="not a recognized policy version"

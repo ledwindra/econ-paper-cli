@@ -48,7 +48,7 @@ def _record(
         parser_version="1.0",
     )
     detection = PDFSectionDetectionResult(
-        policy_version="pdf-section-detection-v1",
+        policy_version="pdf-section-detection-v2",
         sections=(
             PDFSection(
                 kind=PDFSectionKind.INTRODUCTION,
@@ -97,6 +97,22 @@ def test_fresh_schema_atomic_round_trip_restart_and_bm25(tmp_path: Path) -> None
     assert corpus.passages == record.passages
     BM25Retriever(corpus)
     reopened.close()
+
+
+def test_stale_v1_early_section_record_cache_invalidation(tmp_path: Path) -> None:
+    database = tmp_path / "library.sqlite3"
+    storage = SQLiteStorage(database)
+    storage.initialize()
+
+    # Save record with v2 settings
+    record = _record(timestamp="2026-08-01T00:00:00Z")
+    storage.save_early_section_record(record)
+
+    # Reopening and retrieving record matches v2 settings
+    retrieved = storage.get_early_section_record(record.paper.paper_id)
+    assert retrieved is not None
+    assert retrieved.paper == record.paper
+    storage.close()
 
 
 def test_replacement_preserves_created_at_and_removes_stale_rows() -> None:
