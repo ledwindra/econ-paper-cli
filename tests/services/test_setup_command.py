@@ -72,7 +72,7 @@ def test_setup_survives_process_restart(tmp_path: Path) -> None:
     reopened = JSONConfigStorage(config_path)
     loaded = reopened.load()
     assert loaded is not None
-    assert loaded.executable_path == Path("/usr/local/bin/llama-completion")
+    assert loaded.executable_path == Path("/usr/local/bin/llama-completion").resolve()
 
 
 def test_invalid_proposed_configuration_writes_nothing(tmp_path: Path) -> None:
@@ -155,7 +155,7 @@ def test_setup_makes_no_network_request_or_download(tmp_path: Path) -> None:
         stderr=io.StringIO(),
     )
     assert len(calls) == 1
-    assert calls[0].executable_path == Path("/usr/local/bin/llama-completion")
+    assert calls[0].executable_path == Path("/usr/local/bin/llama-completion").resolve()
 
 
 @pytest.mark.parametrize("threads,timeout", [(4, 60.0), (None, None)])
