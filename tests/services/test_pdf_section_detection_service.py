@@ -575,7 +575,6 @@ def test_running_furniture_excluded_and_exact_source_spans_preserved() -> None:
     assert intro.observed_heading_text == "1. Introduction"
     # Verify running header 'Journal of Economic Literature, Vol 60' is excluded from page 2 span
     assert "Journal of Economic Literature, Vol 60" not in intro.text
-    # Verify non-destructive character concatenation
     concat_text = "".join(
         ext.pages[span.page_number - 1].text[
             span.start_character_offset : span.end_character_offset
@@ -583,3 +582,112 @@ def test_running_furniture_excluded_and_exact_source_spans_preserved() -> None:
         for span in intro.spans
     )
     assert intro.text == concat_text
+
+
+def test_synthetic_layout_cases_b_c_d_e_f() -> None:
+    # Case B: Keywords and JEL after Abstract prose
+    b_text = (
+        "Macroeconomic Risk and Asset Prices\n"
+        "Abstract\n"
+        "We develop a DSGE model with recursive preferences.\n"
+        "Keywords: Asset Pricing, Risk, DSGE\n"
+        "JEL Classification: G12, E44\n\n"
+        "1. Introduction\n"
+        "Asset pricing puzzles remain central to modern macroeconomics.\n\n"
+        "2. Literature\n"
+        "Prior literature includes...\n"
+    )
+    res_b = detect_pdf_sections(
+        _extraction(b_text), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+    assert len(res_b.sections) == 2
+    assert "Keywords: Asset Pricing" not in res_b.sections[0].text
+    assert "JEL Classification: G12" not in res_b.sections[0].text
+
+    # Case C: Parenthetical (JEL ...) terminator plus interleaved * affiliation footnote
+    c_text = (
+        "Spatial Competition in Retail Markets\n"
+        "Jane Doe and John Smith\n"
+        "* Department of Economics, Harvard University, Cambridge, MA\n"
+        "We study spatial price differentiation in grocery markets.\n"
+        "(JEL L11, R12)\n\n"
+        "Unheaded introduction prose describing empirical methodology.\n\n"
+        "I. Theoretical Framework\n"
+        "The model assumes location choice along a circle.\n"
+    )
+    res_c = detect_pdf_sections(
+        _extraction(c_text), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+    assert len(res_c.sections) == 2
+    assert "Department of Economics" not in res_c.sections[0].text
+    assert "(JEL L11, R12)" not in res_c.sections[0].text
+    assert (
+        res_c.sections[1].detection_method
+        is PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER
+    )
+    assert "I. Theoretical Framework" not in res_c.sections[1].text
+
+    # Case D: Keywords before ABSTRACT, JEL after prose
+    d_text = (
+        "Trade Elasticities and Exchange Rates\n"
+        "Keywords: Trade, Exchange Rates\n\n"
+        "ABSTRACT\n"
+        "This paper estimates trade elasticities using micro tariff data.\n"
+        "JEL Classification: F14, F31\n\n"
+        "1 | Introduction\n"
+        "Understanding trade response is critical for policy.\n\n"
+        "2 | Empirical Model\n"
+        "We specify a gravity equation.\n"
+    )
+    res_d = detect_pdf_sections(
+        _extraction(d_text), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+    assert len(res_d.sections) == 2
+    assert res_d.sections[0].observed_heading_text == "ABSTRACT"
+    assert res_d.sections[1].observed_heading_text == "1 | Introduction"
+    assert "JEL Classification" not in res_d.sections[0].text
+
+    # Case E: ARTICLE HISTORY / KEYWORDS / JEL after Abstract
+    e_text = (
+        "Fiscal Multipliers in Recessions\n"
+        "Abstract\n"
+        "We estimate government spending multipliers during deep economic downturns.\n"
+        "ARTICLE HISTORY: Received 10 Jan 2025; Accepted 15 May 2026\n"
+        "Keywords: Fiscal Policy, Multipliers\n"
+        "JEL Classification: E62, H30\n\n"
+        "1. Introduction\n"
+        "The size of fiscal multipliers is widely debated.\n\n"
+        "2. Data\n"
+        "Quarterly VAR data are collected.\n"
+    )
+    res_e = detect_pdf_sections(
+        _extraction(e_text), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+    assert len(res_e.sections) == 2
+    assert "ARTICLE HISTORY" not in res_e.sections[0].text
+    assert "Keywords:" not in res_e.sections[0].text
+
+    # Case F: Unheaded Abstract terminated by We thank..., parenthetical findings, page furniture
+    f_p1 = (
+        "Copyright 2026 American Economic Association\n"
+        "Optimal Tax Progressivity\n"
+        "We quantify optimal income tax schedules with heterogeneous skills.\n"
+        "We thank the editor and anonymous referees for helpful comments.\n\n"
+        "I. Introduction\n"
+        "Progressive taxation balances efficiency and equity.\n"
+        "In this paper (1) we find high top rates; (2) we find broad base.\n\n"
+        "II. Model\n"
+        "Model equations here.\n"
+    )
+    res_f = detect_pdf_sections(
+        _extraction(f_p1), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+    assert len(res_f.sections) == 2
+    assert res_f.sections[0].kind is PDFSectionKind.ABSTRACT
+    assert (
+        res_f.sections[0].detection_method
+        is PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER
+    )
+    assert res_f.sections[1].kind is PDFSectionKind.INTRODUCTION
+    assert res_f.sections[1].observed_heading_text == "I. Introduction"
+    assert "(1) we find high top rates" in res_f.sections[1].text

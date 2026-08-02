@@ -53,7 +53,15 @@ _PUBLISHER_COVER_SHEET_RE = re.compile(
     re.IGNORECASE,
 )
 _JEL_KEYWORDS_RE = re.compile(
-    r"^\s*(?:JEL\s+Classification|JEL\s+codes?|Keywords?|Key\s+words?)\s*[\:\.]?\s*",
+    r"^\s*\(?\s*(?:JEL\s+Classification|JEL\s+codes?|JEL\b|Keywords?|Key\s+words?)\s*[\:\.]?\s*",
+    re.IGNORECASE,
+)
+_ARTICLE_HISTORY_RE = re.compile(
+    r"^\s*(?:ARTICLE\s+INFO|ARTICLE\s+HISTORY|Received\s+\d|Accepted\s+\d|Available\s+online|doi\.org|\bDOI\:)\b",
+    re.IGNORECASE,
+)
+_FOOTNOTE_AFFILIATION_RE = re.compile(
+    r"^(?:[\*\dagger\d]\s*)?(?:Department\s+of|Faculty\s+of|School\s+of|University\s+of|Email\:|Corresponding\s+author|Financial\s+support)",
     re.IGNORECASE,
 )
 _LOWERCASE_PROSE_VERBS = {
@@ -303,6 +311,32 @@ def detect_pdf_sections(
                 all_lines=all_lines,
                 extraction=extraction,
                 boundary_evidence=(title_ev, jel_ev),
+                running_headers=running_headers,
+            )
+            if implicit_abs is not None:
+                sections_list.append(implicit_abs)
+        elif valid_intro is not None and valid_intro.line_index > start_line_idx + 1:
+            title_ev = PDFSectionBoundaryEvidence(
+                page_number=all_lines[start_line_idx].page_number,
+                start_character_offset=all_lines[start_line_idx].start_offset,
+                end_character_offset=all_lines[start_line_idx].end_offset,
+                evidence_type=PDFSectionBoundaryEvidenceType.TITLE_BLOCK,
+                description="Implicit front-matter inferred from title block and intro heading",
+            )
+            intro_ev = PDFSectionBoundaryEvidence(
+                page_number=all_lines[valid_intro.line_index].page_number,
+                start_character_offset=all_lines[valid_intro.line_index].start_offset,
+                end_character_offset=all_lines[valid_intro.line_index].end_offset,
+                evidence_type=PDFSectionBoundaryEvidenceType.FIRST_SECTION_HEADING,
+                description=f"Bounded by section heading '{all_lines[valid_intro.line_index].trimmed}'",
+            )
+            implicit_abs = _build_implicit_section(
+                kind=PDFSectionKind.ABSTRACT,
+                start_line_index=start_line_idx + 1,
+                end_line_index=valid_intro.line_index,
+                all_lines=all_lines,
+                extraction=extraction,
+                boundary_evidence=(title_ev, intro_ev),
                 running_headers=running_headers,
             )
             if implicit_abs is not None:
@@ -683,6 +717,100 @@ def _select_candidate(
     return top_candidates[0]
 
 
+def _build_spans_and_text(
+    lines_slice: list[_LineInfo],
+    start_line_index: int,
+    all_lines: list[_LineInfo],
+    extraction: PDFExtractionResult,
+    running_headers: set[str],
+) -> tuple[tuple[PDFSectionSpan, ...], str] | None:
+    page_map = {page.page_number: page.text for page in extraction.pages}
+
+    spans_list: list[PDFSectionSpan] = []
+    text_parts: list[str] = []
+
+    lines_by_page: dict[int, list[tuple[int, _LineInfo]]] = {}
+    for idx, line in enumerate(lines_slice, start=start_line_index):
+        p_num = line.page_number
+        if p_num not in lines_by_page:
+            lines_by_page[p_num] = []
+        lines_by_page[p_num].append((idx, line))
+
+    for p_num in sorted(lines_by_page.keys()):
+        page_text = page_map[p_num]
+        page_lines = lines_by_page[p_num]
+
+        current_run: list[_LineInfo] = []
+
+        for global_idx, line in page_lines:
+            is_first_on_page = (
+                global_idx == 0 or all_lines[global_idx - 1].page_number != p_num
+            )
+            is_last_on_page = (
+                global_idx == len(all_lines) - 1
+                or all_lines[global_idx + 1].page_number != p_num
+            )
+
+            is_rh = (
+                p_num > 1
+                and line.trimmed in running_headers
+                and (is_first_on_page or is_last_on_page)
+            )
+            is_page_num = (
+                p_num > 1
+                and line.trimmed.isdigit()
+                and (is_first_on_page or is_last_on_page)
+            )
+            is_metadata = bool(_JEL_KEYWORDS_RE.match(line.trimmed)) or bool(
+                _ARTICLE_HISTORY_RE.match(line.trimmed)
+            )
+            is_affiliation = bool(_FOOTNOTE_AFFILIATION_RE.match(line.trimmed))
+            is_cover = bool(_PUBLISHER_COVER_SHEET_RE.search(line.text)) and p_num == 1
+
+            if is_rh or is_page_num or is_metadata or is_affiliation or is_cover:
+                if current_run:
+                    _emit_run_span(
+                        current_run, p_num, page_text, spans_list, text_parts
+                    )
+                    current_run = []
+            else:
+                current_run.append(line)
+
+        if current_run:
+            _emit_run_span(current_run, p_num, page_text, spans_list, text_parts)
+
+    if not spans_list:
+        return None
+
+    section_text = "".join(text_parts)
+    if not section_text.strip():
+        return None
+
+    return tuple(spans_list), section_text
+
+
+def _emit_run_span(
+    run: list[_LineInfo],
+    p_num: int,
+    page_text: str,
+    spans_list: list[PDFSectionSpan],
+    text_parts: list[str],
+) -> None:
+    start_off = run[0].start_offset
+    end_off = min(run[-1].line_end_offset, len(page_text))
+    if start_off < end_off:
+        slice_text = page_text[start_off:end_off]
+        if slice_text:
+            spans_list.append(
+                PDFSectionSpan(
+                    page_number=p_num,
+                    start_character_offset=start_off,
+                    end_character_offset=end_off,
+                )
+            )
+            text_parts.append(slice_text)
+
+
 def _build_section(
     kind: PDFSectionKind,
     heading_line: _LineInfo,
@@ -699,63 +827,25 @@ def _build_section(
     if not lines_slice:
         return None
 
-    rh = running_headers or set()
-    spans_by_page: dict[int, list[tuple[int, int]]] = {}
-    for idx, line in enumerate(lines_slice, start=start_line_index):
-        p_num = line.page_number
-        if p_num > 1 and line.trimmed in rh:
-            is_first_line = (
-                idx == 0 or all_lines[idx - 1].page_number != line.page_number
-            )
-            is_last_line = (
-                idx == len(all_lines) - 1
-                or all_lines[idx + 1].page_number != line.page_number
-            )
-            if is_first_line or is_last_line:
-                continue
-
-        if p_num not in spans_by_page:
-            spans_by_page[p_num] = []
-        spans_by_page[p_num].append((line.start_offset, line.line_end_offset))
-
-    spans_list: list[PDFSectionSpan] = []
-    text_parts: list[str] = []
-
-    page_map = {page.page_number: page.text for page in extraction.pages}
-
-    for p_num in sorted(spans_by_page.keys()):
-        page_text = page_map[p_num]
-        offsets = spans_by_page[p_num]
-        min_start = offsets[0][0]
-        max_end = offsets[-1][1]
-
-        max_end = min(max_end, len(page_text))
-        if min_start < max_end:
-            slice_text = page_text[min_start:max_end]
-            if slice_text:
-                spans_list.append(
-                    PDFSectionSpan(
-                        page_number=p_num,
-                        start_character_offset=min_start,
-                        end_character_offset=max_end,
-                    )
-                )
-                text_parts.append(slice_text)
-
-    if not spans_list:
+    res = _build_spans_and_text(
+        lines_slice,
+        start_line_index,
+        all_lines,
+        extraction,
+        running_headers or set(),
+    )
+    if res is None:
         return None
 
-    section_text = "".join(text_parts)
-    if not section_text.strip():
-        return None
+    spans_tuple, section_text = res
 
     return PDFSection(
         kind=kind,
         detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
         observed_heading_text=heading_line.trimmed,
-        start_page_number=spans_list[0].page_number,
-        end_page_number=spans_list[-1].page_number,
-        spans=tuple(spans_list),
+        start_page_number=spans_tuple[0].page_number,
+        end_page_number=spans_tuple[-1].page_number,
+        spans=spans_tuple,
         text=section_text,
     )
 
@@ -776,55 +866,17 @@ def _build_implicit_section(
     if not lines_slice:
         return None
 
-    rh = running_headers or set()
-    spans_by_page: dict[int, list[tuple[int, int]]] = {}
-    for idx, line in enumerate(lines_slice, start=start_line_index):
-        p_num = line.page_number
-        if p_num > 1 and line.trimmed in rh:
-            is_first_line = (
-                idx == 0 or all_lines[idx - 1].page_number != line.page_number
-            )
-            is_last_line = (
-                idx == len(all_lines) - 1
-                or all_lines[idx + 1].page_number != line.page_number
-            )
-            if is_first_line or is_last_line:
-                continue
-
-        if p_num not in spans_by_page:
-            spans_by_page[p_num] = []
-        spans_by_page[p_num].append((line.start_offset, line.line_end_offset))
-
-    spans_list: list[PDFSectionSpan] = []
-    text_parts: list[str] = []
-
-    page_map = {page.page_number: page.text for page in extraction.pages}
-
-    for p_num in sorted(spans_by_page.keys()):
-        page_text = page_map[p_num]
-        offsets = spans_by_page[p_num]
-        min_start = offsets[0][0]
-        max_end = offsets[-1][1]
-
-        max_end = min(max_end, len(page_text))
-        if min_start < max_end:
-            slice_text = page_text[min_start:max_end]
-            if slice_text:
-                spans_list.append(
-                    PDFSectionSpan(
-                        page_number=p_num,
-                        start_character_offset=min_start,
-                        end_character_offset=max_end,
-                    )
-                )
-                text_parts.append(slice_text)
-
-    if not spans_list:
+    res = _build_spans_and_text(
+        lines_slice,
+        start_line_index,
+        all_lines,
+        extraction,
+        running_headers or set(),
+    )
+    if res is None:
         return None
 
-    section_text = "".join(text_parts)
-    if not section_text.strip():
-        return None
+    spans_tuple, section_text = res
 
     sorted_evidence = tuple(
         sorted(
@@ -843,9 +895,9 @@ def _build_implicit_section(
         kind=kind,
         detection_method=PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER,
         observed_heading_text=None,
-        start_page_number=spans_list[0].page_number,
-        end_page_number=spans_list[-1].page_number,
-        spans=tuple(spans_list),
+        start_page_number=spans_tuple[0].page_number,
+        end_page_number=spans_tuple[-1].page_number,
+        spans=spans_tuple,
         text=section_text,
         boundary_evidence=sorted_evidence,
     )

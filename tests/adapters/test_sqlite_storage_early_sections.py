@@ -1,5 +1,6 @@
 """SQLite contract tests for durable early-section library records."""
 
+import dataclasses
 import sqlite3
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from econ_paper_cli.domain import (
     PDFSectionSpan,
     PDFSectionWarning,
     PDFSectionWarningCode,
+    compute_conversion_settings_fingerprint,
 )
 from econ_paper_cli.protocols import StorageTransactionError, StorageValidationError
 from econ_paper_cli.protocols.storage import ChecksumConflictError
@@ -104,15 +106,49 @@ def test_stale_v1_early_section_record_cache_invalidation(tmp_path: Path) -> Non
     storage = SQLiteStorage(database)
     storage.initialize()
 
-    # Save record with v2 settings
-    record = _record(timestamp="2026-08-01T00:00:00Z")
-    storage.save_early_section_record(record)
+    # 1. Construct and save a true v1 early section record
+    v1_settings = PDFConversionSettings(
+        section_policy_version="pdf-section-detection-v1"
+    )
+    v1_record = _record(timestamp="2026-08-01T00:00:00Z")
+    v1_record = dataclasses.replace(
+        v1_record,
+        conversion_settings=v1_settings,
+        settings_fingerprint=compute_conversion_settings_fingerprint(v1_settings),
+    )
+    storage.save_early_section_record(v1_record)
 
-    # Reopening and retrieving record matches v2 settings
-    retrieved = storage.get_early_section_record(record.paper.paper_id)
-    assert retrieved is not None
-    assert retrieved.paper == record.paper
+    # 2. Querying with requested v2 settings returns None (cache miss)
+    v2_settings = PDFConversionSettings(
+        section_policy_version="pdf-section-detection-v2"
+    )
+    retrieved_v2 = storage.get_early_section_record(
+        v1_record.paper.paper_id, settings=v2_settings
+    )
+    assert retrieved_v2 is None
+
+    # 3. Replace with v2 record
+    v2_record = dataclasses.replace(
+        v1_record,
+        conversion_settings=v2_settings,
+        settings_fingerprint=compute_conversion_settings_fingerprint(v2_settings),
+        updated_at="2026-08-02T12:00:00Z",
+    )
+    storage.save_early_section_record(v2_record)
     storage.close()
+
+    # 4. Reopen database after restart and verify it remains v2
+    reopened = SQLiteStorage(database)
+    reopened.initialize()
+    persisted = reopened.get_early_section_record(
+        v2_record.paper.paper_id, settings=v2_settings
+    )
+    assert persisted is not None
+    assert (
+        persisted.conversion_settings.section_policy_version
+        == "pdf-section-detection-v2"
+    )
+    reopened.close()
 
 
 def test_replacement_preserves_created_at_and_removes_stale_rows() -> None:

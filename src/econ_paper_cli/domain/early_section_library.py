@@ -339,10 +339,17 @@ class EarlySectionLibraryRecord:
             raise EarlySectionLibraryValidationError(
                 "conversion_settings must be a mapping."
             )
-        if set(raw_settings) != {"policy_version", "max_passage_characters"}:
+        allowed_fields = (
+            {"policy_version", "max_passage_characters"},
+            {"policy_version", "max_passage_characters", "section_policy_version"},
+        )
+        if set(raw_settings) not in allowed_fields:
             raise EarlySectionLibraryValidationError(
                 "conversion_settings fields are invalid."
             )
+        sec_policy = cast(
+            str, raw_settings.get("section_policy_version", "pdf-section-detection-v1")
+        )
         return cls(
             paper=Paper.from_mapping(cast(Mapping[str, object], data["paper"])),
             source_provenance=SourceProvenance.from_mapping(
@@ -354,6 +361,7 @@ class EarlySectionLibraryRecord:
                 max_passage_characters=cast(
                     int, raw_settings["max_passage_characters"]
                 ),
+                section_policy_version=sec_policy,
             ),
             settings_fingerprint=cast(str, data["settings_fingerprint"]),
             markdown=cast(str, data["markdown"]),
@@ -381,6 +389,7 @@ class EarlySectionLibraryRecord:
             "conversion_settings": {
                 "policy_version": self.conversion_settings.policy_version,
                 "max_passage_characters": self.conversion_settings.max_passage_characters,
+                "section_policy_version": self.conversion_settings.section_policy_version,
             },
             "settings_fingerprint": self.settings_fingerprint,
             "markdown": self.markdown,

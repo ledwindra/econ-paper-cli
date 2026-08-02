@@ -32,6 +32,7 @@ where = ["src"]
 addopts = ["--strict-config", "--strict-markers"]
 markers = [
     "model: opt-in test requiring a manually installed local runtime and model",
+    "real_pdf: opt-in test requiring real benchmark PDFs",
 ]
 testpaths = ["tests"]
 

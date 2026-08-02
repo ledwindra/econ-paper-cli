@@ -31,6 +31,7 @@ class PDFConversionSettings:
 
     policy_version: str = _POLICY_VERSION
     max_passage_characters: int = 1200
+    section_policy_version: str = "pdf-section-detection-v2"
 
     def __post_init__(self) -> None:
         if self.policy_version != _POLICY_VERSION:
@@ -44,6 +45,13 @@ class PDFConversionSettings:
         ):
             raise PDFConversionValidationError(
                 "max_passage_characters must be a positive integer."
+            )
+        if (
+            not isinstance(self.section_policy_version, str)
+            or not self.section_policy_version
+        ):
+            raise PDFConversionValidationError(
+                "section_policy_version must be a non-empty string."
             )
 
 

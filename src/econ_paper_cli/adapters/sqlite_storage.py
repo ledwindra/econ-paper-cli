@@ -13,7 +13,10 @@ from econ_paper_cli.domain.early_section_library import (
 )
 from econ_paper_cli.domain.papers import Paper
 from econ_paper_cli.domain.passages import Passage
-from econ_paper_cli.domain.pdf_conversion import PDFConversionSettings
+from econ_paper_cli.domain.pdf_conversion import (
+    PDFConversionSettings,
+    compute_conversion_settings_fingerprint,
+)
 from econ_paper_cli.domain.pdf_quality import (
     PDFQualitySettings,
     PDFQualityStatus,
@@ -1091,7 +1094,8 @@ class SQLiteStorage(StorageBackend):
                     record.conversion_settings.policy_version,
                     json.dumps(
                         {
-                            "max_passage_characters": record.conversion_settings.max_passage_characters
+                            "max_passage_characters": record.conversion_settings.max_passage_characters,
+                            "section_policy_version": record.conversion_settings.section_policy_version,
                         },
                         sort_keys=True,
                     ),
@@ -1197,7 +1201,7 @@ class SQLiteStorage(StorageBackend):
             raise
 
     def get_early_section_record(
-        self, paper_id: str
+        self, paper_id: str, settings: PDFConversionSettings | None = None
     ) -> EarlySectionLibraryRecord | None:
         """Retrieve and strictly validate an early-section record."""
         conn = self._ensure_initialized()
@@ -1207,6 +1211,10 @@ class SQLiteStorage(StorageBackend):
             ).fetchone()
             if early_row is None:
                 return None
+            if settings is not None:
+                expected_fingerprint = compute_conversion_settings_fingerprint(settings)
+                if early_row["settings_fingerprint"] != expected_fingerprint:
+                    return None
             paper_storage_row = conn.execute(
                 """SELECT content_checksum, created_at, updated_at
                    FROM papers WHERE paper_id = ?""",
@@ -1247,12 +1255,18 @@ class SQLiteStorage(StorageBackend):
                     f"Missing conversion settings for early-section record '{paper_id}'."
                 )
             generic_parameters = json.loads(settings_row["parameters_json"])
+            if settings is not None:
+                stored_sec_policy = generic_parameters.get(
+                    "section_policy_version", "pdf-section-detection-v1"
+                )
+                if stored_sec_policy != settings.section_policy_version:
+                    return None
             if (
                 settings_row["conversion_version"]
                 != early_row["conversion_policy_version"]
                 or settings_row["ocr_enabled"] != 0
-                or generic_parameters
-                != {"max_passage_characters": early_row["max_passage_characters"]}
+                or generic_parameters.get("max_passage_characters")
+                != early_row["max_passage_characters"]
             ):
                 raise StorageValidationError(
                     f"Conversion settings rows disagree for early-section record '{paper_id}'."
@@ -1318,6 +1332,9 @@ class SQLiteStorage(StorageBackend):
                         ),
                     )
                 )
+            sec_policy = generic_parameters.get(
+                "section_policy_version", "pdf-section-detection-v1"
+            )
             return EarlySectionLibraryRecord(
                 paper=paper,
                 source_provenance=source_provenance,
@@ -1325,6 +1342,7 @@ class SQLiteStorage(StorageBackend):
                 conversion_settings=PDFConversionSettings(
                     policy_version=early_row["conversion_policy_version"],
                     max_passage_characters=early_row["max_passage_characters"],
+                    section_policy_version=sec_policy,
                 ),
                 settings_fingerprint=early_row["settings_fingerprint"],
                 markdown=early_row["markdown"],
