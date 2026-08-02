@@ -4,6 +4,10 @@ import sys
 from argparse import Namespace
 from pathlib import Path
 
+from econ_paper_cli.services.chat_command import (
+    ChatCommandOptions,
+    run_chat_command,
+)
 from econ_paper_cli.services.single_paper_analysis_cli import (
     AnalyzeCommandOptions,
     CLIExitCode,
@@ -24,9 +28,35 @@ def run_status(args: Namespace | None = None) -> int:
 
 
 def run_chat(args: Namespace | None = None) -> int:
-    """Describe the chat placeholder."""
-    sys.stdout.write("Chat is not implemented yet.\n")
-    return 0
+    """Run one-shot cited chat over the local library."""
+    try:
+        question = str(args.question)
+        executable_path = Path(args.llama_cpp_path)
+        model_path = Path(args.model_path)
+        model_id = str(args.model_id)
+        model_bytes = int(args.model_bytes)
+        model_checksum = str(args.model_checksum)
+        threads = int(args.threads) if args.threads is not None else None
+        timeout = float(args.timeout) if args.timeout is not None else None
+        db_path = Path(args.db_path) if args.db_path is not None else None
+        top_k = int(args.top_k) if args.top_k is not None else 10
+        options = ChatCommandOptions(
+            question=question,
+            executable_path=executable_path,
+            model_path=model_path,
+            model_id=model_id,
+            model_bytes=model_bytes,
+            model_checksum=model_checksum,
+            threads=threads,
+            timeout=timeout,
+            db_path=db_path,
+            top_k=top_k,
+        )
+    except (AttributeError, ValueError, TypeError) as err:
+        sys.stderr.write(f"Invalid CLI argument values: {err}\n")
+        return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+
+    return run_chat_command(options)
 
 
 def run_update(args: Namespace | None = None) -> int:

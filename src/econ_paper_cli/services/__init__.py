@@ -7,6 +7,17 @@ from econ_paper_cli.services.analysis_library import (
     prepare_analysis_record,
     prepare_early_section_library,
 )
+from econ_paper_cli.services.chat_command import (
+    CHAT_EVIDENCE_SCOPE,
+    DEFAULT_CHAT_TOP_K,
+    ChatCitationDetail,
+    ChatCommandOptions,
+    ChatCommandResult,
+    ChatTerminalOutcome,
+    execute_chat_command,
+    format_chat_command_output,
+    run_chat_command,
+)
 from econ_paper_cli.services.early_section_library import (
     project_early_section_library_record,
 )
@@ -34,13 +45,22 @@ from econ_paper_cli.services.single_paper_analysis_storage import (
 )
 
 __all__ = [
+    "CHAT_EVIDENCE_SCOPE",
+    "DEFAULT_CHAT_TOP_K",
+    "ChatCitationDetail",
+    "ChatCommandOptions",
+    "ChatCommandResult",
+    "ChatTerminalOutcome",
     "PreparedAnalysisLibrary",
     "PreparedEarlySectionLibrary",
+    "execute_chat_command",
     "prepare_analysis_library",
     "prepare_analysis_record",
     "prepare_early_section_library",
+    "format_chat_command_output",
     "run_ingestion_preflight",
     "discover_pdf_paths",
+    "run_chat_command",
     "extract_pdf",
     "project_early_section_library_record",
     "assess_pdf_extraction_quality",

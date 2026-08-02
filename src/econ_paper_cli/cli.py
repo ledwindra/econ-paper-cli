@@ -19,7 +19,7 @@ def build_parser() -> ArgumentParser:
     command_definitions: tuple[tuple[str, str, CommandHandler], ...] = (
         ("setup", "Prepare local artifacts (placeholder).", commands.run_setup),
         ("status", "Report local readiness (placeholder).", commands.run_status),
-        ("chat", "Start a literature conversation (placeholder).", commands.run_chat),
+        ("chat", "Answer one question from the local library.", commands.run_chat),
         ("update", "Update local artifacts (placeholder).", commands.run_update),
     )
     for name, help_text, handler in command_definitions:
@@ -127,6 +127,75 @@ def build_parser() -> ArgumentParser:
         help="Maximum characters per stored early-section passage (default: 1200).",
     )
     analyze_parser.set_defaults(handler=commands.run_analyze)
+
+    chat_parser = subparsers.choices["chat"]
+    chat_parser.add_argument(
+        "question",
+        metavar="QUESTION",
+        type=str,
+        help="One question to answer from the stored local corpus.",
+    )
+    chat_parser.add_argument(
+        "--llama-cpp-path",
+        "--executable-path",
+        dest="llama_cpp_path",
+        required=True,
+        type=Path,
+        help="Path to the local llama.cpp executable.",
+    )
+    chat_parser.add_argument(
+        "--model-path",
+        required=True,
+        type=Path,
+        help="Path to the local GGUF model file.",
+    )
+    chat_parser.add_argument(
+        "--model-id",
+        required=True,
+        type=str,
+        help="Identifier for the model.",
+    )
+    chat_parser.add_argument(
+        "--model-bytes",
+        "--expected-model-size-bytes",
+        dest="model_bytes",
+        required=True,
+        type=int,
+        help="Expected size of the model file in bytes.",
+    )
+    chat_parser.add_argument(
+        "--model-checksum",
+        "--expected-model-sha256",
+        dest="model_checksum",
+        required=True,
+        type=str,
+        help="Expected SHA-256 checksum of the model file.",
+    )
+    chat_parser.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="Optional thread count for llama.cpp execution.",
+    )
+    chat_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="Optional timeout in seconds for generation.",
+    )
+    chat_parser.add_argument(
+        "--db-path",
+        type=Path,
+        default=None,
+        help="Optional SQLite database path override.",
+    )
+    chat_parser.add_argument(
+        "--top-k",
+        type=int,
+        default=10,
+        help="Maximum number of evidence passages to retrieve (default: 10).",
+    )
+    chat_parser.set_defaults(handler=commands.run_chat)
 
     return parser
 

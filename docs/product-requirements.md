@@ -17,7 +17,8 @@ model-independent synthetic generation benchmark. Issue 13 evaluated the two
 eligible candidates, but neither passed the first mechanical run; the initial
 default model is therefore explicitly deferred. The analyze command requires
 explicit runtime and model configuration, and the application does not download
-artifacts.
+artifacts. The CLI also now includes a one-shot cited chat command over the
+stored local early-section library.
 
 ## Mission
 
