@@ -230,7 +230,7 @@ def _build_generation_request(
             passage_id=sec.kind.value,
             paper_id="doc",
             text=sec.text,
-            section_heading=sec.heading_text,
+            section_heading=sec.display_label,
             page_start=sec.start_page_number,
             page_end=sec.end_page_number,
             ordinal_position=rank,

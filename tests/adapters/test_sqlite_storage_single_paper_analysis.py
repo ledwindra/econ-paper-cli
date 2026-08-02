@@ -14,6 +14,7 @@ from econ_paper_cli.domain import (
     PDFQualityStatus,
     PDFQualityWarning,
     PDFQualityWarningCode,
+    PDFSectionDetectionMethod,
     PDFSectionKind,
     PDFSectionWarning,
     PDFSectionWarningCode,
@@ -52,6 +53,8 @@ def _make_success_record(
     sec_abs = SinglePaperAnalysisSectionRecord(
         section_kind=PDFSectionKind.ABSTRACT,
         heading_text="Abstract",
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="Abstract",
         page_start=1,
         page_end=1,
         spans=(span_abs,),
@@ -72,7 +75,9 @@ def _make_success_record(
     )
     sec_intro = SinglePaperAnalysisSectionRecord(
         section_kind=PDFSectionKind.INTRODUCTION,
-        heading_text="1. Introduction",
+        heading_text="Introduction",
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="1. Introduction",
         page_start=1,
         page_end=2,
         spans=(span_intro_p1, span_intro_p2),
@@ -254,7 +259,8 @@ def test_save_and_get_multi_page_section_and_typed_warnings(tmp_path: Path) -> N
     # Verify multi-page section span round-trip
     assert len(retrieved.sections) == 2
     intro = retrieved.sections[1]
-    assert intro.heading_text == "1. Introduction"
+    assert intro.observed_heading_text == "1. Introduction"
+    assert intro.heading_text == "Introduction"
     assert len(intro.spans) == 2
     assert intro.spans[0].page_number == 1
     assert intro.spans[0].start_character_offset == 32

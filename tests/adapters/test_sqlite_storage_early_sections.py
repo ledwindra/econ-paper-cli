@@ -14,6 +14,7 @@ from econ_paper_cli.domain import (
     PDFDocumentMetadata,
     PDFExtractionResult,
     PDFSection,
+    PDFSectionDetectionMethod,
     PDFSectionDetectionResult,
     PDFSectionKind,
     PDFSectionSpan,
@@ -51,7 +52,8 @@ def _record(
         sections=(
             PDFSection(
                 kind=PDFSectionKind.INTRODUCTION,
-                heading_text="Introduction",
+                detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+                observed_heading_text="Introduction",
                 start_page_number=1,
                 end_page_number=1,
                 spans=(PDFSectionSpan(1, 0, len(text)),),
@@ -80,7 +82,7 @@ def test_fresh_schema_atomic_round_trip_restart_and_bm25(tmp_path: Path) -> None
     storage = SQLiteStorage(database)
 
     storage.save_early_section_record(record)
-    assert storage.get_schema_version() == CURRENT_SCHEMA_VERSION == 4
+    assert storage.get_schema_version() == CURRENT_SCHEMA_VERSION == 5
     assert storage.get_early_section_record(record.paper.paper_id) == record
     generic_record = storage.get_paper_record(record.paper.paper_id)
     assert generic_record is not None
@@ -301,6 +303,15 @@ def test_v3_migration_preserves_legacy_markdown_path(tmp_path: Path) -> None:
             FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE,
             UNIQUE(paper_id, ordinal_position)
         );
+        CREATE TABLE single_paper_analysis_sections (
+            analysis_id TEXT NOT NULL,
+            section_kind TEXT NOT NULL,
+            heading_text TEXT NOT NULL,
+            page_start INTEGER NOT NULL,
+            page_end INTEGER NOT NULL,
+            ordinal_position INTEGER NOT NULL,
+            PRIMARY KEY(analysis_id, section_kind)
+        );
         INSERT INTO schema_migrations VALUES
             (1, '2026-08-01', 'v1'), (2, '2026-08-01', 'v2'),
             (3, '2026-08-01', 'v3');
@@ -329,5 +340,5 @@ def test_v3_migration_preserves_legacy_markdown_path(tmp_path: Path) -> None:
         "SELECT markdown_path, parser_version FROM source_provenance WHERE paper_id = 'legacy'"
     ).fetchone()
     assert tuple(row) == ("/legacy.md", "legacy-unknown")
-    assert storage.get_schema_version() == 4
+    assert storage.get_schema_version() == 5
     storage.close()

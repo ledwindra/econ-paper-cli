@@ -41,13 +41,13 @@ def test_abstract_and_introduction_separate_pages() -> None:
     intro = result.sections[1]
 
     assert abstract.kind is PDFSectionKind.ABSTRACT
-    assert abstract.heading_text == "Abstract"
+    assert abstract.observed_heading_text == "Abstract"
     assert "regional productivity growth" in abstract.text
     assert abstract.start_page_number == 1
     assert abstract.end_page_number == 1
 
     assert intro.kind is PDFSectionKind.INTRODUCTION
-    assert intro.heading_text == "1. Introduction"
+    assert intro.observed_heading_text == "1. Introduction"
     assert "influence investment dynamics" in intro.text
     assert intro.start_page_number == 2
     assert intro.end_page_number == 2
@@ -115,7 +115,7 @@ def test_introduction_after_several_pages_front_matter() -> None:
 
     assert abs_sec.start_page_number == 3
     assert intro_sec.start_page_number == 5
-    assert intro_sec.heading_text == "I. INTRODUCTION"
+    assert intro_sec.observed_heading_text == "I. INTRODUCTION"
     assert "tariff adjustments" in intro_sec.text
 
 
@@ -137,7 +137,7 @@ def test_introduction_heading_variations(heading_text: str) -> None:
 
     assert len(result.sections) == 2
     intro = result.sections[1]
-    assert intro.heading_text == heading_text
+    assert intro.observed_heading_text == heading_text
     assert "introduction text" in intro.text
 
 
@@ -234,7 +234,7 @@ def test_heading_words_embedded_in_prose_are_ignored() -> None:
     intro_sec = result.sections[1]
 
     assert "an introduction to regional growth models" in abs_sec.text
-    assert intro_sec.heading_text == "1. Introduction"
+    assert intro_sec.observed_heading_text == "1. Introduction"
     assert "real introduction heading" in intro_sec.text
 
 
@@ -250,9 +250,9 @@ def test_toc_lines_and_running_headers_ignored_for_body_heading_selection() -> N
     abs_sec = result.sections[0]
     intro_sec = result.sections[1]
 
-    assert abs_sec.heading_text == "Abstract"
+    assert abs_sec.observed_heading_text == "Abstract"
     assert "Actual abstract text" in abs_sec.text
-    assert intro_sec.heading_text == "1. Introduction"
+    assert intro_sec.observed_heading_text == "1. Introduction"
     assert "Actual intro text" in intro_sec.text
 
 

@@ -7,6 +7,7 @@ from econ_paper_cli.domain.pdf_sections import (
     _WARNING_ORDER,
     PDFHeadingCandidate,
     PDFSection,
+    PDFSectionDetectionMethod,
     PDFSectionDetectionResult,
     PDFSectionKind,
     PDFSectionSettings,
@@ -537,7 +538,8 @@ def _build_section(
 
     return PDFSection(
         kind=kind,
-        heading_text=heading_line.trimmed,
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text=heading_line.trimmed,
         start_page_number=spans_list[0].page_number,
         end_page_number=spans_list[-1].page_number,
         spans=tuple(spans_list),

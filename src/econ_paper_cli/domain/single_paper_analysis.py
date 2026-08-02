@@ -36,6 +36,7 @@ from econ_paper_cli.domain.pdf_quality import (
 )
 from econ_paper_cli.domain.pdf_sections import (
     DEFAULT_PDF_SECTION_SETTINGS,
+    PDFSectionDetectionMethod,
     PDFSectionDetectionResult,
     PDFSectionKind,
     PDFSectionSettings,
@@ -645,10 +646,19 @@ class SinglePaperAnalysisSectionSpanRecord:
 
 @dataclass(frozen=True, slots=True)
 class SinglePaperAnalysisSectionRecord:
-    """Persisted section metadata with exact page-local spans."""
+    """Persisted section metadata with exact page-local spans.
+
+    ``heading_text`` is always the canonical display label derived from
+    ``section_kind`` (for example ``"Abstract"``). ``observed_heading_text``
+    is the verbatim source heading when ``detection_method`` is
+    ``EXPLICIT_HEADING``, and ``None`` when the section's boundaries were
+    inferred without an observed heading (``IMPLICIT_FRONT_MATTER``).
+    """
 
     section_kind: PDFSectionKind
     heading_text: str
+    detection_method: PDFSectionDetectionMethod
+    observed_heading_text: str | None
     page_start: int
     page_end: int
     spans: tuple[SinglePaperAnalysisSectionSpanRecord, ...]
@@ -660,6 +670,17 @@ class SinglePaperAnalysisSectionRecord:
                 "section_kind must be a PDFSectionKind instance."
             )
         _validate_nonempty_text("heading_text", self.heading_text)
+        if not isinstance(self.detection_method, PDFSectionDetectionMethod):
+            raise SinglePaperAnalysisValidationError(
+                "detection_method must be a PDFSectionDetectionMethod instance."
+            )
+        if self.detection_method is PDFSectionDetectionMethod.EXPLICIT_HEADING:
+            _validate_nonempty_text("observed_heading_text", self.observed_heading_text)
+        elif self.observed_heading_text is not None:
+            raise SinglePaperAnalysisValidationError(
+                "observed_heading_text must be None when detection_method is "
+                "IMPLICIT_FRONT_MATTER."
+            )
         _validate_positive_int("page_start", self.page_start)
         _validate_positive_int("page_end", self.page_end)
         if self.page_start > self.page_end:
@@ -1135,7 +1156,9 @@ class SinglePaperAnalysisRecord:
                 sections.append(
                     SinglePaperAnalysisSectionRecord(
                         section_kind=sec.kind,
-                        heading_text=sec.heading_text,
+                        heading_text=sec.display_label,
+                        detection_method=sec.detection_method,
+                        observed_heading_text=sec.observed_heading_text,
                         page_start=sec.start_page_number,
                         page_end=sec.end_page_number,
                         spans=spans,

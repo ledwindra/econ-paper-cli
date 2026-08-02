@@ -15,6 +15,7 @@ from econ_paper_cli.domain import (
     PDFQualityMeasurements,
     PDFQualityStatus,
     PDFSection,
+    PDFSectionDetectionMethod,
     PDFSectionDetectionResult,
     PDFSectionKind,
     PDFSectionSpan,
@@ -150,7 +151,8 @@ def test_single_paper_analysis_result_success_validation(tmp_path: Path) -> None
     )
     sec = PDFSection(
         kind=PDFSectionKind.ABSTRACT,
-        heading_text="Abstract",
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="Abstract",
         start_page_number=1,
         end_page_number=1,
         spans=(span,),
@@ -346,7 +348,8 @@ def test_failure_code_forbidden_for_success(tmp_path: Path) -> None:
     )
     sec = PDFSection(
         kind=PDFSectionKind.ABSTRACT,
-        heading_text="Abstract",
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="Abstract",
         start_page_number=1,
         end_page_number=1,
         spans=(span,),

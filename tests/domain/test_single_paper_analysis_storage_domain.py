@@ -7,6 +7,7 @@ import pytest
 from econ_paper_cli.domain import (
     DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     PDFQualityStatus,
+    PDFSectionDetectionMethod,
     PDFSectionKind,
     ResearchQuestionKind,
     SinglePaperAnalysisEvidenceRecord,
@@ -76,6 +77,8 @@ def test_section_span_and_record_validation() -> None:
     sec = SinglePaperAnalysisSectionRecord(
         section_kind=PDFSectionKind.INTRODUCTION,
         heading_text="1. Introduction",
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="1. Introduction",
         page_start=1,
         page_end=2,
         spans=(span1, span2),
@@ -127,6 +130,8 @@ def test_record_referential_integrity_and_span_validation(tmp_path: Path) -> Non
     sec = SinglePaperAnalysisSectionRecord(
         section_kind=PDFSectionKind.ABSTRACT,
         heading_text="Abstract",
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="Abstract",
         page_start=1,
         page_end=1,
         spans=(span1,),
@@ -238,6 +243,8 @@ def test_section_span_ordering_and_bounds_validation() -> None:
         SinglePaperAnalysisSectionRecord(
             section_kind=PDFSectionKind.INTRODUCTION,
             heading_text="1. Introduction",
+            detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+            observed_heading_text="1. Introduction",
             page_start=2,  # Should be 1
             page_end=2,
             spans=(span_p1, span_p2),
@@ -252,6 +259,8 @@ def test_section_span_ordering_and_bounds_validation() -> None:
         SinglePaperAnalysisSectionRecord(
             section_kind=PDFSectionKind.INTRODUCTION,
             heading_text="1. Introduction",
+            detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+            observed_heading_text="1. Introduction",
             page_start=1,
             page_end=3,  # Should be 2
             spans=(span_p1, span_p2),
@@ -265,6 +274,8 @@ def test_section_span_ordering_and_bounds_validation() -> None:
         SinglePaperAnalysisSectionRecord(
             section_kind=PDFSectionKind.INTRODUCTION,
             heading_text="1. Introduction",
+            detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+            observed_heading_text="1. Introduction",
             page_start=1,
             page_end=1,
             spans=(

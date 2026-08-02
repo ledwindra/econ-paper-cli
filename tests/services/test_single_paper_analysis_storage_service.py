@@ -193,7 +193,8 @@ def test_end_to_end_multi_page_sections_round_trip(tmp_path: Path) -> None:
     assert retrieved is not None
     assert len(retrieved.sections) == 2
     intro = retrieved.sections[1]
-    assert intro.heading_text == "1. Introduction"
+    assert intro.observed_heading_text == "1. Introduction"
+    assert intro.heading_text == "Introduction"
     assert len(intro.spans) == 2
     assert intro.spans[0].page_number == 1
     assert intro.spans[1].page_number == 2

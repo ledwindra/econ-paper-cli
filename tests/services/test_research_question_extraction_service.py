@@ -6,6 +6,7 @@ from econ_paper_cli.domain import (
     DEFAULT_RESEARCH_QUESTION_SETTINGS,
     Citation,
     PDFSection,
+    PDFSectionDetectionMethod,
     PDFSectionDetectionResult,
     PDFSectionKind,
     PDFSectionSpan,
@@ -130,7 +131,8 @@ def _make_section(
     heading = "Abstract" if kind is PDFSectionKind.ABSTRACT else "1. Introduction"
     return PDFSection(
         kind=kind,
-        heading_text=heading,
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text=heading,
         start_page_number=page_number,
         end_page_number=page_number,
         spans=(span,),
@@ -239,7 +241,8 @@ def test_inferred_question_from_objective_with_both_sections_multi_page() -> Non
     )
     sec_intro = PDFSection(
         kind=PDFSectionKind.INTRODUCTION,
-        heading_text="1. Introduction",
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="1. Introduction",
         start_page_number=2,
         end_page_number=3,
         spans=(span1, span2),

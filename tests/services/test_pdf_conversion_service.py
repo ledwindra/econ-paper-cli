@@ -13,6 +13,7 @@ from econ_paper_cli.domain import (
     PDFDocumentMetadata,
     PDFExtractionResult,
     PDFSection,
+    PDFSectionDetectionMethod,
     PDFSectionDetectionResult,
     PDFSectionKind,
     PDFSectionSpan,
@@ -49,7 +50,8 @@ def _section(
 ) -> PDFSection:
     return PDFSection(
         kind=kind,
-        heading_text=kind.value.title(),
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text=kind.value.title(),
         start_page_number=spans[0].page_number,
         end_page_number=spans[-1].page_number,
         spans=spans,

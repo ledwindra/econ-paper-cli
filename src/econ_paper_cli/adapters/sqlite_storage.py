@@ -21,6 +21,7 @@ from econ_paper_cli.domain.pdf_quality import (
     PDFQualityWarningCode,
 )
 from econ_paper_cli.domain.pdf_sections import (
+    PDFSectionDetectionMethod,
     PDFSectionKind,
     PDFSectionSettings,
     PDFSectionWarning,
@@ -62,7 +63,7 @@ from econ_paper_cli.protocols.storage import (
     StorageValidationError,
 )
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 _MIGRATIONS: list[tuple[int, str, list[str]]] = [
     (
@@ -350,6 +351,21 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 FOREIGN KEY(passage_id) REFERENCES passage_provenance(passage_id) ON DELETE CASCADE
             );""",
             "CREATE INDEX idx_passage_fragments_passage_ordinal ON passage_source_fragments(passage_id, ordinal_position);",
+        ],
+    ),
+    (
+        5,
+        "Represent unheaded sections truthfully: split observed heading text "
+        "from the canonical display label",
+        [
+            "ALTER TABLE single_paper_analysis_sections ADD COLUMN detection_method TEXT NOT NULL DEFAULT 'explicit_heading';",
+            "ALTER TABLE single_paper_analysis_sections ADD COLUMN observed_heading_text TEXT;",
+            "UPDATE single_paper_analysis_sections SET observed_heading_text = heading_text;",
+            """UPDATE single_paper_analysis_sections SET heading_text = CASE section_kind
+                WHEN 'abstract' THEN 'Abstract'
+                WHEN 'introduction' THEN 'Introduction'
+                ELSE heading_text
+            END;""",
         ],
     ),
 ]
@@ -1512,12 +1528,15 @@ class SQLiteStorage(StorageBackend):
                 conn.execute(
                     """INSERT INTO single_paper_analysis_sections (
                         analysis_id, section_kind, heading_text,
+                        detection_method, observed_heading_text,
                         page_start, page_end, ordinal_position
-                    ) VALUES (?, ?, ?, ?, ?, ?)""",
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         record.analysis_id,
                         sec.section_kind.value,
                         sec.heading_text,
+                        sec.detection_method.value,
+                        sec.observed_heading_text,
                         sec.page_start,
                         sec.page_end,
                         sec.ordinal_position,
@@ -1708,6 +1727,10 @@ class SQLiteStorage(StorageBackend):
                     SinglePaperAnalysisSectionRecord(
                         section_kind=PDFSectionKind(sk),
                         heading_text=s["heading_text"],
+                        detection_method=PDFSectionDetectionMethod(
+                            s["detection_method"]
+                        ),
+                        observed_heading_text=s["observed_heading_text"],
                         page_start=s["page_start"],
                         page_end=s["page_end"],
                         spans=spans,

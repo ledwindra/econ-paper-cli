@@ -15,6 +15,7 @@ from econ_paper_cli.domain import (
     PDFDocumentMetadata,
     PDFExtractionResult,
     PDFSection,
+    PDFSectionDetectionMethod,
     PDFSectionDetectionResult,
     PDFSectionKind,
     PDFSectionSpan,
@@ -109,7 +110,8 @@ def _record(
         sections=(
             PDFSection(
                 kind=PDFSectionKind.ABSTRACT,
-                heading_text="Abstract",
+                detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+                observed_heading_text="Abstract",
                 start_page_number=1,
                 end_page_number=1,
                 spans=(PDFSectionSpan(1, 0, 31),),
@@ -117,7 +119,8 @@ def _record(
             ),
             PDFSection(
                 kind=PDFSectionKind.INTRODUCTION,
-                heading_text="Introduction",
+                detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+                observed_heading_text="Introduction",
                 start_page_number=1,
                 end_page_number=1,
                 spans=(PDFSectionSpan(1, 33, len(text)),),

@@ -13,6 +13,19 @@ class PDFSectionKind(str, Enum):
     INTRODUCTION = "introduction"
 
 
+_DISPLAY_LABELS = {
+    PDFSectionKind.ABSTRACT: "Abstract",
+    PDFSectionKind.INTRODUCTION: "Introduction",
+}
+
+
+class PDFSectionDetectionMethod(str, Enum):
+    """How a section's boundaries were determined."""
+
+    EXPLICIT_HEADING = "explicit_heading"
+    IMPLICIT_FRONT_MATTER = "implicit_front_matter"
+
+
 class PDFSectionWarningCode(str, Enum):
     """Stable warning identifiers for section detection in canonical output order."""
 
@@ -28,6 +41,10 @@ class PDFSectionWarningCode(str, Enum):
     DUPLICATE_INTRODUCTION_CANDIDATES = "duplicate_introduction_candidates"
     AMBIGUOUS_ABSTRACT_CANDIDATES = "ambiguous_abstract_candidates"
     AMBIGUOUS_INTRODUCTION_CANDIDATES = "ambiguous_introduction_candidates"
+    AMBIGUOUS_IMPLICIT_ABSTRACT_BOUNDARY = "ambiguous_implicit_abstract_boundary"
+    AMBIGUOUS_IMPLICIT_INTRODUCTION_BOUNDARY = (
+        "ambiguous_implicit_introduction_boundary"
+    )
 
 
 _WARNING_MESSAGES = {
@@ -70,6 +87,14 @@ _WARNING_MESSAGES = {
     ),
     PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES: (
         "Multiple equally plausible Introduction heading candidates were detected."
+    ),
+    PDFSectionWarningCode.AMBIGUOUS_IMPLICIT_ABSTRACT_BOUNDARY: (
+        "No Abstract heading was found and the unheaded front-matter boundary could "
+        "not be inferred with sufficient confidence."
+    ),
+    PDFSectionWarningCode.AMBIGUOUS_IMPLICIT_INTRODUCTION_BOUNDARY: (
+        "No Introduction heading was found and the unheaded front-matter boundary "
+        "could not be inferred with sufficient confidence."
     ),
 }
 _WARNING_ORDER = {code: position for position, code in enumerate(PDFSectionWarningCode)}
@@ -142,10 +167,19 @@ class PDFHeadingCandidate:
 
 @dataclass(frozen=True, slots=True)
 class PDFSection:
-    """Detected section with page span provenance and text."""
+    """Detected section with page span provenance and text.
+
+    ``observed_heading_text`` is the verbatim source heading when
+    ``detection_method`` is ``EXPLICIT_HEADING``, and ``None`` when the
+    section's boundaries were inferred from front-matter structure without an
+    observed heading (``IMPLICIT_FRONT_MATTER``). Canonical display labels are
+    derived from ``kind`` via :attr:`display_label`, never fabricated as an
+    observed heading.
+    """
 
     kind: PDFSectionKind
-    heading_text: str
+    detection_method: PDFSectionDetectionMethod
+    observed_heading_text: str | None
     start_page_number: int
     end_page_number: int
     spans: tuple[PDFSectionSpan, ...]
@@ -154,7 +188,17 @@ class PDFSection:
     def __post_init__(self) -> None:
         if not isinstance(self.kind, PDFSectionKind):
             raise PDFSectionValidationError("kind must be a PDFSectionKind instance.")
-        _validate_nonempty_text("heading_text", self.heading_text)
+        if not isinstance(self.detection_method, PDFSectionDetectionMethod):
+            raise PDFSectionValidationError(
+                "detection_method must be a PDFSectionDetectionMethod instance."
+            )
+        if self.detection_method is PDFSectionDetectionMethod.EXPLICIT_HEADING:
+            _validate_nonempty_text("observed_heading_text", self.observed_heading_text)
+        elif self.observed_heading_text is not None:
+            raise PDFSectionValidationError(
+                "observed_heading_text must be None when detection_method is "
+                "IMPLICIT_FRONT_MATTER."
+            )
         _validate_positive_int("start_page_number", self.start_page_number)
         _validate_positive_int("end_page_number", self.end_page_number)
         if self.start_page_number > self.end_page_number:
@@ -204,6 +248,11 @@ class PDFSection:
                 )
             previous_page = span.page_number
             previous_end_offset = span.end_character_offset
+
+    @property
+    def display_label(self) -> str:
+        """Return the canonical display label derived from ``kind``."""
+        return _DISPLAY_LABELS[self.kind]
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,6 +348,39 @@ class PDFSectionDetectionResult:
             if PDFSectionKind.ABSTRACT in section_kinds_set:
                 raise PDFSectionValidationError(
                     "AMBIGUOUS_ABSTRACT_CANDIDATES warning contradicts presence of Abstract section."
+                )
+
+        if (
+            PDFSectionWarningCode.AMBIGUOUS_IMPLICIT_ABSTRACT_BOUNDARY
+            in warning_code_set
+        ):
+            if PDFSectionKind.ABSTRACT in section_kinds_set:
+                raise PDFSectionValidationError(
+                    "AMBIGUOUS_IMPLICIT_ABSTRACT_BOUNDARY warning contradicts presence of Abstract section."
+                )
+            if PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY in warning_code_set:
+                raise PDFSectionValidationError(
+                    "AMBIGUOUS_IMPLICIT_ABSTRACT_BOUNDARY warning contradicts UNRESOLVED_ABSTRACT_BOUNDARY warning."
+                )
+            if PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES in warning_code_set:
+                raise PDFSectionValidationError(
+                    "AMBIGUOUS_IMPLICIT_ABSTRACT_BOUNDARY warning contradicts AMBIGUOUS_ABSTRACT_CANDIDATES warning."
+                )
+
+        if (
+            PDFSectionWarningCode.AMBIGUOUS_IMPLICIT_INTRODUCTION_BOUNDARY
+            in warning_code_set
+        ):
+            if PDFSectionKind.INTRODUCTION in section_kinds_set:
+                raise PDFSectionValidationError(
+                    "AMBIGUOUS_IMPLICIT_INTRODUCTION_BOUNDARY warning contradicts presence of Introduction section."
+                )
+            if (
+                PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES
+                in warning_code_set
+            ):
+                raise PDFSectionValidationError(
+                    "AMBIGUOUS_IMPLICIT_INTRODUCTION_BOUNDARY warning contradicts AMBIGUOUS_INTRODUCTION_CANDIDATES warning."
                 )
 
         if PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY in warning_code_set:
@@ -435,6 +517,15 @@ class PDFSectionDetectionResult:
                         f"do not match candidate page numbers ({expected_pages})."
                     )
 
+            if warning.code in {
+                PDFSectionWarningCode.AMBIGUOUS_IMPLICIT_ABSTRACT_BOUNDARY,
+                PDFSectionWarningCode.AMBIGUOUS_IMPLICIT_INTRODUCTION_BOUNDARY,
+            }:
+                if not warning.page_numbers:
+                    raise PDFSectionValidationError(
+                        f"{warning.code.value} warning must reference at least 1 page."
+                    )
+
         if PDFSectionKind.ABSTRACT in section_kinds_set:
             if PDFSectionWarningCode.MISSING_ABSTRACT in warning_code_set:
                 raise PDFSectionValidationError(
@@ -448,6 +539,8 @@ class PDFSectionDetectionResult:
             and PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY
             not in warning_code_set
             and PDFSectionWarningCode.EMPTY_ABSTRACT_BODY not in warning_code_set
+            and PDFSectionWarningCode.AMBIGUOUS_IMPLICIT_ABSTRACT_BOUNDARY
+            not in warning_code_set
         ):
             if PDFSectionWarningCode.MISSING_ABSTRACT not in warning_code_set:
                 raise PDFSectionValidationError(
@@ -465,6 +558,8 @@ class PDFSectionDetectionResult:
             and PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES
             not in warning_code_set
             and PDFSectionWarningCode.EMPTY_INTRODUCTION_BODY not in warning_code_set
+            and PDFSectionWarningCode.AMBIGUOUS_IMPLICIT_INTRODUCTION_BOUNDARY
+            not in warning_code_set
         ):
             if PDFSectionWarningCode.MISSING_INTRODUCTION not in warning_code_set:
                 raise PDFSectionValidationError(

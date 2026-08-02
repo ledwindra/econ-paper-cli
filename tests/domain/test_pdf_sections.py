@@ -8,6 +8,7 @@ from econ_paper_cli.domain import (
     DEFAULT_PDF_SECTION_SETTINGS,
     PDFHeadingCandidate,
     PDFSection,
+    PDFSectionDetectionMethod,
     PDFSectionDetectionResult,
     PDFSectionKind,
     PDFSectionSettings,
@@ -80,7 +81,8 @@ def test_section_validation_enforces_exact_text_length_and_span_alignment() -> N
 
     section = PDFSection(
         kind=PDFSectionKind.ABSTRACT,
-        heading_text="Abstract",
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="Abstract",
         start_page_number=1,
         end_page_number=2,
         spans=(span1, span2),
@@ -92,7 +94,7 @@ def test_section_validation_enforces_exact_text_length_and_span_alignment() -> N
         replace(section, text="Short text")
 
     with pytest.raises(PDFSectionValidationError, match="heading_text"):
-        replace(section, heading_text="   ")
+        replace(section, observed_heading_text="   ")
 
     with pytest.raises(PDFSectionValidationError, match="cannot exceed"):
         replace(section, start_page_number=3, end_page_number=2)
@@ -134,7 +136,8 @@ def test_section_detection_result_validation_and_distinct_candidate_grounding() 
     )
     section = PDFSection(
         kind=PDFSectionKind.ABSTRACT,
-        heading_text="Abstract",
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="Abstract",
         start_page_number=1,
         end_page_number=1,
         spans=(span,),
@@ -145,7 +148,8 @@ def test_section_detection_result_validation_and_distinct_candidate_grounding() 
     )
     intro_section = PDFSection(
         kind=PDFSectionKind.INTRODUCTION,
-        heading_text="Introduction",
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="Introduction",
         start_page_number=2,
         end_page_number=2,
         spans=(intro_span,),
@@ -326,7 +330,8 @@ def test_result_rejects_duplicate_section_kinds() -> None:
     )
     sec1 = PDFSection(
         kind=PDFSectionKind.ABSTRACT,
-        heading_text="Abstract 1",
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="Abstract 1",
         start_page_number=1,
         end_page_number=1,
         spans=(span1,),
@@ -337,7 +342,8 @@ def test_result_rejects_duplicate_section_kinds() -> None:
     )
     sec2 = PDFSection(
         kind=PDFSectionKind.ABSTRACT,
-        heading_text="Abstract 2",
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="Abstract 2",
         start_page_number=2,
         end_page_number=2,
         spans=(span2,),
@@ -375,7 +381,8 @@ def test_result_rejects_contradictory_no_pages_or_all_empty_with_sections() -> N
     )
     sec = PDFSection(
         kind=PDFSectionKind.ABSTRACT,
-        heading_text="Abstract",
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="Abstract",
         start_page_number=1,
         end_page_number=1,
         spans=(span,),
@@ -416,7 +423,8 @@ def test_result_rejects_missing_section_without_corresponding_warning() -> None:
     )
     sec = PDFSection(
         kind=PDFSectionKind.ABSTRACT,
-        heading_text="Abstract",
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="Abstract",
         start_page_number=1,
         end_page_number=1,
         spans=(span,),
@@ -439,7 +447,8 @@ def test_result_rejects_contradictory_missing_warning_with_section() -> None:
     )
     sec = PDFSection(
         kind=PDFSectionKind.ABSTRACT,
-        heading_text="Abstract",
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="Abstract",
         start_page_number=1,
         end_page_number=1,
         spans=(span,),
@@ -467,7 +476,8 @@ def test_result_rejects_overlapping_or_out_of_order_sections() -> None:
     )
     sec1 = PDFSection(
         kind=PDFSectionKind.ABSTRACT,
-        heading_text="Abstract",
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="Abstract",
         start_page_number=1,
         end_page_number=1,
         spans=(span1,),
@@ -480,7 +490,8 @@ def test_result_rejects_overlapping_or_out_of_order_sections() -> None:
     )
     sec2 = PDFSection(
         kind=PDFSectionKind.INTRODUCTION,
-        heading_text="Introduction",
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="Introduction",
         start_page_number=1,
         end_page_number=1,
         spans=(span2,),
