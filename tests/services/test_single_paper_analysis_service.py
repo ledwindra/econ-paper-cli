@@ -16,6 +16,7 @@ from econ_paper_cli.domain import (
     SinglePaperAnalysisFailureCode,
     SinglePaperAnalysisStage,
     SinglePaperAnalysisStatus,
+    SinglePaperAnalysisValidationError,
     SinglePaperAnalysisWarningCode,
 )
 from econ_paper_cli.domain.errors import (
@@ -42,6 +43,7 @@ from econ_paper_cli.protocols.pdf_extraction import (
     PDFSourceNotFoundError,
     PDFSourceNotRegularFileError,
 )
+from econ_paper_cli.services.ingestion import run_ingestion_preflight
 from econ_paper_cli.services.single_paper_analysis import analyze_single_paper
 
 _ALL_STAGES = tuple(SinglePaperAnalysisStage)
@@ -362,6 +364,31 @@ def test_relative_path_uses_canonical_extraction_path(
     # source_path in result must always be absolute/canonical
     assert res.source_path.is_absolute()
     assert res.source_path == pdf_path.resolve()
+
+
+def test_injected_preflight_candidate_must_match_source(tmp_path: Path) -> None:
+    target = _create_valid_pdf_file(tmp_path, filename="target.pdf")
+    other = _create_valid_pdf_file(tmp_path, filename="other.pdf")
+    other_preflight = run_ingestion_preflight(other)
+    mismatched_preflight = type(other_preflight)(
+        target_path=target.resolve(),
+        candidates=other_preflight.candidates,
+        new_candidate_count=1,
+        stored_candidate_count=0,
+        batch_duplicate_count=0,
+        total_candidate_count=1,
+    )
+
+    with pytest.raises(
+        SinglePaperAnalysisValidationError,
+        match="candidate must match the analyzed PDF path",
+    ):
+        analyze_single_paper(
+            target,
+            FakePDFExtractor(),
+            FakeGenerator(),
+            preflight_result=mismatched_preflight,
+        )
 
 
 # ---------------------------------------------------------------------------

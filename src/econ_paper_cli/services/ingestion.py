@@ -26,29 +26,14 @@ from econ_paper_cli.domain.ingestion import (
 from econ_paper_cli.protocols.storage import StorageBackend
 
 
-def run_ingestion_preflight(
-    target_path: str | Path,
-    storage: StorageBackend | None = None,
-    file_inspector: Callable[[Path], FileInspectionResult] = inspect_local_file,
-) -> IngestionPreflightResult:
-    """Discover PDF files deterministically and compute preflight status.
+def discover_pdf_paths(target_path: str | Path) -> tuple[Path, ...]:
+    """Resolve and discover supported PDF paths without inspecting file content."""
+    _, pdf_paths = _discover_pdf_paths(target_path)
+    return pdf_paths
 
-    Args:
-        target_path: Explicit path to a PDF file or directory.
-        storage: Optional StorageBackend to check for existing stored records.
-        file_inspector: Callable adapter to inspect local file (path -> FileInspectionResult).
 
-    Returns:
-        An immutable IngestionPreflightResult.
-
-    Raises:
-        IngestionPathNotFoundError: If target_path does not exist.
-        IngestionInvalidPathError: If target_path is not a regular file or directory.
-        IngestionUnsupportedFileError: If target_path is a file but not a .pdf file.
-        IngestionEmptyDirectoryError: If target_path is a directory with no .pdf files.
-        IngestionPermissionError: If permission is denied.
-        IngestionReadError: If an OS read error occurs.
-    """
+def _discover_pdf_paths(target_path: str | Path) -> tuple[Path, tuple[Path, ...]]:
+    """Return the resolved target and deterministic supported PDF paths."""
     raw_path = Path(target_path) if isinstance(target_path, str) else target_path
     expanded_path = raw_path.expanduser()
 
@@ -76,15 +61,20 @@ def run_ingestion_preflight(
             raise IngestionUnsupportedFileError(
                 f"Specified file '{resolved_target}' is not a supported PDF document (.pdf)."
             )
-        pdf_paths = [resolved_target]
-    elif is_dir:
+        return resolved_target, (resolved_target,)
+
+    if is_dir:
         try:
-            # Recursively discover all regular files ending with .pdf (case-insensitive)
-            discovered = [
-                p.resolve()
-                for p in resolved_target.rglob("*")
-                if p.is_file() and p.suffix.lower() == ".pdf"
-            ]
+            discovered = tuple(
+                sorted(
+                    (
+                        path.resolve()
+                        for path in resolved_target.rglob("*")
+                        if path.is_file() and path.suffix.lower() == ".pdf"
+                    ),
+                    key=str,
+                )
+            )
         except PermissionError as err:
             raise IngestionPermissionError(
                 f"Permission denied scanning directory '{resolved_target}': {err}."
@@ -98,13 +88,37 @@ def run_ingestion_preflight(
             raise IngestionEmptyDirectoryError(
                 f"No supported PDF files (.pdf) were found in directory '{resolved_target}'."
             )
+        return resolved_target, discovered
 
-        # Deterministic ordering by path string
-        pdf_paths = sorted(discovered, key=lambda p: str(p))
-    else:
-        raise IngestionInvalidPathError(
-            f"Target path '{resolved_target}' is not a regular file or directory."
-        )
+    raise IngestionInvalidPathError(
+        f"Target path '{resolved_target}' is not a regular file or directory."
+    )
+
+
+def run_ingestion_preflight(
+    target_path: str | Path,
+    storage: StorageBackend | None = None,
+    file_inspector: Callable[[Path], FileInspectionResult] = inspect_local_file,
+) -> IngestionPreflightResult:
+    """Discover PDF files deterministically and compute preflight status.
+
+    Args:
+        target_path: Explicit path to a PDF file or directory.
+        storage: Optional StorageBackend to check for existing stored records.
+        file_inspector: Callable adapter to inspect local file (path -> FileInspectionResult).
+
+    Returns:
+        An immutable IngestionPreflightResult.
+
+    Raises:
+        IngestionPathNotFoundError: If target_path does not exist.
+        IngestionInvalidPathError: If target_path is not a regular file or directory.
+        IngestionUnsupportedFileError: If target_path is a file but not a .pdf file.
+        IngestionEmptyDirectoryError: If target_path is a directory with no .pdf files.
+        IngestionPermissionError: If permission is denied.
+        IngestionReadError: If an OS read error occurs.
+    """
+    resolved_target, pdf_paths = _discover_pdf_paths(target_path)
 
     # Process discovered PDF files using file_inspector adapter
     candidates: list[PreflightCandidate] = []

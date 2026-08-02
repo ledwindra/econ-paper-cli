@@ -1,8 +1,9 @@
 from importlib import metadata
+from pathlib import Path
 
 import pytest
 
-from econ_paper_cli.cli import main
+from econ_paper_cli.cli import build_parser, main
 
 
 @pytest.mark.parametrize(
@@ -40,7 +41,7 @@ def test_analyze_help_lists_all_options(capsys: pytest.CaptureFixture[str]) -> N
     assert exit_info.value.code == 0
     output = capsys.readouterr().out
     for flag in (
-        "PDF_PATH",
+        "TARGET_PATH",
         "--llama-cpp-path",
         "--model-path",
         "--model-id",
@@ -51,6 +52,29 @@ def test_analyze_help_lists_all_options(capsys: pytest.CaptureFixture[str]) -> N
         "--db-path",
     ):
         assert flag in output
+    assert "PDF file or a directory" in output
+
+
+@pytest.mark.parametrize("target", ["paper.pdf", "papers"])
+def test_analyze_parser_accepts_file_or_directory_target(target: str) -> None:
+    arguments = build_parser().parse_args(
+        [
+            "analyze",
+            target,
+            "--llama-cpp-path",
+            "llama-completion",
+            "--model-path",
+            "model.gguf",
+            "--model-id",
+            "local-model",
+            "--model-bytes",
+            "100",
+            "--model-checksum",
+            "a" * 64,
+        ]
+    )
+
+    assert arguments.target_path == Path(target)
 
 
 def test_analyze_missing_required_arguments_fails(

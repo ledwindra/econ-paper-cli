@@ -21,7 +21,10 @@ from econ_paper_cli.domain.storage import (
     SourceProvenance,
 )
 from econ_paper_cli.protocols.storage import StorageBackend
-from econ_paper_cli.services.ingestion import run_ingestion_preflight
+from econ_paper_cli.services.ingestion import (
+    discover_pdf_paths,
+    run_ingestion_preflight,
+)
 
 
 class FakeStorageBackend(StorageBackend):
@@ -197,6 +200,23 @@ def test_directory_discovery_deterministic_ordering_and_case_insensitive_extensi
     )
     actual_paths = tuple(c.source_path for c in result.candidates)
     assert actual_paths == expected_paths
+
+
+def test_discovery_returns_paths_without_inspecting_file_content(
+    tmp_path: Path,
+) -> None:
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    paths = (
+        papers_dir / "a.pdf",
+        papers_dir / "B.PDF",
+    )
+    for path in paths:
+        path.write_bytes(b"synthetic")
+
+    assert discover_pdf_paths(papers_dir) == tuple(
+        sorted((path.resolve() for path in paths), key=str)
+    )
 
 
 def test_directory_discovery_ignores_non_pdf_files(tmp_path: Path) -> None:

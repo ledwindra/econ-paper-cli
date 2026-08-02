@@ -28,13 +28,13 @@ def build_parser() -> ArgumentParser:
 
     analyze_parser = subparsers.add_parser(
         "analyze",
-        help="Analyze a single local PDF and persist evidence-backed results.",
+        help="Analyze a local PDF file or directory of PDFs and persist evidence-backed results.",
     )
     analyze_parser.add_argument(
-        "pdf_path",
-        metavar="PDF_PATH",
+        "target_path",
+        metavar="TARGET_PATH",
         type=Path,
-        help="Path to the target local PDF file.",
+        help="Path to a local PDF file or a directory containing PDF files.",
     )
     analyze_parser.add_argument(
         "--llama-cpp-path",

@@ -213,7 +213,7 @@ def _make_options(
         dummy_model.write_bytes(b"dummy_model")
 
     return AnalyzeCommandOptions(
-        pdf_path=pdf_path,
+        target_path=pdf_path,
         executable_path=dummy_exe,
         model_path=dummy_model,
         model_id="test-model",
@@ -523,7 +523,7 @@ def test_invalid_policy_versions_return_code_2(
 
     # 1. Invalid quality policy version
     opts1 = AnalyzeCommandOptions(
-        pdf_path=pdf_path,
+        target_path=pdf_path,
         executable_path=tmp_path / "exe",
         model_path=tmp_path / "model",
         model_id="id",
@@ -539,7 +539,7 @@ def test_invalid_policy_versions_return_code_2(
 
     # 2. Invalid section policy version
     opts2 = AnalyzeCommandOptions(
-        pdf_path=pdf_path,
+        target_path=pdf_path,
         executable_path=tmp_path / "exe",
         model_path=tmp_path / "model",
         model_id="id",
@@ -555,7 +555,7 @@ def test_invalid_policy_versions_return_code_2(
 
     # 3. Invalid research question policy version
     opts3 = AnalyzeCommandOptions(
-        pdf_path=pdf_path,
+        target_path=pdf_path,
         executable_path=tmp_path / "exe",
         model_path=tmp_path / "model",
         model_id="id",
@@ -571,7 +571,7 @@ def test_invalid_policy_versions_return_code_2(
 
     # 4. Invalid single paper policy version
     opts4 = AnalyzeCommandOptions(
-        pdf_path=pdf_path,
+        target_path=pdf_path,
         executable_path=tmp_path / "exe",
         model_path=tmp_path / "model",
         model_id="id",
@@ -594,7 +594,7 @@ def test_invalid_executable_path_returns_code_2(
     model_file.write_bytes(b"dummy")
 
     opts = AnalyzeCommandOptions(
-        pdf_path=pdf_path,
+        target_path=pdf_path,
         executable_path=tmp_path / "non_existent_exe",
         model_path=model_file,
         model_id="test-model",
@@ -618,7 +618,7 @@ def test_invalid_model_path_returns_code_2(
     exe_file.write_bytes(b"dummy")
 
     opts = AnalyzeCommandOptions(
-        pdf_path=pdf_path,
+        target_path=pdf_path,
         executable_path=exe_file,
         model_path=tmp_path / "non_existent_model.gguf",
         model_id="test-model",
@@ -644,7 +644,7 @@ def test_invalid_model_size_returns_code_2(
     model_file.write_bytes(b"dummy_content")
 
     opts = AnalyzeCommandOptions(
-        pdf_path=pdf_path,
+        target_path=pdf_path,
         executable_path=exe_file,
         model_path=model_file,
         model_id="test-model",
@@ -671,7 +671,7 @@ def test_invalid_model_checksum_returns_code_2(
     model_file.write_bytes(model_content)
 
     opts = AnalyzeCommandOptions(
-        pdf_path=pdf_path,
+        target_path=pdf_path,
         executable_path=exe_file,
         model_path=model_file,
         model_id="test-model",
@@ -725,7 +725,7 @@ def test_runtime_readiness_subprocess_boundary_returns_code_2(
     model_sha256 = hashlib.sha256(model_content).hexdigest()
 
     opts = AnalyzeCommandOptions(
-        pdf_path=pdf_path,
+        target_path=pdf_path,
         executable_path=exe_file,
         model_path=model_file,
         model_id="test-model",
@@ -781,7 +781,7 @@ def test_command_execution_uses_default_db_path(
     model_file.write_bytes(b"dummy")
 
     opts = AnalyzeCommandOptions(
-        pdf_path=pdf_path,
+        target_path=pdf_path,
         executable_path=exe_file,
         model_path=model_file,
         model_id="test-model",
