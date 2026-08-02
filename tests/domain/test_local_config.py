@@ -189,16 +189,59 @@ def test_runtime_identity_round_trips_through_mapping() -> None:
     assert restored == config
 
 
-def test_from_mapping_defaults_runtime_identity_to_none_for_pre_issue_58_configs() -> (
-    None
-):
-    """A config saved before runtime_id/runtime_version_marker existed must
-    still load cleanly, with both fields defaulting to None (schema version
-    1 is unchanged; these are optional additions, not a version bump)."""
-    legacy_mapping = LocalRuntimeModelConfig(**_valid_kwargs()).to_mapping()
-    del legacy_mapping["runtime_id"]
-    del legacy_mapping["runtime_version_marker"]
+def _genuine_schema_1_mapping(**overrides: object) -> dict[str, object]:
+    """A mapping as an actual pre-issue-#58 writer would have produced.
 
-    restored = LocalRuntimeModelConfig.from_mapping(legacy_mapping)
+    ``runtime_id``/``runtime_version_marker`` do not appear as keys at all
+    (not even as ``null``) — those fields did not exist as serialized
+    content in schema version 1.
+    """
+    mapping: dict[str, object] = {
+        "schema_version": 1,
+        "executable_path": "/usr/local/bin/llama-completion",
+        "model_path": "/models/model.gguf",
+        "model_id": "qwen2.5-1.5b-instruct-q4-k-m",
+        "model_bytes": 123456,
+        "model_checksum": VALID_CHECKSUM,
+    }
+    mapping.update(overrides)
+    return mapping
+
+
+def test_from_mapping_migrates_genuine_schema_1_config_to_schema_2() -> None:
+    """A genuine schema-1 file (issue #58's contract) is read through an
+    explicit migration path: it loads with runtime identity defaulting to
+    None and its schema_version preserved as the 1 that was actually read,
+    but is transparently upgraded to schema 2 the next time it is
+    serialized via to_mapping(), not schema 1."""
+    restored = LocalRuntimeModelConfig.from_mapping(_genuine_schema_1_mapping())
     assert restored.runtime_id is None
     assert restored.runtime_version_marker is None
+    assert restored.schema_version == 1
+
+    resaved = restored.to_mapping()
+    assert resaved["schema_version"] == LOCAL_CONFIG_SCHEMA_VERSION
+    assert resaved["runtime_id"] is None
+    assert resaved["runtime_version_marker"] is None
+
+
+@pytest.mark.parametrize("forbidden_field", ["runtime_id", "runtime_version_marker"])
+def test_from_mapping_rejects_schema_1_config_containing_v2_only_field(
+    forbidden_field: str,
+) -> None:
+    """A schema-1 file must never contain the new v2 fields, even as null:
+    their presence contradicts the file's own declared schema version."""
+    mapping = _genuine_schema_1_mapping(**{forbidden_field: None})
+    with pytest.raises(LocalConfigValidationError, match="schema_version 1"):
+        LocalRuntimeModelConfig.from_mapping(mapping)
+
+
+@pytest.mark.parametrize("missing_field", ["runtime_id", "runtime_version_marker"])
+def test_from_mapping_rejects_incomplete_schema_2_config(missing_field: str) -> None:
+    """A schema-2 file missing either runtime identity key is malformed —
+    it is not treated as a legacy schema-1 file, since it explicitly
+    declares schema_version 2."""
+    mapping = LocalRuntimeModelConfig(**_valid_kwargs()).to_mapping()
+    del mapping[missing_field]
+    with pytest.raises(LocalConfigValidationError, match="schema_version 2"):
+        LocalRuntimeModelConfig.from_mapping(mapping)

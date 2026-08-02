@@ -338,6 +338,15 @@ def verify_managed_install(
     for relative_path, expected_sha256 in receipt.member_checksums:
         declared_paths.add(relative_path)
         member_path = install_dir / relative_path
+        # A fresh safe extraction never produces symlinks or other special
+        # files, so a symlink occupying a declared path is itself the
+        # tamper signal — reject it before ``inspect_local_file`` would
+        # otherwise silently resolve and hash whatever it points at.
+        if member_path.is_symlink():
+            raise CorruptManagedInstallError(
+                f"Managed install member '{relative_path}' at '{install_dir}' "
+                "is a symlink, which a legitimate install never produces."
+            )
         try:
             info = inspect_local_file(member_path)
         except VerificationError as error:
@@ -391,6 +400,15 @@ def _verify_receipt_matches_artifact(
         mismatches.append("archive_sha256")
     if receipt.executable_relative_path != expected_artifact.executable_relative_path:
         mismatches.append("executable_relative_path")
+    if dict(receipt.member_checksums) != dict(
+        expected_artifact.bundle_member_checksums
+    ):
+        # Compares the manifest's static, version-controlled checksums
+        # against the receipt's, rather than trusting a receipt that is
+        # merely internally self-consistent: a receipt can be rewritten
+        # alongside a tampered installed file, so re-hashing installed
+        # members against *that same receipt* would never catch it.
+        mismatches.append("member_checksums")
     if mismatches:
         raise CorruptManagedInstallError(
             f"Install receipt at '{install_dir}' does not match the pinned "

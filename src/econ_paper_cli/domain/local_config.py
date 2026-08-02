@@ -44,6 +44,17 @@ _OPTIONAL_FIELDS = (
 )
 _ALL_FIELDS = frozenset(_REQUIRED_FIELDS + _OPTIONAL_FIELDS)
 
+_SCHEMA_2_ONLY_FIELDS = frozenset({"runtime_id", "runtime_version_marker"})
+"""Serialized fields that did not exist in schema version 1 at all.
+
+A schema-1 file predates ``runtime_id``/``runtime_version_marker`` as
+*serialized content*: a real writer of schema 1 never emits these keys,
+even as ``null``. Their mere presence in a file that declares
+``schema_version: 1`` is therefore not a legitimate "optional field left
+unset" — it is malformed or tampered data and must be rejected rather than
+silently accepted.
+"""
+
 
 def _validate_nonempty_path(field_name: str, value: object) -> Path:
     if isinstance(value, Path):
@@ -61,7 +72,7 @@ def _validate_nonempty_path(field_name: str, value: object) -> Path:
 
 @dataclass(frozen=True, slots=True)
 class LocalRuntimeModelConfig:
-    """Durable, versioned local runtime/model configuration (schema version 1).
+    """Durable, versioned local runtime/model configuration.
 
     Represents exactly the reusable identity a user configures once via
     ``econpapers setup`` so later ``analyze``/``chat`` invocations do not need
@@ -69,11 +80,15 @@ class LocalRuntimeModelConfig:
     fixed reproducibility constants (context size, sampling parameters, ...)
     that remain owned by the concrete generation adapter.
 
-    ``runtime_id``/``runtime_version_marker`` are optional additions to
-    schema version 1 (not a version bump): a config written before they
-    existed simply loads with both as ``None``, and ``LlamaCppConfig``'s own
-    defaults apply exactly as before. They are populated only when
-    ``econpapers setup`` resolved the executable through managed
+    ``runtime_id``/``runtime_version_marker`` are new *serialized* content
+    introduced in schema version 2 (see ``LOCAL_CONFIG_SCHEMA_VERSION``); a
+    schema-1 file must not contain these keys at all, not even ``null``. A
+    genuine schema-1 file still loads cleanly — with ``schema_version``
+    preserved as the 1 that was actually read and both runtime fields
+    defaulting to ``None``, so ``LlamaCppConfig``'s own defaults apply
+    exactly as before — and is transparently upgraded to schema 2 the next
+    time it is serialized via ``to_mapping()``. The two fields are populated
+    only when ``econpapers setup`` resolved the executable through managed
     provisioning, so the exact pinned identity that was actually installed
     survives a process restart instead of silently falling back to the
     adapter's hard-coded default.
@@ -190,10 +205,24 @@ class LocalRuntimeModelConfig:
                 "be omitted together."
             )
 
+        if self.schema_version == 1 and (
+            self.runtime_id is not None or self.runtime_version_marker is not None
+        ):
+            raise LocalConfigValidationError(
+                "runtime_id/runtime_version_marker require schema_version 2; "
+                "schema_version 1 predates these fields."
+            )
+
     def to_mapping(self) -> dict[str, object]:
-        """Return a canonical, JSON-compatible mapping of this configuration."""
+        """Return a canonical, JSON-compatible mapping of this configuration.
+
+        Always serializes as the *current* schema version, regardless of
+        what ``self.schema_version`` was read as: a config loaded from a
+        genuine schema-1 file (``self.schema_version == 1``) is
+        transparently upgraded to schema 2 the moment it is written again.
+        """
         return {
-            "schema_version": self.schema_version,
+            "schema_version": LOCAL_CONFIG_SCHEMA_VERSION,
             "executable_path": str(self.executable_path),
             "model_path": str(self.model_path),
             "model_id": self.model_id,
@@ -208,7 +237,25 @@ class LocalRuntimeModelConfig:
 
     @staticmethod
     def from_mapping(data: object) -> "LocalRuntimeModelConfig":
-        """Construct and validate a config from a decoded JSON mapping."""
+        """Construct and validate a config from a decoded JSON mapping.
+
+        Schema version dictates which serialized field set is legal, not
+        merely which fields *may* be present:
+
+        - ``schema_version: 1`` must not contain ``runtime_id`` or
+          ``runtime_version_marker`` at all (not even ``null``) — those are
+          new serialized content introduced in schema 2, so their presence
+          in a file declaring schema 1 is malformed/tampered data, not a
+          legitimately-unset optional field. A genuine schema-1 file is
+          read through this explicit migration path: it is upgraded
+          in-memory to schema 2 with both fields defaulting to ``None``, so
+          the next time this configuration is written it is written as
+          schema 2.
+        - ``schema_version: 2`` must contain both ``runtime_id`` and
+          ``runtime_version_marker`` keys (each may be ``null``) — a schema-2
+          file missing either key is incomplete/malformed, not a legacy
+          schema-1 file, and is rejected rather than silently defaulted.
+        """
         if not isinstance(data, Mapping):
             raise LocalConfigValidationError(
                 "Local configuration data must be a JSON object."
@@ -225,6 +272,42 @@ class LocalRuntimeModelConfig:
                 f"Missing required local configuration fields: {sorted(missing_fields)}."
             )
 
+        present_keys = set(data.keys())
+        schema_version = data["schema_version"]
+        if schema_version == 1:
+            forbidden_present = _SCHEMA_2_ONLY_FIELDS & present_keys
+            if forbidden_present:
+                raise LocalConfigValidationError(
+                    "schema_version 1 configuration must not contain "
+                    f"{sorted(forbidden_present)}; these fields were "
+                    "introduced in schema_version 2."
+                )
+            runtime_id: object = None
+            runtime_version_marker: object = None
+            # The read schema_version is preserved as-is (it genuinely was
+            # 1) — migration to schema 2 happens the next time this
+            # configuration is serialized, via ``to_mapping()``, not by
+            # silently rewriting what was actually read.
+            effective_schema_version: object = schema_version
+        elif schema_version == 2:
+            missing_v2_fields = _SCHEMA_2_ONLY_FIELDS - present_keys
+            if missing_v2_fields:
+                raise LocalConfigValidationError(
+                    "schema_version 2 configuration is missing required "
+                    f"fields: {sorted(missing_v2_fields)}."
+                )
+            runtime_id = data["runtime_id"]
+            runtime_version_marker = data["runtime_version_marker"]
+            effective_schema_version = schema_version
+        else:
+            # An unsupported/malformed schema_version: fall through to
+            # LocalRuntimeModelConfig's own __post_init__ check so it
+            # raises one clear "unsupported schema_version" error instead
+            # of this method guessing at a field set that doesn't apply.
+            runtime_id = data.get("runtime_id")
+            runtime_version_marker = data.get("runtime_version_marker")
+            effective_schema_version = schema_version
+
         return LocalRuntimeModelConfig(
             executable_path=data["executable_path"],
             model_path=data["model_path"],
@@ -234,7 +317,7 @@ class LocalRuntimeModelConfig:
             threads=data.get("threads"),
             timeout_seconds=data.get("timeout_seconds"),
             db_path=data.get("db_path"),
-            runtime_id=data.get("runtime_id"),
-            runtime_version_marker=data.get("runtime_version_marker"),
-            schema_version=data["schema_version"],
+            runtime_id=runtime_id,
+            runtime_version_marker=runtime_version_marker,
+            schema_version=effective_schema_version,
         )

@@ -11,6 +11,8 @@ failed re-provision attempt never destroys a previously verified install.
 
 import hashlib
 import io
+import json
+import os
 import tarfile
 from pathlib import Path, PurePosixPath
 
@@ -502,6 +504,91 @@ def test_tampered_supporting_library_detected_even_when_executable_intact(
 
     lib_path = install.install_dir / "pkg" / "lib.so"
     lib_path.write_bytes(b"TAMPERED")
+
+    with pytest.raises(CorruptManagedInstallError):
+        verify_managed_install(install.install_dir)
+
+
+def test_tampered_file_with_rewritten_receipt_still_rejected_against_manifest(
+    tmp_path: Path,
+) -> None:
+    """A receipt that is *internally* self-consistent (its own
+    member_checksums entry matches the tampered file on disk, because the
+    attacker rewrote both together) must still be rejected: verification
+    against ``expected_artifact`` compares the receipt's member map to the
+    manifest's static, version-controlled checksums, not merely re-hashing
+    installed files against whatever the receipt currently claims."""
+    manifest, archive_bytes = _manifest_and_bytes(tmp_path)
+    artifact = manifest.artifacts[0]
+    runtime_dir = tmp_path / "runtime"
+    install = ensure_managed_runtime(
+        runtime_dir=runtime_dir,
+        downloader=_FakeDownloader(archive_bytes),
+        extractor=_FakeExtractor(),
+        manifest=manifest,
+        detected=_DETECTED,
+        executable_readiness_checker=_noop_checker,
+    )
+
+    lib_path = install.install_dir / "pkg" / "lib.so"
+    lib_path.write_bytes(b"TAMPERED")
+    tampered_sha256 = hashlib.sha256(b"TAMPERED").hexdigest()
+
+    receipt_path = install.install_dir / "receipt.json"
+    receipt_data = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt_data["member_checksums"] = [
+        [path, tampered_sha256 if path == "pkg/lib.so" else sha]
+        for path, sha in receipt_data["member_checksums"]
+    ]
+    if receipt_data["executable_relative_path"] == "pkg/lib.so":
+        receipt_data["executable_sha256"] = tampered_sha256
+    receipt_path.write_text(json.dumps(receipt_data), encoding="utf-8")
+
+    # Self-consistent (receipt matches the tampered file) but must still be
+    # rejected once compared against the manifest's real checksums.
+    with pytest.raises(CorruptManagedInstallError):
+        verify_managed_install(install.install_dir, expected_artifact=artifact)
+
+
+def test_symlink_at_declared_supporting_library_path_rejected(tmp_path: Path) -> None:
+    manifest, archive_bytes = _manifest_and_bytes(tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    install = ensure_managed_runtime(
+        runtime_dir=runtime_dir,
+        downloader=_FakeDownloader(archive_bytes),
+        extractor=_FakeExtractor(),
+        manifest=manifest,
+        detected=_DETECTED,
+        executable_readiness_checker=_noop_checker,
+    )
+
+    lib_path = install.install_dir / "pkg" / "lib.so"
+    real_target = tmp_path / "real-lib-target"
+    real_target.write_bytes(b"shared library bytes")  # matches the real checksum
+    lib_path.unlink()
+    os.symlink(real_target, lib_path)
+
+    with pytest.raises(CorruptManagedInstallError):
+        verify_managed_install(install.install_dir)
+
+
+def test_symlink_at_declared_executable_path_rejected(tmp_path: Path) -> None:
+    manifest, archive_bytes = _manifest_and_bytes(tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    install = ensure_managed_runtime(
+        runtime_dir=runtime_dir,
+        downloader=_FakeDownloader(archive_bytes),
+        extractor=_FakeExtractor(),
+        manifest=manifest,
+        detected=_DETECTED,
+        executable_readiness_checker=_noop_checker,
+    )
+
+    tool_path = install.install_dir / "pkg" / "tool"
+    real_target = tmp_path / "real-tool-target"
+    real_target.write_bytes(b"#!/bin/sh\necho ok\n")  # matches the real checksum
+    tool_path.unlink()
+    os.symlink(real_target, tool_path)
 
     with pytest.raises(CorruptManagedInstallError):
         verify_managed_install(install.install_dir)
