@@ -1,5 +1,12 @@
 """Replaceable domain protocols and contracts for econ-paper-cli."""
 
+from econ_paper_cli.protocols.config import (
+    ConfigBackend,
+    ConfigError,
+    ConfigIncompatibleSchemaError,
+    ConfigMalformedError,
+    ConfigPersistenceError,
+)
 from econ_paper_cli.protocols.generation import (
     AbstentionReason,
     FindingKind,
@@ -44,6 +51,11 @@ from econ_paper_cli.protocols.storage import (
 __all__ = [
     "AbstentionReason",
     "ChecksumConflictError",
+    "ConfigBackend",
+    "ConfigError",
+    "ConfigIncompatibleSchemaError",
+    "ConfigMalformedError",
+    "ConfigPersistenceError",
     "FindingKind",
     "GenerationContractError",
     "GenerationRequest",

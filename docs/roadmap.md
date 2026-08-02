@@ -161,7 +161,10 @@ Not yet implemented:
 ## 10. End-to-end MVP orchestration
 
 - One-shot cited chat over the local early-section library (implemented)
-- Connect setup, status, update, follow-up, and evidence inspection
+- Durable, versioned local runtime/model configuration; `econpapers setup` and
+  `econpapers status`; optional `analyze`/`chat` runtime/model arguments
+  resolved from configuration when omitted (Issue 54 implemented)
+- Connect update, follow-up, and evidence inspection
 - Connect the approved library, ingestion, retrieval, and generation adapters
 - Verify offline operation, privacy, restart safety, and cross-platform behavior
 - Document artifact licenses and release procedures

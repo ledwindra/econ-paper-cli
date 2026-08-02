@@ -60,31 +60,56 @@ python -m pip install -e .
 The package currently exposes these commands:
 
 ```bash
-econpapers setup
-econpapers chat
+econpapers setup --llama-cpp-path EXECUTABLE_PATH --model-path MODEL_PATH --model-id MODEL_ID --model-bytes BYTES --model-checksum SHA256 [--threads N] [--timeout SECONDS] [--db-path DB_PATH]
 econpapers status
+econpapers chat QUESTION
 econpapers update
-econpapers analyze TARGET_PATH --llama-cpp-path EXECUTABLE_PATH --model-path MODEL_PATH --model-id MODEL_ID --model-bytes BYTES --model-checksum SHA256 [--max-passage-characters 1200]
+econpapers analyze TARGET_PATH [--max-passage-characters 1200]
 ```
 
-The first four commands are deterministic placeholders. `econpapers analyze`
-is an offline command for one local PDF or a directory of PDFs. It recursively
+`econpapers update` remains a deterministic placeholder.
+
+`econpapers setup` validates a proposed local `llama.cpp` runtime and GGUF
+model (path, expected size, expected SHA-256 checksum, and optional thread
+count, timeout, and database-path defaults), verifies local readiness, and —
+only on success — durably and atomically persists that configuration to a
+canonical per-user configuration file. Runtime, model, and database paths are
+canonicalized to absolute paths before they become durable, so a relative
+path validated in one working directory resolves the same way from any later
+directory. It downloads nothing and writes nothing on validation or
+readiness failure.
+
+`econpapers status` is a read-only report of whether durable configuration
+exists and is valid, runtime/model readiness, the resolved database path,
+schema version, and stored paper/passage counts. It never creates or
+modifies the configuration file or database.
+
+`econpapers analyze` and `econpapers chat` accept the same five runtime/model
+flags (`--llama-cpp-path`, `--model-path`, `--model-id`, `--model-bytes`,
+`--model-checksum`) as optional overrides for that invocation only. Omitting
+all five falls back to the durable configuration written by `econpapers
+setup`, resolved once per invocation and never mutated; supplying some but
+not all five is a typed configuration error, since a partial override can
+never reconstruct one coherent, previously verified identity. This
+resolution happens from any working directory. `econpapers analyze` is an
+offline command for one local PDF or a directory of PDFs. It recursively
 processes unique PDF content in deterministic path order, persists structured
 research-question evidence and provenance to SQLite, and resumes exact prior
-analyses when the checksum and canonical settings match. The runtime and GGUF
-model must already exist at the explicit paths; the command downloads nothing
-and never modifies source PDFs. Eligible analyses also persist deterministic
-Abstract/Introduction Markdown, passages, and exact source-fragment provenance.
-Exact analysis-plus-library reuse and library-only backfill are decided before
-the local model adapter is initialized, so those paths do not need accessible
-model artifacts or invoke generation.
+analyses when the checksum and canonical settings match. The command
+downloads nothing and never modifies source PDFs. Eligible analyses also
+persist deterministic Abstract/Introduction Markdown, passages, and exact
+source-fragment provenance. Exact analysis-plus-library reuse and
+library-only backfill are decided before the local model adapter is
+initialized, so those paths — and the `chat` `EMPTY_LIBRARY`/`NO_MATCHES`
+outcomes — do not need runtime/model configuration or accessible model
+artifacts.
 
 ### Intended future workflow
 
 ```bash
-econpapers setup
+econpapers setup --llama-cpp-path EXECUTABLE_PATH --model-path MODEL_PATH --model-id MODEL_ID --model-bytes BYTES --model-checksum SHA256
 econpapers ingest /path/to/papers
-econpapers chat
+econpapers chat "What is the literature on X?"
 ```
 
 The `ingest` example illustrates the intended ordinary-user workflow. Its
@@ -114,8 +139,10 @@ for the existing backend-independent `Generator` protocol. It uses explicit
 local paths, offline mode, a versioned evidence-only prompt, a fingerprinted
 GBNF constraint derived from the authoritative JSON schema, authoritative
 citation resolution, and final response validation. It does not download a
-runtime or model. The `analyze` command constructs this adapter only from the
-user's explicit local runtime and model paths.
+runtime or model. The `analyze` and `chat` commands construct this adapter
+only from local runtime and model paths — either explicit per-invocation CLI
+overrides or durable configuration written by `econpapers setup` — and only
+when a local generator is actually required.
 
 `llama.cpp` b10199 is pinned for adapter compatibility testing and the initial
 Issue 13 comparison, not as a permanent product runtime. Three model artifacts
@@ -194,6 +221,43 @@ The storage layer is implemented as a database-independent protocol (`StorageBac
 - **Versioning & migrations:** schema version tracking with forward migrations (`schema_migrations` table) and transaction rollback on migration failure.
 - **Early-section records:** schema version 4 stores generated Abstract/Introduction Markdown, stable passages, conversion identity, and ordered page-local provenance fragments without writing external Markdown files. `econpapers analyze` now populates this representation, reuses exact compatible records, and backfills legacy analysis-only records without rerunning research-question generation; see [`docs/early-section-library-storage.md`](docs/early-section-library-storage.md).
 - **Cross-platform paths:** automatic data directory and database path resolution for Windows (`%LOCALAPPDATA%`), macOS (`~/Library/Application Support`), and Linux (`${XDG_DATA_HOME:-~/.local/share}`), with `ECONPAPERS_LIBRARY_DIR` environment variable override.
+
+### Local runtime/model configuration (Issue 54 implemented)
+
+A separate, database-independent configuration boundary makes `analyze` and
+`chat` reusable across invocations without repeating runtime/model arguments:
+
+- **Domain contract:** immutable, versioned `LocalRuntimeModelConfig` (schema
+  version 1) — runtime executable path, model path, model id, expected model
+  size and SHA-256 checksum, and optional thread count, timeout, and
+  database-path defaults. Strictly validated; unknown or missing fields and
+  invalid values are rejected with actionable errors.
+- **Replaceable storage:** `ConfigBackend` protocol with a standard-library
+  JSON adapter (`JSONConfigStorage`) that writes atomically (temporary file,
+  flush, `os.replace`) with private file permissions where supported. A
+  failed write never destroys the previously durable configuration.
+- **Cross-platform, independent location:** automatic configuration directory
+  resolution for Windows (`%LOCALAPPDATA%\econpapers\config`), macOS
+  (`~/Library/Application Support/econpapers/config`), and Linux
+  (`${XDG_CONFIG_HOME:-~/.config}/econpapers`), with an
+  `ECONPAPERS_CONFIG_DIR` environment variable override independent of
+  `ECONPAPERS_LIBRARY_DIR`.
+- **Resolution precedence:** explicit CLI value, then durable configuration,
+  then a documented default; the five runtime/model identity fields resolve
+  as one unit so a partial CLI override can never silently combine with an
+  unrelated stored value. A partial override is rejected immediately, before
+  `analyze`/`chat` even determine whether a generator will be needed.
+- **Working-directory independence:** `econpapers setup` canonicalizes the
+  runtime, model, and configured database paths to absolute paths before
+  persisting them, so a relative path validated in one directory resolves
+  identically from any later invocation directory.
+- **Model-independence preserved:** durable configuration is loaded lazily
+  and at most once per invocation, and only when actually needed — for a
+  database-path fallback, or inside generator construction. Exact
+  analysis-plus-library reuse, generator-free library backfill, and the
+  `chat` `EMPTY_LIBRARY`/`NO_MATCHES` outcomes need neither configuration nor
+  accessible runtime/model artifacts, even when an explicit `--db-path` is
+  combined with a fully-specified runtime/model override.
 
 ## Repository direction
 

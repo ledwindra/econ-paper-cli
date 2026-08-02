@@ -368,5 +368,80 @@ failures. The workflow does not write Markdown files or persist a retrieval
 index. See
 [`docs/early-section-library-storage.md`](early-section-library-storage.md).
 
+Issue 54 adds a durable, versioned local runtime/model configuration boundary
+so `analyze` and `chat` can be run from any working directory without
+repeating explicit runtime/model arguments after one successful setup. The
+immutable `econ_paper_cli.domain.local_config.LocalRuntimeModelConfig`
+(schema version 1) captures exactly the reusable identity: runtime executable
+path, model path, model id, expected model size and SHA-256 checksum, and
+optional threads, timeout, and database-path defaults. It excludes fixed
+reproducibility constants that remain owned by the concrete generation
+adapter. `econ_paper_cli.protocols.config.ConfigBackend` is the replaceable
+storage protocol; `econ_paper_cli.adapters.config_storage.JSONConfigStorage`
+is the standard-library JSON adapter, writing atomically (temporary file,
+flush, `os.replace`) to a canonical per-user configuration location
+independent of the SQLite data directory
+(`econ_paper_cli.adapters.storage_paths.get_default_config_dir`, with an
+`ECONPAPERS_CONFIG_DIR` override), using private file permissions where
+supported. A failed write never destroys previously durable configuration.
+Runtime, model, and configured database paths are canonicalized to absolute
+paths (`Path.resolve()`) at the point they become durable, in
+`run_setup_command`, so a relative path validated in one working directory
+resolves identically from any later invocation directory; the domain
+constructor itself performs no resolution, preserving pure validation there.
+`ConfigBackend.exists()` reports whether a configuration file is present,
+independent of `load()`'s parse/validation outcome, so a malformed file is
+distinguishable from a missing one.
+
+`econpapers setup` (`econ_paper_cli.services.setup_command`) validates a
+proposed configuration and verifies local runtime/model readiness through the
+existing `LlamaCppGenerator.check_readiness()` boundary before persisting;
+nothing is written on validation or readiness failure. It accepts an optional
+`--db-path` default alongside the runtime/model arguments. `econpapers status`
+(`econ_paper_cli.services.status_command`) is a strictly read-only report of
+configuration presence, validity, runtime/model readiness, resolved database
+path, schema version, and durable paper/passage counts; it never creates or
+migrates a database or configuration file.
+
+`econ_paper_cli.services.config_resolution.resolve_runtime_model_config`
+implements the CLI-over-durable-configuration precedence: an explicit CLI
+value wins, otherwise durable configuration, otherwise a documented default
+(a 300-second generation timeout) or a typed `ConfigResolutionError`. The five
+runtime/model identity fields (executable path, model path, model id,
+expected size, expected checksum) are resolved as one unit — a CLI invocation
+supplies all five together or none of them, since a durable configuration is
+already one coherent, previously verified identity that partial CLI mixing
+could silently break. `validate_identity_override_shape` performs this
+partial-override check independent of whether durable configuration exists or
+a generator will ever be constructed, and `analyze`/`chat` call it eagerly, so
+a malformed partial override is rejected immediately rather than only on a
+path that happens to build a generator. `analyze` and `chat` now accept these
+five arguments as optional.
+
+Durable configuration is read through `config_resolution.LazyConfigLoader`,
+which loads a `ConfigBackend` at most once per invocation and caches either
+the resulting value or the raised `ConfigError`, so a later access never
+re-triggers a load. `analyze` and `chat` only force a load (`.get()`) when
+actually needed — for a database-path fallback (skipped entirely when
+`--db-path` is explicit), or inside generator construction when the CLI
+identity is incomplete. Existing lazy-model-resolution guarantees are
+preserved exactly: exact analysis-plus-library reuse, generator-free library
+backfill, and the `EMPTY_LIBRARY`/`NO_MATCHES` chat outcomes still require
+neither configuration nor accessible runtime/model artifacts even when
+combined with an explicit `--db-path` and a fully-specified runtime/model
+override, because no code path they can take ever calls
+`LazyConfigLoader.get()`.
+
+When the CLI identity is fully specified, generator construction still calls
+`LazyConfigLoader.peek()` — never `.get()` — so a config load that already
+happened for an unrelated reason (resolving `--db-path`) still supplies its
+optional `threads`/`timeout_seconds` defaults per the documented CLI > config
+> default precedence, without that same identity-complete path ever forcing
+a load merely to check them. `peek()` returns `None` when nothing has been
+loaded yet, so a fully-specified identity combined with an explicit
+`--db-path` (which never triggers `.get()`) correctly falls back to the
+command's own documented defaults rather than silently reading durable
+configuration it was never supposed to touch.
+
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.

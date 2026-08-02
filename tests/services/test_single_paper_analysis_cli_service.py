@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 
 from econ_paper_cli.adapters.bm25 import BM25Retriever
-from econ_paper_cli.adapters.llama_cpp import ProcessResult
+from econ_paper_cli.adapters.config_storage import JSONConfigStorage
+from econ_paper_cli.adapters.llama_cpp import (
+    LlamaCppConfig,
+    LlamaCppReadinessError,
+    ProcessResult,
+)
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.domain import (
     PDFDocumentMetadata,
@@ -16,6 +21,7 @@ from econ_paper_cli.domain import (
     SinglePaperAnalysisQuestionRecord,
     SinglePaperAnalysisRecord,
 )
+from econ_paper_cli.domain.local_config import LocalRuntimeModelConfig
 from econ_paper_cli.domain.pdf_extraction import ExtractedPDFPage
 from econ_paper_cli.protocols.generation import (
     AbstentionReason,
@@ -806,7 +812,7 @@ def test_command_execution_uses_default_db_path(
     pdf_path = _create_valid_pdf_file(tmp_path)
     mock_default_db = tmp_path / "mock_default.db"
     monkeypatch.setattr(
-        "econ_paper_cli.services.single_paper_analysis_cli.get_default_db_path",
+        "econ_paper_cli.services.config_resolution.get_default_db_path",
         lambda: mock_default_db,
     )
 
@@ -1327,3 +1333,547 @@ def test_coordinated_write_failure_rolls_back_analysis_and_library(
     assert f"injected {table} failure" in capsys.readouterr().err
     assert storage.list_single_paper_analyses() == ()
     assert storage.list_early_section_records() == ()
+
+
+# --- Issue 54: durable runtime/model configuration resolution -------------
+
+
+def test_exact_reuse_does_not_require_durable_configuration(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Reuse must succeed with no CLI identity flags and no config file present."""
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    db_path = tmp_path / "no-config-reuse.db"
+    full_options = _make_options(pdf_path, tmp_path, db_path=db_path)
+    storage = SQLiteStorage(db_path)
+    storage.initialize()
+    response = _make_success_response_json(
+        "Abstract\nWe evaluate trade policy.", "We evaluate trade policy."
+    )
+    assert (
+        run_single_paper_analysis_command(
+            full_options,
+            extractor=FakePDFExtractor(),
+            generator=FakeGenerator(response_text=response),
+            storage=storage,
+        )
+        == CLIExitCode.SUCCESS
+    )
+
+    no_identity_options = AnalyzeCommandOptions(
+        target_path=pdf_path,
+        db_path=db_path,
+    )
+    missing_config = JSONConfigStorage(tmp_path / "no-such-config" / "config.json")
+    capsys.readouterr()
+
+    code = run_single_paper_analysis_command(
+        no_identity_options,
+        extractor=FakePDFExtractor(),
+        storage=storage,
+        config_backend=missing_config,
+    )
+
+    assert code == CLIExitCode.SUCCESS
+    assert "Outcome: reused" in capsys.readouterr().out
+    assert missing_config.load() is None
+
+
+def test_new_analysis_resolves_identity_from_durable_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A new analysis with no CLI identity flags resolves runtime/model identity
+    from durable configuration, and those exact values reach the generator."""
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    exe_file = tmp_path / "configured-llama-cli"
+    exe_file.write_bytes(b"dummy_exe_bytes")
+    exe_file.chmod(exe_file.stat().st_mode | 0o111)
+    model_content = b"configured_model_bytes"
+    model_file = tmp_path / "configured-model.gguf"
+    model_file.write_bytes(model_content)
+    model_sha256 = hashlib.sha256(model_content).hexdigest()
+
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(
+        LocalRuntimeModelConfig(
+            executable_path=exe_file,
+            model_path=model_file,
+            model_id="configured-model",
+            model_bytes=len(model_content),
+            model_checksum=model_sha256,
+        )
+    )
+
+    options = AnalyzeCommandOptions(
+        target_path=pdf_path,
+        db_path=tmp_path / "config-resolved.db",
+    )
+
+    captured_commands: list[tuple[str, ...]] = []
+
+    def fake_run(
+        self_runner: object,
+        command: tuple[str, ...],
+        *,
+        timeout_seconds: float,
+        max_output_bytes: int,
+        cancellation_requested: object,
+        environment: object,
+    ) -> ProcessResult:
+        captured_commands.append(tuple(command))
+        return ProcessResult(returncode=0, stdout="unexpected-version", stderr="")
+
+    monkeypatch.setattr(
+        "econ_paper_cli.adapters.llama_cpp.SubprocessRunner.run",
+        fake_run,
+    )
+
+    code = run_single_paper_analysis_command(
+        options,
+        extractor=FakePDFExtractor(),
+        config_backend=config_backend,
+    )
+
+    assert code == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    assert len(captured_commands) == 1
+    assert captured_commands[0][0] == str(exe_file)
+
+
+def test_new_analysis_partial_cli_override_is_typed_config_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(
+        LocalRuntimeModelConfig(
+            executable_path=tmp_path / "exe",
+            model_path=tmp_path / "model.gguf",
+            model_id="configured-model",
+            model_bytes=10,
+            model_checksum="a" * 64,
+        )
+    )
+    options = AnalyzeCommandOptions(
+        target_path=pdf_path,
+        db_path=tmp_path / "partial-override.db",
+        model_id="cli-only-model-id",
+    )
+
+    code = run_single_paper_analysis_command(
+        options, extractor=FakePDFExtractor(), config_backend=config_backend
+    )
+
+    assert code == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    assert "Partial runtime/model override" in capsys.readouterr().err
+
+
+def test_new_analysis_without_cli_or_config_is_typed_config_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    options = AnalyzeCommandOptions(
+        target_path=pdf_path, db_path=tmp_path / "no-config-at-all.db"
+    )
+    missing_config = JSONConfigStorage(tmp_path / "absent" / "config.json")
+
+    code = run_single_paper_analysis_command(
+        options, extractor=FakePDFExtractor(), config_backend=missing_config
+    )
+
+    assert code == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    assert "No runtime/model configuration is available" in capsys.readouterr().err
+
+
+def test_new_analysis_full_cli_override_wins_over_durable_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(
+        LocalRuntimeModelConfig(
+            executable_path=tmp_path / "config-exe",
+            model_path=tmp_path / "config-model.gguf",
+            model_id="config-model",
+            model_bytes=10,
+            model_checksum="a" * 64,
+        )
+    )
+    cli_exe = tmp_path / "cli-exe"
+    cli_exe.write_bytes(b"dummy")
+    cli_exe.chmod(cli_exe.stat().st_mode | 0o111)
+    cli_model_content = b"cli_override_model_bytes"
+    cli_model = tmp_path / "cli-model.gguf"
+    cli_model.write_bytes(cli_model_content)
+    options = AnalyzeCommandOptions(
+        target_path=pdf_path,
+        db_path=tmp_path / "full-override.db",
+        executable_path=cli_exe,
+        model_path=cli_model,
+        model_id="cli-model",
+        model_bytes=len(cli_model_content),
+        model_checksum=hashlib.sha256(cli_model_content).hexdigest(),
+    )
+
+    captured_commands: list[tuple[str, ...]] = []
+
+    def fake_run(
+        self_runner: object,
+        command: tuple[str, ...],
+        *,
+        timeout_seconds: float,
+        max_output_bytes: int,
+        cancellation_requested: object,
+        environment: object,
+    ) -> ProcessResult:
+        captured_commands.append(tuple(command))
+        return ProcessResult(returncode=0, stdout="unexpected-version", stderr="")
+
+    monkeypatch.setattr(
+        "econ_paper_cli.adapters.llama_cpp.SubprocessRunner.run",
+        fake_run,
+    )
+
+    run_single_paper_analysis_command(
+        options, extractor=FakePDFExtractor(), config_backend=config_backend
+    )
+
+    assert len(captured_commands) == 1
+    assert captured_commands[0][0] == str(cli_exe)
+
+
+class RaisingConfigBackend:
+    """Config backend double that fails the test if load() is ever called."""
+
+    @property
+    def config_path(self) -> Path:
+        return Path("/unused/config.json")
+
+    def exists(self) -> bool:
+        return False
+
+    def load(self) -> LocalRuntimeModelConfig | None:
+        raise AssertionError("config load() must not be called on this path")
+
+    def save(self, config: LocalRuntimeModelConfig) -> None:
+        raise AssertionError("save() must not be called on this path")
+
+
+def test_exact_reuse_never_calls_config_load(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Exact reuse with an explicit --db-path must never touch durable config,
+    even if the configured backend would fail if load() were called."""
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    db_path = tmp_path / "no-config-reuse.db"
+    full_options = _make_options(pdf_path, tmp_path, db_path=db_path)
+    storage = SQLiteStorage(db_path)
+    storage.initialize()
+    response = _make_success_response_json(
+        "Abstract\nWe evaluate trade policy.", "We evaluate trade policy."
+    )
+    assert (
+        run_single_paper_analysis_command(
+            full_options,
+            extractor=FakePDFExtractor(),
+            generator=FakeGenerator(response_text=response),
+            storage=storage,
+        )
+        == CLIExitCode.SUCCESS
+    )
+
+    no_identity_options = AnalyzeCommandOptions(target_path=pdf_path, db_path=db_path)
+    capsys.readouterr()
+
+    code = run_single_paper_analysis_command(
+        no_identity_options,
+        extractor=FakePDFExtractor(),
+        storage=storage,
+        config_backend=RaisingConfigBackend(),
+    )
+
+    assert code == CLIExitCode.SUCCESS
+    assert "Outcome: reused" in capsys.readouterr().out
+
+
+def test_backfill_never_calls_config_load(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Generator-free library backfill with an explicit --db-path must never
+    touch durable config."""
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    db_path = tmp_path / "no-config-backfill.db"
+    full_options = _make_options(pdf_path, tmp_path, db_path=db_path)
+    storage = SQLiteStorage(db_path)
+    storage.initialize()
+    response = _make_success_response_json(
+        "Abstract\nWe evaluate trade policy.", "We evaluate trade policy."
+    )
+    assert (
+        run_single_paper_analysis_command(
+            full_options,
+            extractor=FakePDFExtractor(),
+            generator=FakeGenerator(response_text=response),
+            storage=storage,
+        )
+        == CLIExitCode.SUCCESS
+    )
+    paper_id = storage.list_early_section_records()[0].paper.paper_id
+    assert storage.delete_early_section_record(paper_id)
+
+    no_identity_options = AnalyzeCommandOptions(target_path=pdf_path, db_path=db_path)
+    capsys.readouterr()
+
+    code = run_single_paper_analysis_command(
+        no_identity_options,
+        extractor=FakePDFExtractor(),
+        storage=storage,
+        config_backend=RaisingConfigBackend(),
+    )
+
+    assert code == CLIExitCode.SUCCESS
+    assert storage.get_early_section_record(paper_id) is not None
+    assert "Outcome: stored" in capsys.readouterr().out
+
+
+def test_fully_specified_cli_override_with_explicit_db_path_never_calls_config_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A brand-new analysis with a fully-specified CLI override and an explicit
+    --db-path must never touch durable config, even during generator readiness."""
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    exe_file = tmp_path / "cli-exe"
+    exe_file.write_bytes(b"dummy")
+    exe_file.chmod(exe_file.stat().st_mode | 0o111)
+    model_content = b"cli_only_model_bytes"
+    model_file = tmp_path / "cli-model.gguf"
+    model_file.write_bytes(model_content)
+    options = AnalyzeCommandOptions(
+        target_path=pdf_path,
+        db_path=tmp_path / "cli-only.db",
+        executable_path=exe_file,
+        model_path=model_file,
+        model_id="cli-only-model",
+        model_bytes=len(model_content),
+        model_checksum=hashlib.sha256(model_content).hexdigest(),
+    )
+
+    captured_commands: list[tuple[str, ...]] = []
+
+    def fake_run(
+        self_runner: object,
+        command: tuple[str, ...],
+        *,
+        timeout_seconds: float,
+        max_output_bytes: int,
+        cancellation_requested: object,
+        environment: object,
+    ) -> ProcessResult:
+        captured_commands.append(tuple(command))
+        return ProcessResult(returncode=0, stdout="unexpected-version", stderr="")
+
+    monkeypatch.setattr(
+        "econ_paper_cli.adapters.llama_cpp.SubprocessRunner.run",
+        fake_run,
+    )
+
+    run_single_paper_analysis_command(
+        options,
+        extractor=FakePDFExtractor(),
+        config_backend=RaisingConfigBackend(),
+    )
+
+    assert len(captured_commands) == 1
+    assert captured_commands[0][0] == str(exe_file)
+
+
+def test_partial_override_on_reuse_only_path_is_rejected_eagerly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A partial CLI identity override must be rejected before a reuse-only
+    run ever decides whether it would need a generator."""
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    db_path = tmp_path / "partial-on-reuse.db"
+    full_options = _make_options(pdf_path, tmp_path, db_path=db_path)
+    storage = SQLiteStorage(db_path)
+    storage.initialize()
+    response = _make_success_response_json(
+        "Abstract\nWe evaluate trade policy.", "We evaluate trade policy."
+    )
+    assert (
+        run_single_paper_analysis_command(
+            full_options,
+            extractor=FakePDFExtractor(),
+            generator=FakeGenerator(response_text=response),
+            storage=storage,
+        )
+        == CLIExitCode.SUCCESS
+    )
+
+    partial_options = AnalyzeCommandOptions(
+        target_path=pdf_path, db_path=db_path, model_id="cli-only-model-id"
+    )
+    capsys.readouterr()
+
+    code = run_single_paper_analysis_command(
+        partial_options,
+        extractor=FakePDFExtractor(),
+        storage=storage,
+        config_backend=RaisingConfigBackend(),
+    )
+
+    assert code == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    assert "Partial runtime/model override" in capsys.readouterr().err
+
+
+class _ConfigCapturingGenerator:
+    """LlamaCppGenerator double that records its config and stops before any
+    subprocess or extraction work, to isolate resolution behavior."""
+
+    captured_configs: list[LlamaCppConfig] = []
+
+    def __init__(self, config: LlamaCppConfig) -> None:
+        type(self).captured_configs.append(config)
+
+    def check_readiness(self) -> None:
+        raise LlamaCppReadinessError("stop after capturing config")
+
+
+def test_full_cli_identity_honors_durable_threads_and_timeout_when_config_loaded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fully-specified CLI identity must still pick up durable threads/timeout
+    when a config load already happened for another reason (db-path fallback)."""
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(
+        LocalRuntimeModelConfig(
+            executable_path=tmp_path / "config-exe",
+            model_path=tmp_path / "config-model.gguf",
+            model_id="config-model",
+            model_bytes=10,
+            model_checksum="a" * 64,
+            threads=8,
+            timeout_seconds=60.0,
+            db_path=tmp_path / "resolved-from-config.db",
+        )
+    )
+    cli_exe = tmp_path / "cli-exe"
+    cli_exe.write_bytes(b"dummy")
+    cli_model_content = b"cli_override_model_bytes"
+    cli_model = tmp_path / "cli-model.gguf"
+    cli_model.write_bytes(cli_model_content)
+    options = AnalyzeCommandOptions(
+        target_path=pdf_path,
+        # db_path intentionally omitted: resolving it forces a config load.
+        executable_path=cli_exe,
+        model_path=cli_model,
+        model_id="cli-model",
+        model_bytes=len(cli_model_content),
+        model_checksum=hashlib.sha256(cli_model_content).hexdigest(),
+    )
+
+    _ConfigCapturingGenerator.captured_configs = []
+    monkeypatch.setattr(
+        "econ_paper_cli.services.single_paper_analysis_cli.LlamaCppGenerator",
+        _ConfigCapturingGenerator,
+    )
+
+    run_single_paper_analysis_command(
+        options, extractor=FakePDFExtractor(), config_backend=config_backend
+    )
+
+    assert len(_ConfigCapturingGenerator.captured_configs) == 1
+    captured = _ConfigCapturingGenerator.captured_configs[0]
+    assert captured.threads == 8
+    assert captured.timeout_seconds == 60.0
+
+
+def test_explicit_cli_threads_and_timeout_override_durable_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(
+        LocalRuntimeModelConfig(
+            executable_path=tmp_path / "config-exe",
+            model_path=tmp_path / "config-model.gguf",
+            model_id="config-model",
+            model_bytes=10,
+            model_checksum="a" * 64,
+            threads=8,
+            timeout_seconds=60.0,
+            db_path=tmp_path / "resolved-from-config.db",
+        )
+    )
+    cli_exe = tmp_path / "cli-exe"
+    cli_exe.write_bytes(b"dummy")
+    cli_model_content = b"cli_override_model_bytes"
+    cli_model = tmp_path / "cli-model.gguf"
+    cli_model.write_bytes(cli_model_content)
+    options = AnalyzeCommandOptions(
+        target_path=pdf_path,
+        executable_path=cli_exe,
+        model_path=cli_model,
+        model_id="cli-model",
+        model_bytes=len(cli_model_content),
+        model_checksum=hashlib.sha256(cli_model_content).hexdigest(),
+        threads=2,
+        timeout=15.0,
+    )
+
+    _ConfigCapturingGenerator.captured_configs = []
+    monkeypatch.setattr(
+        "econ_paper_cli.services.single_paper_analysis_cli.LlamaCppGenerator",
+        _ConfigCapturingGenerator,
+    )
+
+    run_single_paper_analysis_command(
+        options, extractor=FakePDFExtractor(), config_backend=config_backend
+    )
+
+    assert len(_ConfigCapturingGenerator.captured_configs) == 1
+    captured = _ConfigCapturingGenerator.captured_configs[0]
+    assert captured.threads == 2
+    assert captured.timeout_seconds == 15.0
+
+
+def test_no_config_full_cli_identity_retains_documented_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A full CLI identity plus an explicit --db-path never loads config at
+    all, so threads/timeout fall back to their documented defaults."""
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    cli_exe = tmp_path / "cli-exe"
+    cli_exe.write_bytes(b"dummy")
+    cli_model_content = b"cli_only_model_bytes"
+    cli_model = tmp_path / "cli-model.gguf"
+    cli_model.write_bytes(cli_model_content)
+    options = AnalyzeCommandOptions(
+        target_path=pdf_path,
+        db_path=tmp_path / "no-config.db",
+        executable_path=cli_exe,
+        model_path=cli_model,
+        model_id="cli-model",
+        model_bytes=len(cli_model_content),
+        model_checksum=hashlib.sha256(cli_model_content).hexdigest(),
+    )
+
+    _ConfigCapturingGenerator.captured_configs = []
+    monkeypatch.setattr(
+        "econ_paper_cli.services.single_paper_analysis_cli.LlamaCppGenerator",
+        _ConfigCapturingGenerator,
+    )
+
+    run_single_paper_analysis_command(
+        options,
+        extractor=FakePDFExtractor(),
+        config_backend=RaisingConfigBackend(),
+    )
+
+    assert len(_ConfigCapturingGenerator.captured_configs) == 1
+    captured = _ConfigCapturingGenerator.captured_configs[0]
+    assert captured.threads is None
+    assert captured.timeout_seconds == 300.0

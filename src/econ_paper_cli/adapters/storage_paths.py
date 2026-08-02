@@ -62,3 +62,67 @@ def get_default_db_path(
     return (
         get_default_storage_dir(app_name=app_name, env=env, system=system) / db_filename
     )
+
+
+def get_default_config_dir(
+    app_name: str = DEFAULT_APP_NAME,
+    env: Mapping[str, str] | None = None,
+    system: str | None = None,
+) -> Path:
+    """Resolve the canonical cross-platform local-configuration directory.
+
+    Independent of the current working directory and of
+    ``get_default_storage_dir`` (the SQLite data directory): both live under
+    the same per-user application area on a given platform, but under
+    distinct subdirectories, so a config-only or data-only override never
+    silently affects the other.
+
+    Resolution order:
+    1. ECONPAPERS_CONFIG_DIR environment variable (if non-empty)
+    2. Windows: %LOCALAPPDATA% / app_name / "config" -> %APPDATA% / app_name / "config"
+       -> ~/AppData/Local/app_name/config
+    3. macOS: ~/Library/Application Support / app_name / "config"
+    4. Linux/POSIX: ${XDG_CONFIG_HOME:-~/.config} / app_name
+    """
+    env_map = os.environ if env is None else env
+    custom_config_dir = env_map.get("ECONPAPERS_CONFIG_DIR", "").strip()
+    if custom_config_dir:
+        return Path(custom_config_dir)
+
+    sys_name = platform.system() if system is None else system
+
+    if sys_name.lower() in ("windows", "win32"):
+        local_app_data = env_map.get("LOCALAPPDATA", "").strip()
+        if local_app_data:
+            return Path(local_app_data) / app_name / "config"
+        app_data = env_map.get("APPDATA", "").strip()
+        if app_data:
+            return Path(app_data) / app_name / "config"
+        return Path.home() / "AppData" / "Local" / app_name / "config"
+
+    if sys_name.lower() in ("darwin", "mac", "macos"):
+        return Path.home() / "Library" / "Application Support" / app_name / "config"
+
+    # Linux / Unix / POSIX default
+    xdg_config = env_map.get("XDG_CONFIG_HOME", "").strip()
+    if xdg_config:
+        return Path(xdg_config) / app_name
+
+    return Path.home() / ".config" / app_name
+
+
+def get_default_config_path(
+    config_filename: str = "config.json",
+    app_name: str = DEFAULT_APP_NAME,
+    env: Mapping[str, str] | None = None,
+    system: str | None = None,
+) -> Path:
+    """Resolve the canonical cross-platform local-configuration file path.
+
+    Resolution order:
+    1. get_default_config_dir(...) / config_filename (respecting ECONPAPERS_CONFIG_DIR if set)
+    """
+    return (
+        get_default_config_dir(app_name=app_name, env=env, system=system)
+        / config_filename
+    )

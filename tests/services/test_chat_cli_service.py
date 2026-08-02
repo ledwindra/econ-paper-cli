@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from econ_paper_cli.adapters import BM25Retriever
+from econ_paper_cli.adapters.config_storage import JSONConfigStorage
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.domain import (
     Citation,
@@ -20,6 +21,7 @@ from econ_paper_cli.domain import (
     PDFSectionKind,
     PDFSectionSpan,
 )
+from econ_paper_cli.domain.local_config import LocalRuntimeModelConfig
 from econ_paper_cli.protocols import (
     AbstentionReason,
     FindingKind,
@@ -30,8 +32,13 @@ from econ_paper_cli.protocols import (
 from econ_paper_cli.services.chat_command import (
     ChatCommandOptions,
     ChatTerminalOutcome,
+    _build_llama_cpp_generator,
     execute_chat_command,
     format_chat_command_output,
+)
+from econ_paper_cli.services.config_resolution import (
+    LazyConfigLoader,
+    RuntimeModelOverrides,
 )
 from econ_paper_cli.services.early_section_library import (
     project_early_section_library_record,
@@ -709,3 +716,345 @@ def test_unexpected_storage_exception_is_reported_as_failed() -> None:
     assert result.outcome is ChatTerminalOutcome.FAILED
     assert result.exit_code == 3
     assert "storage boom" in (result.error_message or "")
+
+
+# --- Issue 54: durable runtime/model configuration resolution -------------
+
+
+def _no_identity_options(
+    tmp_path: Path, question: str = "trade policy"
+) -> ChatCommandOptions:
+    return ChatCommandOptions(
+        question=question,
+        db_path=tmp_path / "chat.db",
+        top_k=2,
+    )
+
+
+def test_empty_library_does_not_require_configuration(tmp_path: Path) -> None:
+    storage = SQLiteStorage(tmp_path / "empty.db")
+    missing_config = JSONConfigStorage(tmp_path / "no-such-dir" / "config.json")
+
+    result = execute_chat_command(
+        _no_identity_options(tmp_path),
+        storage=storage,
+        config_backend=missing_config,
+    )
+
+    assert result.outcome is ChatTerminalOutcome.EMPTY_LIBRARY
+    assert missing_config.load() is None
+
+
+def test_no_matches_does_not_require_configuration(tmp_path: Path) -> None:
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(_record(tmp_path))
+    missing_config = JSONConfigStorage(tmp_path / "no-such-dir" / "config.json")
+
+    result = execute_chat_command(
+        _no_identity_options(tmp_path, question="astronomy and astrophysics"),
+        storage=storage,
+        config_backend=missing_config,
+    )
+
+    assert result.outcome is ChatTerminalOutcome.NO_MATCHES
+    assert missing_config.load() is None
+
+
+def test_matched_chat_resolves_generator_from_durable_config(tmp_path: Path) -> None:
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(_record(tmp_path))
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(
+        LocalRuntimeModelConfig(
+            executable_path=tmp_path / "configured-exe",
+            model_path=tmp_path / "configured-model.gguf",
+            model_id="configured-model",
+            model_bytes=42,
+            model_checksum="d" * 64,
+        )
+    )
+    generator = FakeGenerator(
+        GenerationResponse(
+            answer_text="Trade policy evidence supports a descriptive answer.",
+            citations=(),
+            generation_method="fake-generator",
+            abstained=True,
+            abstention_reason=AbstentionReason.INSUFFICIENT_EVIDENCE,
+            finding_kinds=(),
+        )
+    )
+
+    result = execute_chat_command(
+        _no_identity_options(tmp_path),
+        storage=storage,
+        config_backend=config_backend,
+        generator_provider=lambda _: generator,
+    )
+
+    assert result.outcome is ChatTerminalOutcome.ABSTAINED
+    assert generator.call_count == 1
+
+
+def test_partial_cli_override_returns_failed_with_typed_exit_code(
+    tmp_path: Path,
+) -> None:
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(_record(tmp_path))
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(
+        LocalRuntimeModelConfig(
+            executable_path=tmp_path / "configured-exe",
+            model_path=tmp_path / "configured-model.gguf",
+            model_id="configured-model",
+            model_bytes=42,
+            model_checksum="d" * 64,
+        )
+    )
+    options = ChatCommandOptions(
+        question="trade policy",
+        db_path=tmp_path / "chat.db",
+        model_id="cli-only-model-id",
+    )
+
+    result = execute_chat_command(
+        options,
+        storage=storage,
+        config_backend=config_backend,
+    )
+
+    assert result.outcome is ChatTerminalOutcome.FAILED
+    assert result.exit_code == 2
+    assert "Partial runtime/model override" in (result.error_message or "")
+
+
+def test_no_cli_and_no_config_returns_failed_with_typed_exit_code(
+    tmp_path: Path,
+) -> None:
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(_record(tmp_path))
+    missing_config = JSONConfigStorage(tmp_path / "absent" / "config.json")
+
+    result = execute_chat_command(
+        _no_identity_options(tmp_path),
+        storage=storage,
+        config_backend=missing_config,
+    )
+
+    assert result.outcome is ChatTerminalOutcome.FAILED
+    assert result.exit_code == 2
+    assert "No runtime/model configuration is available" in (result.error_message or "")
+
+
+def test_db_path_resolution_prefers_cli_then_config_then_default(
+    tmp_path: Path,
+) -> None:
+    config_db_path = tmp_path / "config-chosen.db"
+    storage = SQLiteStorage(config_db_path)
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(
+        LocalRuntimeModelConfig(
+            executable_path=tmp_path / "configured-exe",
+            model_path=tmp_path / "configured-model.gguf",
+            model_id="configured-model",
+            model_bytes=42,
+            model_checksum="d" * 64,
+            db_path=config_db_path,
+        )
+    )
+    options = ChatCommandOptions(question="trade policy")
+
+    result = execute_chat_command(
+        options,
+        storage=storage,
+        config_backend=config_backend,
+    )
+
+    assert result.db_path == config_db_path
+
+
+class RaisingConfigBackend:
+    """Config backend double that fails the test if load() is ever called."""
+
+    @property
+    def config_path(self) -> Path:
+        return Path("/unused/config.json")
+
+    def exists(self) -> bool:
+        return False
+
+    def load(self) -> LocalRuntimeModelConfig | None:
+        raise AssertionError("config load() must not be called on this path")
+
+    def save(self, config: LocalRuntimeModelConfig) -> None:
+        raise AssertionError("save() must not be called on this path")
+
+
+def test_empty_library_never_calls_config_load_with_explicit_db_path(
+    tmp_path: Path,
+) -> None:
+    storage = SQLiteStorage(tmp_path / "empty.db")
+
+    result = execute_chat_command(
+        ChatCommandOptions(question="trade policy", db_path=tmp_path / "empty.db"),
+        storage=storage,
+        config_backend=RaisingConfigBackend(),
+    )
+
+    assert result.outcome is ChatTerminalOutcome.EMPTY_LIBRARY
+
+
+def test_no_matches_never_calls_config_load_with_explicit_db_path(
+    tmp_path: Path,
+) -> None:
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(_record(tmp_path))
+
+    result = execute_chat_command(
+        ChatCommandOptions(
+            question="astronomy and astrophysics", db_path=tmp_path / "chat.db"
+        ),
+        storage=storage,
+        config_backend=RaisingConfigBackend(),
+    )
+
+    assert result.outcome is ChatTerminalOutcome.NO_MATCHES
+
+
+def test_fully_specified_cli_override_with_explicit_db_path_never_calls_config_load(
+    tmp_path: Path,
+) -> None:
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(_record(tmp_path))
+    generator = FakeGenerator(
+        GenerationResponse(
+            answer_text="unused",
+            citations=(),
+            generation_method="fake-generator",
+            abstained=True,
+            abstention_reason=AbstentionReason.INSUFFICIENT_EVIDENCE,
+            finding_kinds=(),
+        )
+    )
+
+    result = execute_chat_command(
+        _options(tmp_path),
+        storage=storage,
+        config_backend=RaisingConfigBackend(),
+        generator_provider=lambda _: generator,
+    )
+
+    assert result.outcome is ChatTerminalOutcome.ABSTAINED
+    assert generator.call_count == 1
+
+
+def test_partial_override_on_no_matches_path_is_rejected_eagerly(
+    tmp_path: Path,
+) -> None:
+    """A partial CLI identity override must be rejected before chat ever
+    decides whether it would need a generator."""
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(_record(tmp_path))
+    options = ChatCommandOptions(
+        question="astronomy and astrophysics",
+        db_path=tmp_path / "chat.db",
+        model_id="cli-only-model-id",
+    )
+
+    result = execute_chat_command(
+        options,
+        storage=storage,
+        config_backend=RaisingConfigBackend(),
+    )
+
+    assert result.outcome is ChatTerminalOutcome.FAILED
+    assert result.exit_code == 2
+    assert "Partial runtime/model override" in (result.error_message or "")
+
+
+def _config_for_threads_timeout(
+    tmp_path: Path, **overrides: object
+) -> LocalRuntimeModelConfig:
+    base: dict[str, object] = {
+        "executable_path": tmp_path / "config-exe",
+        "model_path": tmp_path / "config-model.gguf",
+        "model_id": "config-model",
+        "model_bytes": 10,
+        "model_checksum": "a" * 64,
+        "threads": 8,
+        "timeout_seconds": 60.0,
+    }
+    base.update(overrides)
+    return LocalRuntimeModelConfig(**base)
+
+
+def test_build_generator_honors_durable_threads_and_timeout_when_config_loaded(
+    tmp_path: Path,
+) -> None:
+    """A fully-specified CLI identity must still pick up durable threads/timeout
+    when the config was already loaded for another reason (db-path fallback)."""
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(_config_for_threads_timeout(tmp_path))
+    lazy_config = LazyConfigLoader(config_backend)
+    lazy_config.get()  # Simulate an earlier load for --db-path resolution.
+
+    overrides = RuntimeModelOverrides(
+        executable_path=tmp_path / "cli-exe",
+        model_path=tmp_path / "cli-model.gguf",
+        model_id="cli-model",
+        model_bytes=99,
+        model_checksum="b" * 64,
+    )
+    generator = _build_llama_cpp_generator(
+        ChatCommandOptions(question="trade policy"), overrides, lazy_config
+    )
+
+    assert generator._config.threads == 8
+    assert generator._config.timeout_seconds == 60.0
+
+
+def test_build_generator_explicit_cli_threads_and_timeout_override_durable_config(
+    tmp_path: Path,
+) -> None:
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(_config_for_threads_timeout(tmp_path))
+    lazy_config = LazyConfigLoader(config_backend)
+    lazy_config.get()
+
+    overrides = RuntimeModelOverrides(
+        executable_path=tmp_path / "cli-exe",
+        model_path=tmp_path / "cli-model.gguf",
+        model_id="cli-model",
+        model_bytes=99,
+        model_checksum="b" * 64,
+        threads=2,
+        timeout=15.0,
+    )
+    generator = _build_llama_cpp_generator(
+        ChatCommandOptions(question="trade policy"), overrides, lazy_config
+    )
+
+    assert generator._config.threads == 2
+    assert generator._config.timeout_seconds == 15.0
+
+
+def test_build_generator_no_config_loaded_retains_documented_defaults(
+    tmp_path: Path,
+) -> None:
+    """When lazy_config was never loaded (peek() is used, not get()), a fully
+    specified CLI identity falls back to documented defaults, not durable
+    config values that were never actually read."""
+    lazy_config = LazyConfigLoader(RaisingConfigBackend())
+
+    overrides = RuntimeModelOverrides(
+        executable_path=tmp_path / "cli-exe",
+        model_path=tmp_path / "cli-model.gguf",
+        model_id="cli-model",
+        model_bytes=99,
+        model_checksum="b" * 64,
+    )
+    generator = _build_llama_cpp_generator(
+        ChatCommandOptions(question="trade policy"), overrides, lazy_config
+    )
+
+    assert generator._config.threads is None
+    assert generator._config.timeout_seconds == 300.0
