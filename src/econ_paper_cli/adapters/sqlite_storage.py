@@ -38,6 +38,7 @@ from econ_paper_cli.domain.single_paper_analysis import (
     SinglePaperAnalysisFailureCode,
     SinglePaperAnalysisQuestionRecord,
     SinglePaperAnalysisRecord,
+    SinglePaperAnalysisSectionBoundaryEvidenceRecord,
     SinglePaperAnalysisSectionRecord,
     SinglePaperAnalysisSectionSpanRecord,
     SinglePaperAnalysisSettings,
@@ -366,6 +367,20 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 WHEN 'introduction' THEN 'Introduction'
                 ELSE heading_text
             END;""",
+            """CREATE TABLE IF NOT EXISTS single_paper_analysis_section_boundary_evidence (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                analysis_id TEXT NOT NULL,
+                section_kind TEXT NOT NULL,
+                page_number INTEGER NOT NULL,
+                start_character_offset INTEGER NOT NULL,
+                end_character_offset INTEGER NOT NULL,
+                evidence_type TEXT NOT NULL,
+                description TEXT NOT NULL,
+                ordinal_position INTEGER NOT NULL,
+                FOREIGN KEY(analysis_id, section_kind) REFERENCES single_paper_analysis_sections(analysis_id, section_kind) ON DELETE CASCADE,
+                CONSTRAINT uq_analysis_section_boundary_evidence_ordinal UNIQUE(analysis_id, section_kind, ordinal_position)
+            );""",
+            "CREATE INDEX IF NOT EXISTS idx_analysis_section_boundary_evidence_sec ON single_paper_analysis_section_boundary_evidence(analysis_id, section_kind);",
         ],
     ),
 ]
@@ -1557,6 +1572,24 @@ class SQLiteStorage(StorageBackend):
                             sp.ordinal_position,
                         ),
                     )
+                for b_ev in sec.boundary_evidence:
+                    conn.execute(
+                        """INSERT INTO single_paper_analysis_section_boundary_evidence (
+                            analysis_id, section_kind, page_number,
+                            start_character_offset, end_character_offset,
+                            evidence_type, description, ordinal_position
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            record.analysis_id,
+                            sec.section_kind.value,
+                            b_ev.page_number,
+                            b_ev.start_character_offset,
+                            b_ev.end_character_offset,
+                            b_ev.evidence_type,
+                            b_ev.description,
+                            b_ev.ordinal_position,
+                        ),
+                    )
 
             # Insert into single_paper_analysis_questions
             if record.research_question is not None:
@@ -1723,6 +1756,21 @@ class SQLiteStorage(StorageBackend):
                     )
                     for sp in cur_sp.fetchall()
                 )
+                cur_bev = conn.execute(
+                    "SELECT * FROM single_paper_analysis_section_boundary_evidence WHERE analysis_id = ? AND section_kind = ? ORDER BY ordinal_position ASC",
+                    (analysis_id, sk),
+                )
+                boundary_evidences = tuple(
+                    SinglePaperAnalysisSectionBoundaryEvidenceRecord(
+                        page_number=bev["page_number"],
+                        start_character_offset=bev["start_character_offset"],
+                        end_character_offset=bev["end_character_offset"],
+                        evidence_type=bev["evidence_type"],
+                        description=bev["description"],
+                        ordinal_position=bev["ordinal_position"],
+                    )
+                    for bev in cur_bev.fetchall()
+                )
                 sections_list.append(
                     SinglePaperAnalysisSectionRecord(
                         section_kind=PDFSectionKind(sk),
@@ -1735,6 +1783,7 @@ class SQLiteStorage(StorageBackend):
                         page_end=s["page_end"],
                         spans=spans,
                         ordinal_position=s["ordinal_position"],
+                        boundary_evidence=boundary_evidences,
                     )
                 )
 

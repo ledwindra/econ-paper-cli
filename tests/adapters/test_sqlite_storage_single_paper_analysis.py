@@ -374,3 +374,188 @@ def test_cascade_delete_analysis_record(tmp_path: Path) -> None:
         assert cur.fetchone()[0] == 0
 
     storage.close()
+
+
+def test_implicit_section_roundtrip_and_restart(tmp_path: Path) -> None:
+    """An implicit section survives SinglePaperAnalysisRecord.from_result, SQLite save/read, and restart without fabricating an observed heading."""
+    from econ_paper_cli.domain import (
+        ExtractedPDFPage,
+        IngestionPreflightResult,
+        PDFDocumentMetadata,
+        PDFExtractionQualityAssessment,
+        PDFExtractionResult,
+        PDFPageQualityObservation,
+        PDFQualityMeasurements,
+        PDFSection,
+        PDFSectionBoundaryEvidence,
+        PDFSectionDetectionResult,
+        PDFSectionSpan,
+        PreflightCandidate,
+        ResearchQuestionEvidence,
+        ResearchQuestionResult,
+        SinglePaperAnalysisResult,
+    )
+
+    pdf_path = (tmp_path / "implicit_paper.pdf").resolve()
+
+    preflight = IngestionPreflightResult(
+        target_path=pdf_path,
+        candidates=(
+            PreflightCandidate(
+                source_path=pdf_path,
+                file_size_bytes=500,
+                content_checksum="c" * 64,
+                is_stored=False,
+                is_batch_duplicate=False,
+            ),
+        ),
+        new_candidate_count=1,
+        stored_candidate_count=0,
+        batch_duplicate_count=0,
+        total_candidate_count=1,
+    )
+    extraction = PDFExtractionResult(
+        source_path=pdf_path,
+        pages=(
+            ExtractedPDFPage(page_number=1, text="Unheaded front matter text here..."),
+        ),
+        page_count=1,
+        metadata=PDFDocumentMetadata(title="Implicit Paper"),
+        extraction_method="test",
+        parser_version="1.0.0",
+    )
+    quality = PDFExtractionQualityAssessment(
+        policy_version="pdf-extraction-quality-v1",
+        status=PDFQualityStatus.USABLE,
+        measurements=PDFQualityMeasurements(
+            page_count=1,
+            total_character_count=34,
+            printable_character_count=34,
+            non_whitespace_character_count=30,
+            empty_page_count=0,
+            sparse_page_count=0,
+            control_character_count=0,
+            replacement_character_count=0,
+            repeated_character_count=0,
+            minimum_page_non_whitespace_character_count=30,
+            maximum_page_non_whitespace_character_count=30,
+        ),
+        pages=(
+            PDFPageQualityObservation(
+                page_number=1,
+                character_count=34,
+                printable_character_count=34,
+                non_whitespace_character_count=30,
+                control_character_count=0,
+                replacement_character_count=0,
+                repeated_character_count=0,
+                is_empty=False,
+                is_sparse=False,
+            ),
+        ),
+        warnings=(),
+    )
+
+    span = PDFSectionSpan(
+        page_number=1, start_character_offset=0, end_character_offset=34
+    )
+    b_ev = PDFSectionBoundaryEvidence(
+        page_number=1,
+        start_character_offset=0,
+        end_character_offset=34,
+        evidence_type="title_block",
+        description="Implicit front-matter inferred from title block boundaries",
+    )
+
+    implicit_section = PDFSection(
+        kind=PDFSectionKind.ABSTRACT,
+        detection_method=PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER,
+        observed_heading_text=None,
+        start_page_number=1,
+        end_page_number=1,
+        spans=(span,),
+        text="Unheaded front matter text here...",
+        boundary_evidence=(b_ev,),
+    )
+
+    section_res = PDFSectionDetectionResult(
+        policy_version="pdf-section-detection-v1",
+        sections=(implicit_section,),
+        candidates=(),
+        warnings=(PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION),),
+    )
+
+    rq_ev = ResearchQuestionEvidence(
+        section_kind=PDFSectionKind.ABSTRACT,
+        excerpt_text="Unheaded front matter text here...",
+        page_number=1,
+        start_character_offset=0,
+        end_character_offset=34,
+    )
+    rq_res = ResearchQuestionResult(
+        policy_version="research-question-extraction-v1",
+        question_text="What is the implicit question?",
+        kind=ResearchQuestionKind.INFERRED,
+        sections_used=(PDFSectionKind.ABSTRACT,),
+        evidence=(rq_ev,),
+        warnings=(),
+    )
+
+    analysis_result = SinglePaperAnalysisResult(
+        policy_version="single-paper-analysis-v1",
+        source_path=pdf_path,
+        checksum="c" * 64,
+        status=SinglePaperAnalysisStatus.SUCCESS,
+        completed_stages=tuple(SinglePaperAnalysisStage),
+        failed_stage=None,
+        skipped_stages=(),
+        failure_code=None,
+        preflight_result=preflight,
+        extraction_result=extraction,
+        quality_assessment=quality,
+        section_result=section_res,
+        research_question_result=rq_res,
+        warnings=(),
+        error_message=None,
+    )
+
+    # 1. Verify SinglePaperAnalysisRecord.from_result converts implicit section correctly
+    record = SinglePaperAnalysisRecord.from_result(analysis_result)
+    assert len(record.sections) == 1
+    sec_rec = record.sections[0]
+    assert sec_rec.section_kind is PDFSectionKind.ABSTRACT
+    assert sec_rec.heading_text == "Abstract"
+    assert sec_rec.detection_method is PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER
+    assert sec_rec.observed_heading_text is None
+    assert len(sec_rec.boundary_evidence) == 1
+    assert sec_rec.boundary_evidence[0].evidence_type == "title_block"
+
+    # 2. Save to SQLite database file and close
+    db_file = tmp_path / "implicit_restart.db"
+    storage1 = SQLiteStorage(db_file)
+    storage1.initialize()
+    storage1.save_single_paper_analysis(record)
+    storage1.close()
+
+    # 3. Reopen database (simulating restart) and fetch record
+    storage2 = SQLiteStorage(db_file)
+    storage2.initialize()
+    restarted_record = storage2.get_single_paper_analysis(record.analysis_id)
+    assert restarted_record is not None
+    assert len(restarted_record.sections) == 1
+
+    r_sec = restarted_record.sections[0]
+    assert r_sec.section_kind is PDFSectionKind.ABSTRACT
+    assert r_sec.heading_text == "Abstract"
+    assert r_sec.detection_method is PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER
+    assert r_sec.observed_heading_text is None
+    assert len(r_sec.boundary_evidence) == 1
+    assert r_sec.boundary_evidence[0].page_number == 1
+    assert r_sec.boundary_evidence[0].start_character_offset == 0
+    assert r_sec.boundary_evidence[0].end_character_offset == 34
+    assert r_sec.boundary_evidence[0].evidence_type == "title_block"
+    assert (
+        r_sec.boundary_evidence[0].description
+        == "Implicit front-matter inferred from title block boundaries"
+    )
+    storage2.close()

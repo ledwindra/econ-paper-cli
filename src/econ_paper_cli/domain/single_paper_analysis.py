@@ -35,6 +35,7 @@ from econ_paper_cli.domain.pdf_quality import (
     PDFQualityWarning,
 )
 from econ_paper_cli.domain.pdf_sections import (
+    _DISPLAY_LABELS,
     DEFAULT_PDF_SECTION_SETTINGS,
     PDFSectionDetectionMethod,
     PDFSectionDetectionResult,
@@ -645,6 +646,30 @@ class SinglePaperAnalysisSectionSpanRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class SinglePaperAnalysisSectionBoundaryEvidenceRecord:
+    """Persisted page-local character span metadata for section boundary evidence."""
+
+    page_number: int
+    start_character_offset: int
+    end_character_offset: int
+    evidence_type: str
+    description: str
+    ordinal_position: int
+
+    def __post_init__(self) -> None:
+        _validate_positive_int("page_number", self.page_number)
+        _validate_nonnegative_int("start_character_offset", self.start_character_offset)
+        _validate_nonnegative_int("end_character_offset", self.end_character_offset)
+        if self.start_character_offset > self.end_character_offset:
+            raise SinglePaperAnalysisValidationError(
+                "start_character_offset cannot exceed end_character_offset."
+            )
+        _validate_nonempty_text("evidence_type", self.evidence_type)
+        _validate_nonempty_text("description", self.description)
+        _validate_nonnegative_int("ordinal_position", self.ordinal_position)
+
+
+@dataclass(frozen=True, slots=True)
 class SinglePaperAnalysisSectionRecord:
     """Persisted section metadata with exact page-local spans.
 
@@ -663,6 +688,7 @@ class SinglePaperAnalysisSectionRecord:
     page_end: int
     spans: tuple[SinglePaperAnalysisSectionSpanRecord, ...]
     ordinal_position: int
+    boundary_evidence: tuple[SinglePaperAnalysisSectionBoundaryEvidenceRecord, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.section_kind, PDFSectionKind):
@@ -670,17 +696,47 @@ class SinglePaperAnalysisSectionRecord:
                 "section_kind must be a PDFSectionKind instance."
             )
         _validate_nonempty_text("heading_text", self.heading_text)
+        expected_label = _DISPLAY_LABELS[self.section_kind]
+        if self.heading_text != expected_label:
+            raise SinglePaperAnalysisValidationError(
+                f"heading_text '{self.heading_text}' must match canonical label "
+                f"'{expected_label}' for section_kind '{self.section_kind.value}'."
+            )
         if not isinstance(self.detection_method, PDFSectionDetectionMethod):
             raise SinglePaperAnalysisValidationError(
                 "detection_method must be a PDFSectionDetectionMethod instance."
             )
+        if not isinstance(self.boundary_evidence, tuple) or not all(
+            isinstance(ev, SinglePaperAnalysisSectionBoundaryEvidenceRecord)
+            for ev in self.boundary_evidence
+        ):
+            raise SinglePaperAnalysisValidationError(
+                "boundary_evidence must be a tuple of SinglePaperAnalysisSectionBoundaryEvidenceRecord instances."
+            )
+
         if self.detection_method is PDFSectionDetectionMethod.EXPLICIT_HEADING:
             _validate_nonempty_text("observed_heading_text", self.observed_heading_text)
+            if self.boundary_evidence:
+                raise SinglePaperAnalysisValidationError(
+                    "boundary_evidence must be empty when detection_method is EXPLICIT_HEADING."
+                )
         elif self.observed_heading_text is not None:
             raise SinglePaperAnalysisValidationError(
                 "observed_heading_text must be None when detection_method is "
                 "IMPLICIT_FRONT_MATTER."
             )
+        else:
+            if not self.boundary_evidence:
+                raise SinglePaperAnalysisValidationError(
+                    "boundary_evidence is required and cannot be empty when detection_method is IMPLICIT_FRONT_MATTER."
+                )
+
+        for idx, ev in enumerate(self.boundary_evidence):
+            if ev.ordinal_position != idx:
+                raise SinglePaperAnalysisValidationError(
+                    f"boundary_evidence[{idx}] ordinal_position ({ev.ordinal_position}) does not match index ({idx})."
+                )
+
         _validate_positive_int("page_start", self.page_start)
         _validate_positive_int("page_end", self.page_end)
         if self.page_start > self.page_end:
@@ -1153,6 +1209,17 @@ class SinglePaperAnalysisRecord:
                     )
                     for sp_idx, sp in enumerate(sec.spans)
                 )
+                b_evidences = tuple(
+                    SinglePaperAnalysisSectionBoundaryEvidenceRecord(
+                        page_number=b_ev.page_number,
+                        start_character_offset=b_ev.start_character_offset,
+                        end_character_offset=b_ev.end_character_offset,
+                        evidence_type=b_ev.evidence_type,
+                        description=b_ev.description,
+                        ordinal_position=b_idx,
+                    )
+                    for b_idx, b_ev in enumerate(sec.boundary_evidence)
+                )
                 sections.append(
                     SinglePaperAnalysisSectionRecord(
                         section_kind=sec.kind,
@@ -1163,6 +1230,7 @@ class SinglePaperAnalysisRecord:
                         page_end=sec.end_page_number,
                         spans=spans,
                         ordinal_position=idx,
+                        boundary_evidence=b_evidences,
                     )
                 )
 

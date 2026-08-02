@@ -166,6 +166,28 @@ class PDFHeadingCandidate:
 
 
 @dataclass(frozen=True, slots=True)
+class PDFSectionBoundaryEvidence:
+    """Page- and character-offset grounded evidence for section boundary inference."""
+
+    page_number: int
+    start_character_offset: int
+    end_character_offset: int
+    evidence_type: str
+    description: str
+
+    def __post_init__(self) -> None:
+        _validate_positive_int("page_number", self.page_number)
+        _validate_nonnegative_int("start_character_offset", self.start_character_offset)
+        _validate_nonnegative_int("end_character_offset", self.end_character_offset)
+        if self.start_character_offset > self.end_character_offset:
+            raise PDFSectionValidationError(
+                "start_character_offset cannot exceed end_character_offset."
+            )
+        _validate_nonempty_text("evidence_type", self.evidence_type)
+        _validate_nonempty_text("description", self.description)
+
+
+@dataclass(frozen=True, slots=True)
 class PDFSection:
     """Detected section with page span provenance and text.
 
@@ -174,7 +196,8 @@ class PDFSection:
     section's boundaries were inferred from front-matter structure without an
     observed heading (``IMPLICIT_FRONT_MATTER``). Canonical display labels are
     derived from ``kind`` via :attr:`display_label`, never fabricated as an
-    observed heading.
+    observed heading. ``boundary_evidence`` is empty for explicit sections and
+    required for implicit front-matter sections.
     """
 
     kind: PDFSectionKind
@@ -184,6 +207,7 @@ class PDFSection:
     end_page_number: int
     spans: tuple[PDFSectionSpan, ...]
     text: str
+    boundary_evidence: tuple[PDFSectionBoundaryEvidence, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.kind, PDFSectionKind):
@@ -192,13 +216,29 @@ class PDFSection:
             raise PDFSectionValidationError(
                 "detection_method must be a PDFSectionDetectionMethod instance."
             )
+        if not isinstance(self.boundary_evidence, tuple) or not all(
+            isinstance(ev, PDFSectionBoundaryEvidence) for ev in self.boundary_evidence
+        ):
+            raise PDFSectionValidationError(
+                "boundary_evidence must be a tuple of PDFSectionBoundaryEvidence instances."
+            )
+
         if self.detection_method is PDFSectionDetectionMethod.EXPLICIT_HEADING:
             _validate_nonempty_text("observed_heading_text", self.observed_heading_text)
+            if self.boundary_evidence:
+                raise PDFSectionValidationError(
+                    "boundary_evidence must be empty when detection_method is EXPLICIT_HEADING."
+                )
         elif self.observed_heading_text is not None:
             raise PDFSectionValidationError(
                 "observed_heading_text must be None when detection_method is "
                 "IMPLICIT_FRONT_MATTER."
             )
+        else:
+            if not self.boundary_evidence:
+                raise PDFSectionValidationError(
+                    "boundary_evidence is required and cannot be empty when detection_method is IMPLICIT_FRONT_MATTER."
+                )
         _validate_positive_int("start_page_number", self.start_page_number)
         _validate_positive_int("end_page_number", self.end_page_number)
         if self.start_page_number > self.end_page_number:

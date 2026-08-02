@@ -8,6 +8,7 @@ from econ_paper_cli.domain import (
     DEFAULT_PDF_SECTION_SETTINGS,
     PDFHeadingCandidate,
     PDFSection,
+    PDFSectionBoundaryEvidence,
     PDFSectionDetectionMethod,
     PDFSectionDetectionResult,
     PDFSectionKind,
@@ -68,6 +69,161 @@ def test_heading_candidate_validation() -> None:
             start_character_offset=10,
             end_character_offset=8,
         )
+
+
+def test_section_boundary_evidence_validation() -> None:
+    ev = PDFSectionBoundaryEvidence(
+        page_number=1,
+        start_character_offset=0,
+        end_character_offset=50,
+        evidence_type="title_block",
+        description="Implicit front-matter inferred from title block and abstract text",
+    )
+    assert ev.page_number == 1
+    assert ev.evidence_type == "title_block"
+
+    with pytest.raises(PDFSectionValidationError, match="page_number"):
+        PDFSectionBoundaryEvidence(
+            page_number=0,
+            start_character_offset=0,
+            end_character_offset=50,
+            evidence_type="title_block",
+            description="Desc",
+        )
+
+    with pytest.raises(PDFSectionValidationError, match="cannot exceed"):
+        PDFSectionBoundaryEvidence(
+            page_number=1,
+            start_character_offset=60,
+            end_character_offset=50,
+            evidence_type="title_block",
+            description="Desc",
+        )
+
+
+def test_implicit_section_requires_none_observed_heading_and_boundary_evidence() -> (
+    None
+):
+    span = PDFSectionSpan(
+        page_number=1, start_character_offset=0, end_character_offset=20
+    )
+    text = "A" * 20
+    b_ev = PDFSectionBoundaryEvidence(
+        page_number=1,
+        start_character_offset=0,
+        end_character_offset=20,
+        evidence_type="implicit_header",
+        description="Implicit front-matter evidence",
+    )
+
+    # 1. Implicit section with observed_heading_text must fail
+    with pytest.raises(
+        PDFSectionValidationError,
+        match="observed_heading_text must be None when detection_method is IMPLICIT_FRONT_MATTER",
+    ):
+        PDFSection(
+            kind=PDFSectionKind.ABSTRACT,
+            detection_method=PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER,
+            observed_heading_text="Fabricated Abstract",
+            start_page_number=1,
+            end_page_number=1,
+            spans=(span,),
+            text=text,
+            boundary_evidence=(b_ev,),
+        )
+
+    # 2. Implicit section with empty boundary_evidence must fail
+    with pytest.raises(
+        PDFSectionValidationError,
+        match="boundary_evidence is required and cannot be empty when detection_method is IMPLICIT_FRONT_MATTER",
+    ):
+        PDFSection(
+            kind=PDFSectionKind.ABSTRACT,
+            detection_method=PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER,
+            observed_heading_text=None,
+            start_page_number=1,
+            end_page_number=1,
+            spans=(span,),
+            text=text,
+            boundary_evidence=(),
+        )
+
+    # 3. Valid implicit section succeeds
+    implicit_sec = PDFSection(
+        kind=PDFSectionKind.ABSTRACT,
+        detection_method=PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER,
+        observed_heading_text=None,
+        start_page_number=1,
+        end_page_number=1,
+        spans=(span,),
+        text=text,
+        boundary_evidence=(b_ev,),
+    )
+    assert implicit_sec.observed_heading_text is None
+    assert implicit_sec.display_label == "Abstract"
+    assert len(implicit_sec.boundary_evidence) == 1
+
+
+def test_explicit_section_requires_observed_heading_and_forbids_boundary_evidence() -> (
+    None
+):
+    span = PDFSectionSpan(
+        page_number=1, start_character_offset=0, end_character_offset=20
+    )
+    text = "A" * 20
+    b_ev = PDFSectionBoundaryEvidence(
+        page_number=1,
+        start_character_offset=0,
+        end_character_offset=20,
+        evidence_type="implicit_header",
+        description="Implicit front-matter evidence",
+    )
+
+    # 1. Explicit section with None observed_heading_text must fail
+    with pytest.raises(
+        PDFSectionValidationError,
+        match="observed_heading_text must be a non-empty string",
+    ):
+        PDFSection(
+            kind=PDFSectionKind.ABSTRACT,
+            detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+            observed_heading_text=None,
+            start_page_number=1,
+            end_page_number=1,
+            spans=(span,),
+            text=text,
+            boundary_evidence=(),
+        )
+
+    # 2. Explicit section with non-empty boundary_evidence must fail
+    with pytest.raises(
+        PDFSectionValidationError,
+        match="boundary_evidence must be empty when detection_method is EXPLICIT_HEADING",
+    ):
+        PDFSection(
+            kind=PDFSectionKind.ABSTRACT,
+            detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+            observed_heading_text="Abstract",
+            start_page_number=1,
+            end_page_number=1,
+            spans=(span,),
+            text=text,
+            boundary_evidence=(b_ev,),
+        )
+
+    # 3. Valid explicit section succeeds
+    explicit_sec = PDFSection(
+        kind=PDFSectionKind.ABSTRACT,
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="Abstract",
+        start_page_number=1,
+        end_page_number=1,
+        spans=(span,),
+        text=text,
+        boundary_evidence=(),
+    )
+    assert explicit_sec.observed_heading_text == "Abstract"
+    assert explicit_sec.boundary_evidence == ()
 
 
 def test_section_validation_enforces_exact_text_length_and_span_alignment() -> None:
@@ -506,4 +662,111 @@ def test_result_rejects_overlapping_or_out_of_order_sections() -> None:
             sections=(sec1, sec2),
             candidates=(),
             warnings=(),
+        )
+
+
+def test_result_implicit_boundary_ambiguity_warnings_satisfy_and_reject() -> None:
+    # 1. Valid grounding satisfies
+    res_abstract = PDFSectionDetectionResult(
+        policy_version="pdf-section-detection-v1",
+        sections=(),
+        candidates=(),
+        warnings=(
+            PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION),
+            PDFSectionWarning(
+                PDFSectionWarningCode.AMBIGUOUS_IMPLICIT_ABSTRACT_BOUNDARY,
+                page_numbers=(1,),
+            ),
+        ),
+    )
+    assert len(res_abstract.warnings) == 2
+
+    res_intro = PDFSectionDetectionResult(
+        policy_version="pdf-section-detection-v1",
+        sections=(),
+        candidates=(),
+        warnings=(
+            PDFSectionWarning(PDFSectionWarningCode.MISSING_ABSTRACT),
+            PDFSectionWarning(
+                PDFSectionWarningCode.AMBIGUOUS_IMPLICIT_INTRODUCTION_BOUNDARY,
+                page_numbers=(1,),
+            ),
+        ),
+    )
+    assert len(res_intro.warnings) == 2
+
+    # 2. Reject ungrounded (empty page_numbers)
+    with pytest.raises(
+        PDFSectionValidationError,
+        match="ambiguous_implicit_abstract_boundary warning must reference at least 1 page",
+    ):
+        PDFSectionDetectionResult(
+            policy_version="pdf-section-detection-v1",
+            sections=(),
+            candidates=(),
+            warnings=(
+                PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION),
+                PDFSectionWarning(
+                    PDFSectionWarningCode.AMBIGUOUS_IMPLICIT_ABSTRACT_BOUNDARY,
+                    page_numbers=(),
+                ),
+            ),
+        )
+
+    # 3. Reject contradiction when Abstract section is present
+    text = "Sample abstract text 40 chars string..."
+    span = PDFSectionSpan(
+        page_number=1, start_character_offset=0, end_character_offset=len(text)
+    )
+    sec_abs = PDFSection(
+        kind=PDFSectionKind.ABSTRACT,
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="Abstract",
+        start_page_number=1,
+        end_page_number=1,
+        spans=(span,),
+        text=text,
+    )
+    with pytest.raises(
+        PDFSectionValidationError,
+        match="AMBIGUOUS_IMPLICIT_ABSTRACT_BOUNDARY warning contradicts presence of Abstract section",
+    ):
+        PDFSectionDetectionResult(
+            policy_version="pdf-section-detection-v1",
+            sections=(sec_abs,),
+            candidates=(),
+            warnings=(
+                PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION),
+                PDFSectionWarning(
+                    PDFSectionWarningCode.AMBIGUOUS_IMPLICIT_ABSTRACT_BOUNDARY,
+                    page_numbers=(1,),
+                ),
+            ),
+        )
+
+    # 4. Reject contradiction when Introduction section is present
+    sec_intro = PDFSection(
+        kind=PDFSectionKind.INTRODUCTION,
+        detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+        observed_heading_text="Introduction",
+        start_page_number=1,
+        end_page_number=1,
+        spans=(span,),
+        text=text,
+    )
+    with pytest.raises(
+        PDFSectionValidationError,
+        match="AMBIGUOUS_IMPLICIT_INTRODUCTION_BOUNDARY warning contradicts presence of Introduction section",
+    ):
+        PDFSectionDetectionResult(
+            policy_version="pdf-section-detection-v1",
+            sections=(sec_intro,),
+            candidates=(),
+            warnings=(
+                PDFSectionWarning(PDFSectionWarningCode.MISSING_ABSTRACT),
+                PDFSectionWarning(
+                    PDFSectionWarningCode.AMBIGUOUS_IMPLICIT_INTRODUCTION_BOUNDARY,
+                    page_numbers=(1,),
+                ),
+            ),
         )

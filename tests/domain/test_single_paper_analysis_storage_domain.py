@@ -76,7 +76,7 @@ def test_section_span_and_record_validation() -> None:
 
     sec = SinglePaperAnalysisSectionRecord(
         section_kind=PDFSectionKind.INTRODUCTION,
-        heading_text="1. Introduction",
+        heading_text="Introduction",
         detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
         observed_heading_text="1. Introduction",
         page_start=1,
@@ -87,6 +87,29 @@ def test_section_span_and_record_validation() -> None:
     assert sec.page_start == 1
     assert sec.page_end == 2
     assert len(sec.spans) == 2
+
+
+def test_section_record_rejects_non_canonical_heading_text() -> None:
+    span1 = SinglePaperAnalysisSectionSpanRecord(
+        page_number=1,
+        start_character_offset=0,
+        end_character_offset=100,
+        ordinal_position=0,
+    )
+    with pytest.raises(
+        SinglePaperAnalysisValidationError,
+        match="heading_text '1. Introduction' must match canonical label 'Introduction'",
+    ):
+        SinglePaperAnalysisSectionRecord(
+            section_kind=PDFSectionKind.INTRODUCTION,
+            heading_text="1. Introduction",
+            detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
+            observed_heading_text="1. Introduction",
+            page_start=1,
+            page_end=1,
+            spans=(span1,),
+            ordinal_position=0,
+        )
 
 
 def test_evidence_record_validation() -> None:
@@ -242,7 +265,7 @@ def test_section_span_ordering_and_bounds_validation() -> None:
     ):
         SinglePaperAnalysisSectionRecord(
             section_kind=PDFSectionKind.INTRODUCTION,
-            heading_text="1. Introduction",
+            heading_text="Introduction",
             detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
             observed_heading_text="1. Introduction",
             page_start=2,  # Should be 1
@@ -258,7 +281,7 @@ def test_section_span_ordering_and_bounds_validation() -> None:
     ):
         SinglePaperAnalysisSectionRecord(
             section_kind=PDFSectionKind.INTRODUCTION,
-            heading_text="1. Introduction",
+            heading_text="Introduction",
             detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
             observed_heading_text="1. Introduction",
             page_start=1,
@@ -273,7 +296,7 @@ def test_section_span_ordering_and_bounds_validation() -> None:
     ):
         SinglePaperAnalysisSectionRecord(
             section_kind=PDFSectionKind.INTRODUCTION,
-            heading_text="1. Introduction",
+            heading_text="Introduction",
             detection_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
             observed_heading_text="1. Introduction",
             page_start=1,

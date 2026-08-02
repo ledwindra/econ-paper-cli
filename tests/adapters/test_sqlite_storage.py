@@ -1,5 +1,7 @@
 """Unit tests for SQLite storage adapter."""
 
+import dataclasses
+import json
 import sqlite3
 from pathlib import Path
 
@@ -828,3 +830,242 @@ def test_file_based_storage(tmp_path: Path, sample_paper_record: PaperRecord) ->
     assert reopened_storage.count_papers() == 1
     assert reopened_storage.get_paper_record("paper.2024.v1") == sample_paper_record
     reopened_storage.close()
+
+
+def test_v4_to_v5_schema_migration_canonical_heading_and_observed_heading(
+    tmp_path: Path,
+) -> None:
+    """Schema v4 database with observed heading '1. Introduction' migrates to schema v5 with canonical heading_text='Introduction', observed_heading_text='1. Introduction', and explicit_heading method."""
+    from econ_paper_cli.domain import (
+        PDFSectionDetectionMethod,
+        PDFSectionKind,
+    )
+
+    db_file = tmp_path / "v4_migration_test.db"
+    conn = sqlite3.connect(str(db_file))
+
+    # Create schema migrations & v4 single paper analysis tables
+    conn.executescript(
+        """
+        CREATE TABLE schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL,
+            description TEXT NOT NULL
+        );
+        CREATE TABLE papers (
+            paper_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            authors_json TEXT NOT NULL,
+            year INTEGER,
+            abstract TEXT,
+            source_name TEXT NOT NULL,
+            source_identifier TEXT NOT NULL,
+            source_url TEXT,
+            content_checksum TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE single_paper_analyses (
+            analysis_id TEXT PRIMARY KEY,
+            content_checksum TEXT COLLATE NOCASE,
+            source_path TEXT NOT NULL,
+            policy_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            failed_stage TEXT,
+            failure_code TEXT,
+            error_message TEXT,
+            completed_stages_json TEXT NOT NULL,
+            skipped_stages_json TEXT NOT NULL,
+            quality_status TEXT,
+            quality_settings_json TEXT NOT NULL,
+            section_settings_json TEXT NOT NULL,
+            research_question_settings_json TEXT NOT NULL,
+            settings_fingerprint TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE single_paper_analysis_warnings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            analysis_id TEXT NOT NULL,
+            warning_domain TEXT NOT NULL,
+            warning_code TEXT NOT NULL,
+            details TEXT,
+            page_numbers_json TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(analysis_id) REFERENCES single_paper_analyses(analysis_id) ON DELETE CASCADE
+        );
+        CREATE TABLE single_paper_analysis_sections (
+            analysis_id TEXT NOT NULL,
+            section_kind TEXT NOT NULL,
+            heading_text TEXT NOT NULL,
+            page_start INTEGER NOT NULL,
+            page_end INTEGER NOT NULL,
+            ordinal_position INTEGER NOT NULL,
+            PRIMARY KEY(analysis_id, section_kind),
+            FOREIGN KEY(analysis_id) REFERENCES single_paper_analyses(analysis_id) ON DELETE CASCADE,
+            CONSTRAINT uq_analysis_section_ordinal UNIQUE(analysis_id, ordinal_position)
+        );
+        CREATE TABLE single_paper_analysis_section_spans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            analysis_id TEXT NOT NULL,
+            section_kind TEXT NOT NULL,
+            page_number INTEGER NOT NULL,
+            start_character_offset INTEGER NOT NULL,
+            end_character_offset INTEGER NOT NULL,
+            ordinal_position INTEGER NOT NULL,
+            FOREIGN KEY(analysis_id, section_kind) REFERENCES single_paper_analysis_sections(analysis_id, section_kind) ON DELETE CASCADE,
+            CONSTRAINT uq_analysis_section_span_ordinal UNIQUE(analysis_id, section_kind, ordinal_position)
+        );
+        INSERT INTO schema_migrations VALUES (1, '2026-07-31T20:00:00Z', 'Initial schema creation');
+        INSERT INTO schema_migrations VALUES (2, '2026-07-31T20:00:00Z', 'Migration v2');
+        INSERT INTO schema_migrations VALUES (3, '2026-07-31T20:00:00Z', 'Migration v3');
+        INSERT INTO schema_migrations VALUES (4, '2026-07-31T20:00:00Z', 'Migration v4');
+        """
+    )
+
+    pdf_path = str((tmp_path / "paper.pdf").resolve())
+    ck = "d" * 64
+
+    # Compute valid settings fingerprint for single-paper-analysis-v1
+    from econ_paper_cli.domain import (
+        DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+        compute_analysis_id,
+        compute_settings_fingerprint,
+    )
+
+    fp = compute_settings_fingerprint(DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS)
+    exact_id = compute_analysis_id(ck, DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS, pdf_path)
+
+    conn.execute(
+        """INSERT INTO single_paper_analyses (
+            analysis_id, content_checksum, source_path, policy_version,
+            status, failed_stage, failure_code, error_message,
+            completed_stages_json, skipped_stages_json, quality_status,
+            quality_settings_json, section_settings_json, research_question_settings_json,
+            settings_fingerprint, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            exact_id,
+            ck,
+            pdf_path,
+            "single-paper-analysis-v1",
+            "success",
+            None,
+            None,
+            None,
+            '["preflight","extraction","quality_assessment","section_detection","question_extraction"]',
+            "[]",
+            "usable",
+            json.dumps(
+                dataclasses.asdict(
+                    DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.quality_settings
+                )
+            ),
+            json.dumps(
+                dataclasses.asdict(
+                    DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.section_settings
+                )
+            ),
+            json.dumps(
+                dataclasses.asdict(
+                    DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.research_question_settings
+                )
+            ),
+            fp,
+            "2026-08-01T20:00:00Z",
+            "2026-08-01T20:00:00Z",
+        ),
+    )
+
+    # In v4: heading_text held the observed heading string "1. Introduction"
+    conn.execute(
+        """INSERT INTO single_paper_analysis_sections (
+            analysis_id, section_kind, heading_text, page_start, page_end, ordinal_position
+        ) VALUES (?, 'introduction', '1. Introduction', 1, 2, 0)""",
+        (exact_id,),
+    )
+    conn.execute(
+        """INSERT INTO single_paper_analysis_section_spans (
+            analysis_id, section_kind, page_number, start_character_offset, end_character_offset, ordinal_position
+        ) VALUES (?, 'introduction', 1, 0, 100, 0)""",
+        (exact_id,),
+    )
+    conn.execute(
+        """INSERT INTO single_paper_analysis_section_spans (
+            analysis_id, section_kind, page_number, start_character_offset, end_character_offset, ordinal_position
+        ) VALUES (?, 'introduction', 2, 0, 200, 1)""",
+        (exact_id,),
+    )
+
+    # Insert question and evidence so record integrity checks pass
+    conn.execute(
+        """CREATE TABLE single_paper_analysis_questions (
+            analysis_id TEXT PRIMARY KEY,
+            question_text TEXT,
+            kind TEXT NOT NULL,
+            sections_used_json TEXT NOT NULL,
+            FOREIGN KEY(analysis_id) REFERENCES single_paper_analyses(analysis_id) ON DELETE CASCADE
+        );"""
+    )
+    conn.execute(
+        """CREATE TABLE single_paper_analysis_evidence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            analysis_id TEXT NOT NULL,
+            section_kind TEXT NOT NULL,
+            excerpt_text TEXT NOT NULL,
+            page_number INTEGER NOT NULL,
+            start_character_offset INTEGER NOT NULL,
+            end_character_offset INTEGER NOT NULL,
+            ordinal_position INTEGER NOT NULL,
+            FOREIGN KEY(analysis_id, section_kind) REFERENCES single_paper_analysis_sections(analysis_id, section_kind) ON DELETE CASCADE,
+            CONSTRAINT uq_analysis_evidence_ordinal UNIQUE(analysis_id, ordinal_position)
+        );"""
+    )
+
+    conn.execute(
+        """INSERT INTO single_paper_analysis_questions VALUES (?, 'What is the question?', 'explicit', '["introduction"]');""",
+        (exact_id,),
+    )
+    conn.execute(
+        """INSERT INTO single_paper_analysis_evidence VALUES (1, ?, 'introduction', 'Excerpt text', 1, 0, 12, 0);""",
+        (exact_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    # Open database using SQLiteStorage adapter -> triggers migration to schema v5
+    storage = SQLiteStorage(db_file)
+    storage.initialize()
+    assert storage.get_schema_version() == CURRENT_SCHEMA_VERSION
+
+    # Check migrated DDL table values directly via SQL query
+    raw_conn = storage._conn
+    assert raw_conn is not None
+    cur = raw_conn.execute(
+        "SELECT heading_text, observed_heading_text, detection_method FROM single_paper_analysis_sections WHERE analysis_id = ? AND section_kind = 'introduction'",
+        (exact_id,),
+    )
+    row = cur.fetchone()
+    assert row["heading_text"] == "Introduction"
+    assert row["observed_heading_text"] == "1. Introduction"
+    assert row["detection_method"] == "explicit_heading"
+
+    # Check boundary evidence table exists and is empty for migrated row
+    cur_bev = raw_conn.execute(
+        "SELECT COUNT(*) FROM single_paper_analysis_section_boundary_evidence WHERE analysis_id = ?",
+        (exact_id,),
+    )
+    assert cur_bev.fetchone()[0] == 0
+
+    # Retrieve record through domain storage API
+    rec = storage.get_single_paper_analysis(exact_id)
+    assert rec is not None
+    assert len(rec.sections) == 1
+    sec = rec.sections[0]
+    assert sec.section_kind is PDFSectionKind.INTRODUCTION
+    assert sec.heading_text == "Introduction"
+    assert sec.observed_heading_text == "1. Introduction"
+    assert sec.detection_method is PDFSectionDetectionMethod.EXPLICIT_HEADING
+    assert sec.boundary_evidence == ()
+
+    storage.close()
