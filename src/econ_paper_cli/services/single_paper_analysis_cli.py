@@ -61,6 +61,7 @@ from econ_paper_cli.services.config_resolution import (
     ConfigResolutionError,
     LazyConfigLoader,
     RuntimeModelOverrides,
+    build_llama_cpp_config_kwargs,
     identity_fully_specified,
     resolve_db_path,
     resolve_runtime_model_config,
@@ -969,15 +970,7 @@ def run_single_paper_analysis_command(
                     else lazy_config.get()
                 )
                 resolved = resolve_runtime_model_config(overrides, needed_config)
-                cfg = LlamaCppConfig(
-                    executable_path=resolved.executable_path,
-                    model_path=resolved.model_path,
-                    model_id=resolved.model_id,
-                    model_expected_size_bytes=resolved.model_bytes,
-                    model_sha256=resolved.model_checksum,
-                    threads=resolved.threads,
-                    timeout_seconds=resolved.timeout_seconds,
-                )
+                cfg = LlamaCppConfig(**build_llama_cpp_config_kwargs(resolved))
                 gen = LlamaCppGenerator(cfg)
                 gen.check_readiness()
                 cached_generator = gen

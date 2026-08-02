@@ -21,7 +21,16 @@ jobs:
           - macos-latest
           - windows-latest
         python-version:
-          - "3.10"
+          # 3.10 itself is not used here: even with check-latest, some
+          # runner images (macOS, Windows) only have 3.10.11 available,
+          # which is below pyproject.toml's >=3.10.12 floor (safe
+          # tarfile extraction, PEP 706 filter="data", used by managed
+          # runtime provisioning, issue #58) and fails installation.
+          # 3.11+ is always above that floor on every OS, so it is used
+          # here for cross-platform coverage; the floor itself is
+          # pinned and explicitly tested by the separate `floor-check`
+          # job below (ubuntu-only, exact 3.10.12).
+          - "3.11"
           - "3.14"
 
     steps:
@@ -32,6 +41,7 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
+          check-latest: true
 
       - name: Install project and development tools
         run: python -m pip install -e ".[dev]"
@@ -44,6 +54,27 @@ jobs:
 
       - name: Check formatting
         run: ruff format --check .
+
+      - name: Test
+        run: pytest
+
+  floor-check:
+    name: ubuntu-latest / Python 3.10.12 (exact floor)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10.12"
+
+      - name: Install project and development tools
+        run: python -m pip install -e ".[dev]"
+
+      - name: Verify installed CLI
+        run: econpapers --help
 
       - name: Test
         run: pytest

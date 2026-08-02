@@ -45,7 +45,14 @@ class RuntimeModelOverrides:
 
 @dataclass(frozen=True, slots=True)
 class ResolvedRuntimeModelConfig:
-    """Fully resolved runtime/model identity and options for one invocation."""
+    """Fully resolved runtime/model identity and options for one invocation.
+
+    ``runtime_id``/``runtime_version_marker`` are ``None`` unless durable
+    configuration recorded them (i.e. ``setup`` resolved the executable
+    through managed provisioning) — callers construct ``LlamaCppConfig``
+    with these only when not ``None``, letting its own defaults apply
+    otherwise, exactly as before this field existed.
+    """
 
     executable_path: Path
     model_path: Path
@@ -55,6 +62,8 @@ class ResolvedRuntimeModelConfig:
     threads: int | None
     timeout_seconds: float
     source: str
+    runtime_id: str | None = None
+    runtime_version_marker: str | None = None
 
 
 def _identity_values(overrides: RuntimeModelOverrides) -> dict[str, object]:
@@ -122,6 +131,8 @@ def resolve_runtime_model_config(
         )
     validate_identity_override_shape(overrides)
 
+    runtime_id: str | None = None
+    runtime_version_marker: str | None = None
     if identity_fully_specified(overrides):
         executable_path = Path(overrides.executable_path)  # type: ignore[arg-type]
         model_path = Path(overrides.model_path)  # type: ignore[arg-type]
@@ -135,6 +146,8 @@ def resolve_runtime_model_config(
         model_id = durable_config.model_id
         model_bytes = durable_config.model_bytes
         model_checksum = durable_config.model_checksum
+        runtime_id = durable_config.runtime_id
+        runtime_version_marker = durable_config.runtime_version_marker
         source = "config"
     else:
         raise ConfigResolutionError(
@@ -166,7 +179,38 @@ def resolve_runtime_model_config(
         threads=threads,
         timeout_seconds=timeout_seconds,
         source=source,
+        runtime_id=runtime_id,
+        runtime_version_marker=runtime_version_marker,
     )
+
+
+def build_llama_cpp_config_kwargs(
+    resolved: ResolvedRuntimeModelConfig,
+) -> dict[str, object]:
+    """Return ``LlamaCppConfig`` constructor kwargs for one resolved identity.
+
+    Includes ``runtime_id``/``runtime_version_marker`` only when resolution
+    actually recorded them (managed-runtime-provisioned durable
+    configuration); otherwise omits them entirely so ``LlamaCppConfig``'s
+    own defaults apply, exactly as before these fields existed. Every
+    ``LlamaCppConfig`` construction site (``chat``, ``analyze``, bare
+    ``econpapers``) shares this so the installed runtime's identity is
+    never silently replaced by an adapter default after a restart.
+    """
+    kwargs: dict[str, object] = {
+        "executable_path": resolved.executable_path,
+        "model_path": resolved.model_path,
+        "model_id": resolved.model_id,
+        "model_expected_size_bytes": resolved.model_bytes,
+        "model_sha256": resolved.model_checksum,
+        "threads": resolved.threads,
+        "timeout_seconds": resolved.timeout_seconds,
+    }
+    if resolved.runtime_id is not None:
+        kwargs["runtime_id"] = resolved.runtime_id
+    if resolved.runtime_version_marker is not None:
+        kwargs["runtime_version_marker"] = resolved.runtime_version_marker
+    return kwargs
 
 
 def resolve_db_path(

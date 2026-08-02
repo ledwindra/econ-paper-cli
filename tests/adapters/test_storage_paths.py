@@ -6,6 +6,7 @@ from econ_paper_cli.adapters.storage_paths import (
     get_default_config_dir,
     get_default_config_path,
     get_default_db_path,
+    get_default_runtime_dir,
     get_default_storage_dir,
 )
 
@@ -135,6 +136,30 @@ def test_config_dir_env_override_does_not_affect_storage_dir() -> None:
 def test_library_dir_env_override_does_not_affect_config_dir() -> None:
     env = {"ECONPAPERS_LIBRARY_DIR": "/only/library"}
     assert get_default_storage_dir(env=env, system="Linux") == Path("/only/library")
+    assert get_default_config_dir(env=env, system="Linux") == (
+        Path.home() / ".config" / "econpapers"
+    )
+
+
+def test_runtime_dir_nests_under_storage_dir_by_default() -> None:
+    env: dict[str, str] = {}
+    storage_dir = get_default_storage_dir(env=env, system="Linux")
+    runtime_dir = get_default_runtime_dir(env=env, system="Linux")
+    assert runtime_dir == storage_dir / "runtime"
+
+
+def test_runtime_dir_env_override() -> None:
+    env = {"ECONPAPERS_RUNTIME_DIR": "/override/runtime/path"}
+    path = get_default_runtime_dir(env=env, system="Linux")
+    assert path == Path("/override/runtime/path")
+
+
+def test_runtime_dir_env_override_does_not_affect_storage_or_config_dir() -> None:
+    env = {"ECONPAPERS_RUNTIME_DIR": "/only/runtime"}
+    assert get_default_runtime_dir(env=env, system="Linux") == Path("/only/runtime")
+    assert get_default_storage_dir(env=env, system="Linux") == (
+        Path.home() / ".local" / "share" / "econpapers"
+    )
     assert get_default_config_dir(env=env, system="Linux") == (
         Path.home() / ".config" / "econpapers"
     )

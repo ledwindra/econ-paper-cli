@@ -450,19 +450,31 @@ validated by one-shot `chat`. `open_shell_session` resolves configuration
 and the database path exactly like `execute_chat_command` (eager
 `validate_identity_override_shape`, lazy `LazyConfigLoader`), then opens the
 configured SQLite library read-only exactly once and builds one immutable
-`SessionSnapshot` (database path, paper/passage counts, and one validated
+`SessionSnapshot` (database path, paper/passage counts, one validated
 `Corpus` — or `None` for a genuinely empty library, since `Corpus` requires
-at least one paper). `InteractiveShellSession` constructs one retriever from
-that snapshot and reuses it for every question; its `ask()` method is a
+at least one paper — and every early-section record loaded at open time into
+an immutable mapping). `InteractiveShellSession` constructs one retriever
+from that snapshot and reuses it for every question; its `ask()` method is a
 per-question, config-independent adaptation of `execute_chat_command`'s
-retrieval/generation/citation-validation body, sharing `_resolve_citations`
-and `_render_citation_lines` from `chat_command` so citation output and
-formatting stay byte-for-byte identical to one-shot chat. The local
-generator is constructed lazily on the first question with retrieval
-evidence and cached on the session for reuse; a failed construction attempt
-leaves the cache untouched so the next matched question retries from
-scratch, and empty-library/no-match questions never reach construction at
-all.
+retrieval/generation/citation-validation body, sharing a
+`_resolve_citations(record_lookup, ...)` (parameterized by a lookup callable
+rather than bound to live storage, so both callers stay byte-for-byte
+identical while the shell never re-reads storage per turn) and
+`_render_citation_lines` from `chat_command`. Every turn resolves citations
+from the snapshot's fixed mapping, never a live re-read, so a concurrent
+`analyze`/`update` cannot change or break a citation mid-session; the
+session's storage connection closes deterministically
+(`InteractiveShellSession.close()`) when the REPL loop exits on every path.
+`ShellTurnOutcome` distinguishes `TYPED_FAILURE` from `INTERNAL_FAILURE`
+(mirroring one-shot chat's exit-code-2-vs-3 exception grouping, including the
+same ValueError-subclass shadowing chat already relies on for citation/
+generation validation errors), and every failure branch preserves
+`generator_action` ("constructed"/"reused"/`None`) instead of discarding it.
+The local generator is constructed lazily on the first question with
+retrieval evidence and cached on the session for reuse; a failed
+construction attempt leaves the cache untouched so the next matched question
+retries from scratch, and empty-library/no-match questions never reach
+construction at all.
 
 `run_interactive_shell` is the read-eval-print loop: it reads lines via
 `stdin.readline()` rather than the builtin `input()`, so it has no direct
@@ -477,6 +489,44 @@ subcommand are unaffected. The session never writes to configuration or the
 database, never reopens or reanalyzes a PDF, and never persists questions,
 answers, or citations; the library snapshot is fixed for the life of the
 process.
+
+Issue 58 adds managed `llama.cpp` runtime provisioning to `econpapers setup`
+so a fresh user no longer has to build `llama.cpp`, edit `PATH`, or locate an
+executable manually — see
+[`docs/managed-runtime-provisioning.md`](managed-runtime-provisioning.md) for
+the full contract. In brief: `econ_paper_cli.domain.runtime_manifest`/
+`runtime_manifest_data` pin one `llama.cpp` release per supported
+platform/architecture as a plain Python module (not JSON, so it is always
+packaged); `econ_paper_cli.services.platform_detection` maps the current
+machine onto that vocabulary without raising for unsupported combinations;
+`econ_paper_cli.protocols.runtime_provisioning` defines narrow
+`Downloader`/`ArchiveExtractor` protocols, backed by stdlib-only real
+adapters (`adapters.runtime_downloader.UrllibDownloader`,
+`adapters.runtime_extractor.SafeArchiveExtractor`) — this is the only network
+access anywhere in the application; `analyze`, `chat`, bare `econpapers`, and
+`status` remain unconditionally network-free.
+`econ_paper_cli.services.runtime_provisioning.ensure_managed_runtime`
+orchestrates stage-into-a-sibling-directory, verify-every-member-checksum-
+and-executable-readiness-while-still-staged, then promote via `os.replace`
+onto a content-addressed final path that does not already exist — this
+makes concurrent installs of the same pinned artifact race-safe by
+construction (colliding installs are byte-identical, so losing the promotion
+race means adopting the winner rather than failing) and means a corrupt
+existing directory at that path is evicted, never overwritten in place.
+`econ_paper_cli.domain.runtime_receipt.InstallReceipt` (schema version 1) is
+written once per install and records a checksum for every extracted bundle
+member, not just the top-level executable, so `econpapers status` and the
+setup reuse-check can classify an install as managed only via a validated
+receipt — never merely by directory location. `SetupCommandOptions.
+executable_path` is now optional: an explicit `--llama-cpp-path` still always
+bypasses provisioning entirely (never a download, unchanged CLI-override
+precedence), while omitting it triggers reuse-or-download-or-typed-offline-
+failure. `econ_paper_cli.services.status_command` reports runtime origin
+(`managed`/`external`/`unknown`) and state
+(`verified`/`missing`/`corrupt_or_mismatched`/`unsupported_platform`/
+`not_checked`) independently from model state
+(`verified`/`missing`/`corrupt_or_mismatched`/`not_configured`), so a missing
+or corrupt model is never conflated with a corrupt managed runtime.
 
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.

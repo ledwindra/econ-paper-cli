@@ -111,6 +111,31 @@ def get_default_config_dir(
     return Path.home() / ".config" / app_name
 
 
+def get_default_runtime_dir(
+    app_name: str = DEFAULT_APP_NAME,
+    env: Mapping[str, str] | None = None,
+    system: str | None = None,
+) -> Path:
+    """Resolve the canonical cross-platform managed-runtime install directory.
+
+    Independent of both the config dir and the SQLite library dir, but
+    nested under the same per-user data area as the library (this is
+    downloaded binary/library data, not configuration).
+
+    Resolution order:
+    1. ECONPAPERS_RUNTIME_DIR environment variable (if non-empty)
+    2. get_default_storage_dir(...) / "runtime"
+    """
+    env_map = os.environ if env is None else env
+    custom_runtime_dir = env_map.get("ECONPAPERS_RUNTIME_DIR", "").strip()
+    if custom_runtime_dir:
+        return Path(custom_runtime_dir)
+
+    return (
+        get_default_storage_dir(app_name=app_name, env=env, system=system) / "runtime"
+    )
+
+
 def get_default_config_path(
     config_filename: str = "config.json",
     app_name: str = DEFAULT_APP_NAME,
