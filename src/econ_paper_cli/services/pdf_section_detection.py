@@ -17,16 +17,16 @@ from econ_paper_cli.domain.pdf_sections import (
 )
 
 _ABSTRACT_HEADING_RE = re.compile(
-    r"^\s*(?:(?:1|I|A)[\.\:]?\s+)?ABSTRACT[\.\:]?\s*$",
+    r"^\s*(?:(?:1|I|A)(?:[\.\:]|\s*\|\s*)?\s+)?ABSTRACT[\.\:]?\s*$",
     re.IGNORECASE,
 )
 _INTRODUCTION_HEADING_RE = re.compile(
-    r"^\s*(?:(?:1|1\.0|I)[\.\:]?\s+)?INTRODUCTION[\.\:]?\s*$",
+    r"^\s*(?:(?:1|1\.0|I)(?:[\.\:]|\s*\|\s*)?\s+)?INTRODUCTION[\.\:]?\s*$",
     re.IGNORECASE,
 )
 
 _NEXT_SECTION_TITLE_RE = re.compile(
-    r"^\s*(?:[2-9]|\d{2,}|II|III|IV|V|VI|VII|VIII|IX|X)[\.\:]?\s+(.+)$",
+    r"^\s*(?:[2-9]|\d{2,}|II|III|IV|V|VI|VII|VIII|IX|X)(?:[\.\:]|\s*\|\s*)?\s+(.+)$",
     re.IGNORECASE,
 )
 _TOC_DOT_LEADERS_RE = re.compile(r"\.{4,}")
@@ -395,6 +395,15 @@ _PROSE_VERB_PHRASES = (
     "they find",
     "which shows",
     "and we find",
+    "we show",
+    "we test",
+    "we propose",
+    "we evaluate",
+    "our results",
+    "in section",
+    "section 1",
+    "table 1",
+    "figure 1",
 )
 
 

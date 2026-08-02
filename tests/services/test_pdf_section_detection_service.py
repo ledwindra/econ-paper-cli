@@ -355,3 +355,51 @@ def test_service_rejects_invalid_inputs() -> None:
         detect_pdf_sections(object(), settings=DEFAULT_PDF_SECTION_SETTINGS)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="settings"):
         detect_pdf_sections(_extraction("Abstract\nText"), settings=object())  # type: ignore[arg-type]
+
+
+def test_heading_grammar_variants_and_case_insensitivity() -> None:
+    # 1. Pipe-separated headings (Case D style)
+    text1 = "ABSTRACT\nAbstract text.\n\n1 | Introduction\nIntro text.\n\n2 | Related Literature\nRelated literature text.\n"
+    res1 = detect_pdf_sections(
+        _extraction(text1), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+    assert len(res1.sections) == 2
+    assert res1.sections[0].observed_heading_text == "ABSTRACT"
+    assert res1.sections[1].observed_heading_text == "1 | Introduction"
+    assert "Related literature text" not in res1.sections[1].text
+
+    # 2. Roman numerals (Case B style)
+    text2 = "Abstract\nAbstract text.\n\nI. Introduction\nIntro text.\n\nII. Spatial Equilibrium\nSpatial text.\n"
+    res2 = detect_pdf_sections(
+        _extraction(text2), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+    assert len(res2.sections) == 2
+    assert res2.sections[1].observed_heading_text == "I. Introduction"
+    assert "Spatial text" not in res2.sections[1].text
+
+    # 3. Punctuation-free numbered section 2 (Case A style)
+    text3 = "Abstract\nAbstract text.\n\n1. Introduction\nIntro text.\n\n2 Gravity estimation framework\nFramework text.\n"
+    res3 = detect_pdf_sections(
+        _extraction(text3), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+    assert len(res3.sections) == 2
+    assert "Framework text" not in res3.sections[1].text
+
+
+def test_false_positive_prose_and_numbered_citations_rejected() -> None:
+    # Numbered prose, in-sentence references, TOC dot leaders, parenthetical lists
+    text = (
+        "Abstract\nAbstract text.\n\n"
+        "1. Introduction\nIntro prose.\n\n"
+        "1. In this paper we show that institutions matter.\n"
+        "(1) We find that regional policy varies.\n"
+        "Section 1 shows that productivity increases.\n"
+        "Table of contents ........ 14\n\n"
+        "2. Data and Methods\nReal section 2 text.\n"
+    )
+    res = detect_pdf_sections(_extraction(text), settings=DEFAULT_PDF_SECTION_SETTINGS)
+    assert len(res.sections) == 2
+    intro = res.sections[1]
+    assert intro.observed_heading_text == "1. Introduction"
+    assert "1. In this paper we show" in intro.text
+    assert "Real section 2 text" not in intro.text
