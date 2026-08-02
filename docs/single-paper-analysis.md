@@ -28,6 +28,9 @@ No network calls are made. All backends are replaceable through the
 - `generator`: any object implementing `protocols.generation.Generator`.
 - `settings`: optional `SinglePaperAnalysisSettings` (defaults to
   `DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS`).
+- `preflight_result`: optional, keyword-only validated preflight result for the
+  same single PDF. Directory batch orchestration supplies this result so the
+  already computed checksum is not read a second time; ordinary callers omit it.
 
 ## Stage outcomes
 

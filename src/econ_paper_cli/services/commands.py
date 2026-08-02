@@ -36,9 +36,9 @@ def run_update(args: Namespace | None = None) -> int:
 
 
 def run_analyze(args: Namespace) -> int:
-    """Parse options and run single-paper research-question analysis."""
+    """Parse options and run PDF research-question analysis."""
     try:
-        pdf_path = Path(args.pdf_path)
+        target_path = Path(args.target_path)
         executable_path = Path(args.llama_cpp_path)
         model_path = Path(args.model_path)
         model_id = str(args.model_id)
@@ -52,7 +52,7 @@ def run_analyze(args: Namespace) -> int:
         return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
 
     options = AnalyzeCommandOptions(
-        pdf_path=pdf_path,
+        target_path=target_path,
         executable_path=executable_path,
         model_path=model_path,
         model_id=model_id,

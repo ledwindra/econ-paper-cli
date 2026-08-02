@@ -1,5 +1,6 @@
-"""Application service and output rendering for the offline single-paper analysis CLI command."""
+"""Application service and output rendering for offline PDF analysis commands."""
 
+import enum
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,9 +28,13 @@ from econ_paper_cli.domain import (
     SinglePaperAnalysisStatus,
     SinglePaperAnalysisValidationError,
 )
+from econ_paper_cli.domain.errors import IngestionError
+from econ_paper_cli.domain.ingestion import IngestionPreflightResult, PreflightCandidate
+from econ_paper_cli.domain.single_paper_analysis import compute_analysis_id
 from econ_paper_cli.protocols.generation import Generator
 from econ_paper_cli.protocols.pdf_extraction import PDFExtractor
 from econ_paper_cli.protocols.storage import StorageBackend, StorageConnectionError
+from econ_paper_cli.services.ingestion import run_ingestion_preflight
 from econ_paper_cli.services.single_paper_analysis import analyze_single_paper
 from econ_paper_cli.services.single_paper_analysis_storage import (
     save_single_paper_analysis_result,
@@ -37,7 +42,7 @@ from econ_paper_cli.services.single_paper_analysis_storage import (
 
 
 class CLIExitCode:
-    """Stable exit codes for the single-paper analysis CLI command."""
+    """Stable exit codes for PDF analysis CLI commands."""
 
     SUCCESS = 0
     HALTED_OR_UNAVAILABLE = 1
@@ -45,11 +50,149 @@ class CLIExitCode:
     UNEXPECTED_ERROR = 3
 
 
+class BatchOutcomeKind(str, enum.Enum):
+    """Outcome category for a single path in a batch analysis run."""
+
+    NEWLY_ANALYZED = "newly_analyzed"
+    REUSED = "reused"
+    BATCH_DUPLICATE = "batch_duplicate"
+    TYPED_TERMINAL = "typed_terminal"
+    UNEXPECTED_FAILURE = "unexpected_failure"
+
+
+@dataclass(frozen=True, slots=True)
+class BatchItemOutcome:
+    """Outcome for one discovered path in a batch analysis run."""
+
+    path: Path
+    kind: BatchOutcomeKind
+    record: SinglePaperAnalysisRecord | None = None
+    duplicate_of: Path | None = None
+    error: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.path, Path):
+            raise TypeError("path must be a pathlib.Path.")
+        if not isinstance(self.kind, BatchOutcomeKind):
+            raise TypeError("kind must be a BatchOutcomeKind.")
+
+        if self.kind is BatchOutcomeKind.BATCH_DUPLICATE:
+            if not isinstance(self.duplicate_of, Path):
+                raise TypeError(
+                    "duplicate_of must be a pathlib.Path for a batch duplicate."
+                )
+            if self.record is not None or self.error is not None:
+                raise ValueError(
+                    "A batch duplicate cannot include a record or error message."
+                )
+            return
+
+        if self.kind is BatchOutcomeKind.UNEXPECTED_FAILURE:
+            if not isinstance(self.error, str) or not self.error.strip():
+                raise ValueError(
+                    "error is required for an unexpected per-file failure."
+                )
+            if self.record is not None or self.duplicate_of is not None:
+                raise ValueError(
+                    "An unexpected failure cannot include a record or duplicate path."
+                )
+            return
+
+        if not isinstance(self.record, SinglePaperAnalysisRecord):
+            raise TypeError(
+                f"record must be a SinglePaperAnalysisRecord for outcome "
+                f"'{self.kind.value}'."
+            )
+        if self.duplicate_of is not None or self.error is not None:
+            raise ValueError(
+                "A durable-record outcome cannot include duplicate or error details."
+            )
+        is_success = self.record.status is SinglePaperAnalysisStatus.SUCCESS
+        if self.kind is BatchOutcomeKind.NEWLY_ANALYZED and not is_success:
+            raise ValueError("newly_analyzed requires a successful durable record.")
+        if self.kind is BatchOutcomeKind.TYPED_TERMINAL and is_success:
+            raise ValueError("typed_terminal requires a non-success durable record.")
+
+
+@dataclass(frozen=True, slots=True)
+class BatchResult:
+    """Immutable aggregate result of a directory batch analysis run."""
+
+    items: tuple[BatchItemOutcome, ...]
+    total_discovered: int
+    unique_checksums: int
+    newly_analyzed: int
+    reused: int
+    batch_duplicates: int
+    successes: int
+    halted: int
+    typed_failures: int
+    unexpected_failures: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.items, tuple) or not all(
+            isinstance(item, BatchItemOutcome) for item in self.items
+        ):
+            raise TypeError("items must be a tuple of BatchItemOutcome instances.")
+
+        for field_name in (
+            "total_discovered",
+            "unique_checksums",
+            "newly_analyzed",
+            "reused",
+            "batch_duplicates",
+            "successes",
+            "halted",
+            "typed_failures",
+            "unexpected_failures",
+        ):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise TypeError(f"{field_name} must be a non-negative integer.")
+
+        expected = {
+            "total_discovered": len(self.items),
+            "unique_checksums": sum(
+                item.kind is not BatchOutcomeKind.BATCH_DUPLICATE for item in self.items
+            ),
+            "newly_analyzed": sum(
+                item.kind
+                in (BatchOutcomeKind.NEWLY_ANALYZED, BatchOutcomeKind.TYPED_TERMINAL)
+                for item in self.items
+            ),
+            "reused": sum(item.kind is BatchOutcomeKind.REUSED for item in self.items),
+            "batch_duplicates": sum(
+                item.kind is BatchOutcomeKind.BATCH_DUPLICATE for item in self.items
+            ),
+            "successes": sum(
+                item.record is not None
+                and item.record.status is SinglePaperAnalysisStatus.SUCCESS
+                for item in self.items
+            ),
+            "halted": sum(
+                item.record is not None and _is_halted(item.record.status)
+                for item in self.items
+            ),
+            "typed_failures": sum(
+                item.record is not None and _is_typed_failure(item.record.status)
+                for item in self.items
+            ),
+            "unexpected_failures": sum(
+                item.kind is BatchOutcomeKind.UNEXPECTED_FAILURE for item in self.items
+            ),
+        }
+        for field_name, expected_value in expected.items():
+            if getattr(self, field_name) != expected_value:
+                raise ValueError(
+                    f"{field_name} must be {expected_value} for the supplied items."
+                )
+
+
 @dataclass(frozen=True, slots=True)
 class AnalyzeCommandOptions:
-    """Parsed options for the single-paper analysis CLI command."""
+    """Parsed options for the PDF analysis CLI command."""
 
-    pdf_path: Path
+    target_path: Path
     executable_path: Path
     model_path: Path
     model_id: str
@@ -134,45 +277,254 @@ def format_analysis_record_output(
     return "\n".join(lines)
 
 
+def format_batch_result_output(result: BatchResult, db_path: Path | str) -> str:
+    """Render deterministic batch analysis output for all discovered paths."""
+    sections: list[str] = []
+
+    for item in result.items:
+        header = f"=== [{item.kind.value}] {item.path} ==="
+        if item.kind == BatchOutcomeKind.BATCH_DUPLICATE:
+            sections.append(f"{header}\nDuplicate of: {item.duplicate_of}")
+        elif item.kind == BatchOutcomeKind.UNEXPECTED_FAILURE:
+            sections.append(f"{header}\nError: {item.error}")
+        elif item.record is not None:
+            record_str = format_analysis_record_output(item.record, db_path)
+            sections.append(f"{header}\n{record_str}")
+        else:
+            sections.append(header)
+
+    summary_lines = [
+        "=== Batch Summary ===",
+        f"Total discovered:    {result.total_discovered}",
+        f"Unique checksums:    {result.unique_checksums}",
+        f"Newly analyzed:      {result.newly_analyzed}",
+        f"Reused (exact):      {result.reused}",
+        f"Batch duplicates:    {result.batch_duplicates}",
+        f"Successes:           {result.successes}",
+        f"Halted/unavailable:  {result.halted}",
+        f"Typed failures:      {result.typed_failures}",
+        f"Unexpected failures: {result.unexpected_failures}",
+    ]
+    sections.append("\n".join(summary_lines))
+    return "\n\n".join(sections)
+
+
+def _build_settings(options: AnalyzeCommandOptions) -> SinglePaperAnalysisSettings:
+    """Build and validate SinglePaperAnalysisSettings from CLI options."""
+    q_settings = (
+        PDFQualitySettings(policy_version=options.quality_policy_version)
+        if options.quality_policy_version
+        else DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.quality_settings
+    )
+    sec_settings = (
+        PDFSectionSettings(policy_version=options.section_policy_version)
+        if options.section_policy_version
+        else DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.section_settings
+    )
+    rq_settings = (
+        ResearchQuestionSettings(
+            policy_version=options.research_question_policy_version
+        )
+        if options.research_question_policy_version
+        else DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.research_question_settings
+    )
+    single_policy = (
+        options.single_paper_policy_version
+        if options.single_paper_policy_version
+        else DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.policy_version
+    )
+    return SinglePaperAnalysisSettings(
+        policy_version=single_policy,
+        quality_settings=q_settings,
+        section_settings=sec_settings,
+        research_question_settings=rq_settings,
+    )
+
+
+def _batch_exit_code(result: BatchResult) -> int:
+    """Derive aggregate exit code from batch result."""
+    if result.unexpected_failures > 0:
+        return CLIExitCode.UNEXPECTED_ERROR
+    if result.typed_failures > 0:
+        return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    if result.halted > 0:
+        return CLIExitCode.HALTED_OR_UNAVAILABLE
+    return CLIExitCode.SUCCESS
+
+
+def _is_halted(status: SinglePaperAnalysisStatus) -> bool:
+    return status in (
+        SinglePaperAnalysisStatus.QUALITY_HALTED,
+        SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED,
+    )
+
+
+def _is_typed_failure(status: SinglePaperAnalysisStatus) -> bool:
+    return status in (
+        SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
+        SinglePaperAnalysisStatus.EXTRACTION_FAILED,
+    )
+
+
+def _analyze_and_persist_one(
+    pdf_path: Path,
+    extractor: PDFExtractor,
+    generator: Generator,
+    storage: StorageBackend,
+    settings: SinglePaperAnalysisSettings,
+    preflight_result: IngestionPreflightResult,
+) -> BatchItemOutcome:
+    """Run analysis for one candidate path, persist, and return a BatchItemOutcome."""
+    result = analyze_single_paper(
+        pdf_path,
+        extractor,
+        generator,
+        settings=settings,
+        preflight_result=preflight_result,
+    )
+    record = save_single_paper_analysis_result(storage, result, settings=settings)
+    durable = storage.get_single_paper_analysis(record.analysis_id)
+    if durable is None:
+        raise RuntimeError(
+            f"Failed to read back persisted analysis record '{record.analysis_id}' from storage."
+        )
+    kind = (
+        BatchOutcomeKind.NEWLY_ANALYZED
+        if durable.status is SinglePaperAnalysisStatus.SUCCESS
+        else BatchOutcomeKind.TYPED_TERMINAL
+    )
+    return BatchItemOutcome(path=pdf_path, kind=kind, record=durable)
+
+
+def _single_candidate_preflight(
+    candidate: PreflightCandidate,
+) -> IngestionPreflightResult:
+    """Project one directory candidate into the single-paper preflight contract."""
+    return IngestionPreflightResult(
+        target_path=candidate.source_path,
+        candidates=(candidate,),
+        new_candidate_count=1,
+        stored_candidate_count=0,
+        batch_duplicate_count=0,
+        total_candidate_count=1,
+    )
+
+
+def run_batch_analysis(
+    options: AnalyzeCommandOptions,
+    extractor: PDFExtractor,
+    generator: Generator,
+    storage: StorageBackend,
+    settings: SinglePaperAnalysisSettings,
+) -> BatchResult:
+    """Run deterministic batch analysis over a directory target.
+
+    Uses run_ingestion_preflight for discovery and duplicate detection.
+    Reuses exact stored records; analyzes and persists new unique candidates.
+    Isolates unexpected per-file failures.
+    """
+    preflight = run_ingestion_preflight(options.target_path)
+
+    items: list[BatchItemOutcome] = []
+    newly_analyzed = 0
+    reused = 0
+    batch_duplicates = 0
+    successes = 0
+    halted = 0
+    typed_failures = 0
+    unexpected_failures = 0
+    for candidate in preflight.candidates:
+        pdf_path = candidate.source_path
+        checksum = candidate.content_checksum
+
+        # Batch duplicate — already seen this checksum in this run
+        if candidate.is_batch_duplicate:
+            items.append(
+                BatchItemOutcome(
+                    path=pdf_path,
+                    kind=BatchOutcomeKind.BATCH_DUPLICATE,
+                    duplicate_of=candidate.duplicate_of_path,
+                )
+            )
+            batch_duplicates += 1
+            continue
+
+        # Check for exact stored identity (same checksum + same settings fingerprint)
+        analysis_id = compute_analysis_id(checksum, settings, pdf_path)
+        existing = storage.get_single_paper_analysis(analysis_id)
+        if existing is not None:
+            items.append(
+                BatchItemOutcome(
+                    path=pdf_path,
+                    kind=BatchOutcomeKind.REUSED,
+                    record=existing,
+                )
+            )
+            reused += 1
+            if existing.status == SinglePaperAnalysisStatus.SUCCESS:
+                successes += 1
+            elif _is_halted(existing.status):
+                halted += 1
+            elif _is_typed_failure(existing.status):
+                typed_failures += 1
+            continue
+
+        # New candidate — run analysis, persist, strict read-back
+        try:
+            outcome = _analyze_and_persist_one(
+                pdf_path,
+                extractor,
+                generator,
+                storage,
+                settings,
+                _single_candidate_preflight(candidate),
+            )
+            items.append(outcome)
+            newly_analyzed += 1
+            if outcome.record is not None and _is_typed_failure(outcome.record.status):
+                typed_failures += 1
+            elif outcome.record is not None:
+                if outcome.record.status is SinglePaperAnalysisStatus.SUCCESS:
+                    successes += 1
+                elif _is_halted(outcome.record.status):
+                    halted += 1
+
+        except Exception as err:
+            items.append(
+                BatchItemOutcome(
+                    path=pdf_path,
+                    kind=BatchOutcomeKind.UNEXPECTED_FAILURE,
+                    error=f"{type(err).__name__}: {err}",
+                )
+            )
+            unexpected_failures += 1
+
+    return BatchResult(
+        items=tuple(items),
+        total_discovered=preflight.total_candidate_count,
+        unique_checksums=preflight.total_candidate_count
+        - preflight.batch_duplicate_count,
+        newly_analyzed=newly_analyzed,
+        reused=reused,
+        batch_duplicates=batch_duplicates,
+        successes=successes,
+        halted=halted,
+        typed_failures=typed_failures,
+        unexpected_failures=unexpected_failures,
+    )
+
+
 def run_single_paper_analysis_command(
     options: AnalyzeCommandOptions,
     extractor: PDFExtractor | None = None,
     generator: Generator | None = None,
     storage: StorageBackend | None = None,
 ) -> int:
-    """Execute single-paper analysis from CLI options and persist/render the record."""
+    """Execute analysis from CLI options — accepts a single PDF or a directory."""
     try:
         # 1. Build and validate settings
         try:
-            q_settings = (
-                PDFQualitySettings(policy_version=options.quality_policy_version)
-                if options.quality_policy_version
-                else DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.quality_settings
-            )
-            sec_settings = (
-                PDFSectionSettings(policy_version=options.section_policy_version)
-                if options.section_policy_version
-                else DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.section_settings
-            )
-            rq_settings = (
-                ResearchQuestionSettings(
-                    policy_version=options.research_question_policy_version
-                )
-                if options.research_question_policy_version
-                else DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.research_question_settings
-            )
-            single_policy = (
-                options.single_paper_policy_version
-                if options.single_paper_policy_version
-                else DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS.policy_version
-            )
-
-            settings = SinglePaperAnalysisSettings(
-                policy_version=single_policy,
-                quality_settings=q_settings,
-                section_settings=sec_settings,
-                research_question_settings=rq_settings,
-            )
+            settings = _build_settings(options)
         except (
             PDFQualityValidationError,
             PDFSectionValidationError,
@@ -234,9 +586,22 @@ def run_single_paper_analysis_command(
         if extractor is None:
             extractor = PyPDFExtractor()
 
-        # 4. Run five-stage analysis service
+        # 4a. Directory mode — batch analysis
+        if options.target_path.is_dir():
+            try:
+                batch = run_batch_analysis(
+                    options, extractor, generator, storage, settings
+                )
+            except IngestionError as err:
+                sys.stderr.write(f"Input preflight error: {err}\n")
+                return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+            output_str = format_batch_result_output(batch, target_db_path)
+            sys.stdout.write(f"{output_str}\n")
+            return _batch_exit_code(batch)
+
+        # 4b. Single-file mode — existing contract preserved exactly
         result = analyze_single_paper(
-            options.pdf_path,
+            options.target_path,
             extractor,
             generator,
             settings=settings,
@@ -259,15 +624,9 @@ def run_single_paper_analysis_command(
         # 8. Return exit code based on terminal status
         if durable_record.status is SinglePaperAnalysisStatus.SUCCESS:
             return CLIExitCode.SUCCESS
-        if durable_record.status in (
-            SinglePaperAnalysisStatus.QUALITY_HALTED,
-            SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED,
-        ):
+        if _is_halted(durable_record.status):
             return CLIExitCode.HALTED_OR_UNAVAILABLE
-        if durable_record.status in (
-            SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
-            SinglePaperAnalysisStatus.EXTRACTION_FAILED,
-        ):
+        if _is_typed_failure(durable_record.status):
             return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
 
         return CLIExitCode.UNEXPECTED_ERROR

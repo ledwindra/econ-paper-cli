@@ -64,10 +64,16 @@ econpapers setup
 econpapers chat
 econpapers status
 econpapers update
+econpapers analyze TARGET_PATH --llama-cpp-path EXECUTABLE_PATH --model-path MODEL_PATH --model-id MODEL_ID --model-bytes BYTES --model-checksum SHA256
 ```
 
-All four commands are deterministic placeholders. They do not download files,
-access the network, retrieve papers, or run a language model.
+The first four commands are deterministic placeholders. `econpapers analyze`
+is an offline command for one local PDF or a directory of PDFs. It recursively
+processes unique PDF content in deterministic path order, persists structured
+research-question evidence and provenance to SQLite, and resumes exact prior
+analyses when the checksum and canonical settings match. The runtime and GGUF
+model must already exist at the explicit paths; the command downloads nothing
+and never modifies source PDFs.
 
 ### Intended future workflow
 
@@ -104,7 +110,8 @@ for the existing backend-independent `Generator` protocol. It uses explicit
 local paths, offline mode, a versioned evidence-only prompt, a fingerprinted
 GBNF constraint derived from the authoritative JSON schema, authoritative
 citation resolution, and final response validation. It does not download a
-runtime or model and is not yet connected to the CLI.
+runtime or model. The `analyze` command constructs this adapter only from the
+user's explicit local runtime and model paths.
 
 `llama.cpp` b10199 is pinned for adapter compatibility testing and the initial
 Issue 13 comparison, not as a permanent product runtime. Three model artifacts

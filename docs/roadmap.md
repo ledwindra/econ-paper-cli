@@ -135,6 +135,10 @@ Completed:
   failures for missing, unreadable, malformed, and password-encrypted PDFs
 - Assess successful extraction results through immutable versioned settings,
   deterministic measurements and statuses, and stable actionable warnings
+- Analyze a selected PDF or directory sequentially through the existing
+  early-section research-question workflow, with deterministic ordering,
+  duplicate-byte suppression, exact durable-record reuse, and isolated
+  per-file outcomes
 
 Not yet implemented:
 
