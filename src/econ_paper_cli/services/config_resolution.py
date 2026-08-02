@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from econ_paper_cli.adapters.storage_paths import get_default_db_path
 from econ_paper_cli.domain.local_config import LocalRuntimeModelConfig
+from econ_paper_cli.protocols.config import ConfigBackend, ConfigError
 
 DEFAULT_GENERATION_TIMEOUT_SECONDS = 300.0
 
@@ -56,6 +57,47 @@ class ResolvedRuntimeModelConfig:
     source: str
 
 
+def _identity_values(overrides: RuntimeModelOverrides) -> dict[str, object]:
+    return {field: getattr(overrides, field) for field in _IDENTITY_FIELDS}
+
+
+def validate_identity_override_shape(overrides: RuntimeModelOverrides) -> None:
+    """Eagerly reject a partial CLI override of the five identity fields.
+
+    This check depends only on ``overrides`` — never on durable
+    configuration or on whether a generator will ever be constructed — so a
+    partial override is rejected immediately, even on a code path (exact
+    reuse, library backfill, empty-library/no-match chat) that would
+    otherwise never resolve a full runtime/model identity at all.
+    """
+    if not isinstance(overrides, RuntimeModelOverrides):
+        raise TypeError("overrides must be a RuntimeModelOverrides instance.")
+
+    identity_values = _identity_values(overrides)
+    provided_fields = [
+        field for field, value in identity_values.items() if value is not None
+    ]
+    if provided_fields and len(provided_fields) != len(_IDENTITY_FIELDS):
+        missing_fields = [
+            field for field in _IDENTITY_FIELDS if identity_values[field] is None
+        ]
+        raise ConfigResolutionError(
+            "Partial runtime/model override: provide "
+            f"{', '.join(_IDENTITY_FIELDS)} together via explicit CLI "
+            "arguments, or omit all of them to use durable configuration "
+            f"from `econpapers setup` (missing: {', '.join(missing_fields)})."
+        )
+
+
+def identity_fully_specified(overrides: RuntimeModelOverrides) -> bool:
+    """Return True when all five CLI identity overrides are present.
+
+    When true, resolving a runtime/model identity needs no durable
+    configuration at all — callers can skip loading it entirely.
+    """
+    return all(value is not None for value in _identity_values(overrides).values())
+
+
 def resolve_runtime_model_config(
     overrides: RuntimeModelOverrides,
     durable_config: LocalRuntimeModelConfig | None,
@@ -78,23 +120,9 @@ def resolve_runtime_model_config(
         raise TypeError(
             "durable_config must be a LocalRuntimeModelConfig instance or None."
         )
+    validate_identity_override_shape(overrides)
 
-    identity_values = {field: getattr(overrides, field) for field in _IDENTITY_FIELDS}
-    provided_fields = [
-        field for field, value in identity_values.items() if value is not None
-    ]
-
-    if provided_fields:
-        missing_fields = [
-            field for field in _IDENTITY_FIELDS if identity_values[field] is None
-        ]
-        if missing_fields:
-            raise ConfigResolutionError(
-                "Partial runtime/model override: provide "
-                f"{', '.join(_IDENTITY_FIELDS)} together via explicit CLI "
-                "arguments, or omit all of them to use durable configuration "
-                f"from `econpapers setup` (missing: {', '.join(missing_fields)})."
-            )
+    if identity_fully_specified(overrides):
         executable_path = Path(overrides.executable_path)  # type: ignore[arg-type]
         model_path = Path(overrides.model_path)  # type: ignore[arg-type]
         model_id = str(overrides.model_id)
@@ -151,3 +179,31 @@ def resolve_db_path(
     if durable_config is not None and durable_config.db_path is not None:
         return durable_config.db_path
     return get_default_db_path()
+
+
+@dataclass
+class LazyConfigLoader:
+    """Loads durable configuration from a ``ConfigBackend`` at most once.
+
+    Callers that may not need durable configuration at all (exact reuse,
+    library backfill, empty-library/no-match chat, or a fully-specified CLI
+    override) must not force a load merely by constructing this loader —
+    only calling :meth:`get` triggers ``backend.load()``, and the outcome
+    (value or raised error) is cached so a later call never re-invokes it.
+    """
+
+    backend: ConfigBackend
+    _loaded: bool = field(default=False, init=False)
+    _value: LocalRuntimeModelConfig | None = field(default=None, init=False)
+    _error: ConfigError | None = field(default=None, init=False)
+
+    def get(self) -> LocalRuntimeModelConfig | None:
+        if not self._loaded:
+            try:
+                self._value = self.backend.load()
+            except ConfigError as error:
+                self._error = error
+            self._loaded = True
+        if self._error is not None:
+            raise self._error
+        return self._value

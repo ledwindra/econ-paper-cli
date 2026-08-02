@@ -1,6 +1,7 @@
 """Unit tests for the read-only ``econpapers status`` application service."""
 
 import io
+import sqlite3
 from pathlib import Path
 
 from econ_paper_cli.adapters.config_storage import JSONConfigStorage
@@ -60,7 +61,7 @@ def test_status_reports_malformed_configuration(tmp_path: Path) -> None:
         StatusCommandOptions(), config_backend=config_backend, storage=storage
     )
 
-    assert report.config_present is False
+    assert report.config_present is True
     assert report.config_valid is False
     assert report.config_error is not None
 
@@ -162,3 +163,57 @@ def test_run_status_command_writes_rendered_report_and_returns_zero(
     rendered = out.getvalue()
     assert "=== Local Status ===" in rendered
     assert "missing" in rendered
+
+
+def _seed_schema_migrations_version(db_path: Path, version: int) -> None:
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """CREATE TABLE schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL,
+            description TEXT NOT NULL
+        );"""
+    )
+    conn.execute(
+        "INSERT INTO schema_migrations (version, applied_at, description) "
+        "VALUES (?, '2026-07-31T20:00:00Z', 'seeded for status test');",
+        (version,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_status_reports_outdated_database_schema(tmp_path: Path) -> None:
+    db_path = tmp_path / "old_schema.db"
+    _seed_schema_migrations_version(db_path, 1)
+    config_backend = JSONConfigStorage(tmp_path / "missing-config.json")
+    storage = SQLiteStorage(str(db_path), read_only=True)
+
+    report = execute_status_command(
+        StatusCommandOptions(), config_backend=config_backend, storage=storage
+    )
+
+    assert report.db_state == "outdated_schema"
+    assert report.db_error is not None
+    assert "older than supported version" in report.db_error
+    assert report.schema_version is None
+    assert report.paper_count is None
+    assert report.passage_count is None
+
+
+def test_status_reports_incompatible_newer_database_schema(tmp_path: Path) -> None:
+    db_path = tmp_path / "new_schema.db"
+    _seed_schema_migrations_version(db_path, 99)
+    config_backend = JSONConfigStorage(tmp_path / "missing-config.json")
+    storage = SQLiteStorage(str(db_path), read_only=True)
+
+    report = execute_status_command(
+        StatusCommandOptions(), config_backend=config_backend, storage=storage
+    )
+
+    assert report.db_state == "incompatible_schema"
+    assert report.db_error is not None
+    assert "newer than maximum supported version" in report.db_error
+    assert report.schema_version is None
+    assert report.paper_count is None
+    assert report.passage_count is None

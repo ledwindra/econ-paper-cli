@@ -29,6 +29,12 @@ def build_parser() -> ArgumentParser:
     )
     _add_runtime_model_arguments(setup_parser, required=True)
     setup_parser.add_argument(
+        "--db-path",
+        type=Path,
+        default=None,
+        help="Optional SQLite database path default to persist and reuse.",
+    )
+    setup_parser.add_argument(
         "--config-path",
         type=Path,
         default=None,

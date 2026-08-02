@@ -23,7 +23,6 @@ from econ_paper_cli.adapters.storage_paths import get_default_db_path
 from econ_paper_cli.domain import Corpus, RetrievalEvidence
 from econ_paper_cli.domain.corpora import CorpusValidationError
 from econ_paper_cli.domain.errors import CitationValidationError
-from econ_paper_cli.domain.local_config import LocalRuntimeModelConfig
 from econ_paper_cli.protocols import (
     GenerationRequest,
     GenerationRequestValidationError,
@@ -43,9 +42,13 @@ from econ_paper_cli.protocols.config import ConfigBackend, ConfigError
 from econ_paper_cli.protocols.generation import FindingKind
 from econ_paper_cli.protocols.retrieval import validate_retrieval_results
 from econ_paper_cli.services.config_resolution import (
+    ConfigResolutionError,
+    LazyConfigLoader,
     RuntimeModelOverrides,
+    identity_fully_specified,
     resolve_db_path,
     resolve_runtime_model_config,
+    validate_identity_override_shape,
 )
 
 CHAT_EVIDENCE_SCOPE = "Evidence scope: stored Abstract and Introduction passages only."
@@ -160,9 +163,8 @@ def execute_chat_command(
     )
 
     try:
-        config_reader = config_backend or JSONConfigStorage(options.config_path)
-        durable_config = config_reader.load()
-    except ConfigError as error:
+        validate_identity_override_shape(overrides)
+    except ConfigResolutionError as error:
         return ChatCommandResult(
             outcome=ChatTerminalOutcome.FAILED,
             exit_code=2,
@@ -172,9 +174,26 @@ def execute_chat_command(
             error_message=str(error),
         )
 
-    # Reading durable configuration here never mutates it and never requires
-    # accessible model/runtime artifacts; only building a generator below does.
-    db_path = resolve_db_path(overrides, durable_config)
+    # Durable configuration is read lazily and at most once below; it is
+    # never mutated, and EMPTY_LIBRARY/NO_MATCHES/a fully-specified CLI
+    # override with an explicit --db-path never force a load.
+    lazy_config = LazyConfigLoader(
+        config_backend or JSONConfigStorage(options.config_path)
+    )
+    if overrides.db_path is not None:
+        db_path = Path(overrides.db_path)
+    else:
+        try:
+            db_path = resolve_db_path(overrides, lazy_config.get())
+        except ConfigError as error:
+            return ChatCommandResult(
+                outcome=ChatTerminalOutcome.FAILED,
+                exit_code=2,
+                question=question,
+                db_path=options.db_path or get_default_db_path(),
+                top_k=options.top_k,
+                error_message=str(error),
+            )
     storage_backend = storage or SQLiteStorage(db_path, read_only=True)
     owns_storage = storage is None
 
@@ -215,7 +234,7 @@ def execute_chat_command(
             )
 
         provider = generator_provider or (
-            lambda opts: _build_llama_cpp_generator(opts, overrides, durable_config)
+            lambda opts: _build_llama_cpp_generator(opts, overrides, lazy_config)
         )
         generator = provider(options)
         request = GenerationRequest(question=question, evidence=evidence)
@@ -410,9 +429,10 @@ def format_chat_command_output(result: ChatCommandResult) -> str:
 def _build_llama_cpp_generator(
     options: ChatCommandOptions,
     overrides: RuntimeModelOverrides,
-    durable_config: LocalRuntimeModelConfig | None,
+    lazy_config: LazyConfigLoader,
 ) -> Generator:
-    del options  # Resolution uses overrides/durable_config, not raw CLI options.
+    del options  # Resolution uses overrides/lazy_config, not raw CLI options.
+    durable_config = None if identity_fully_specified(overrides) else lazy_config.get()
     resolved = resolve_runtime_model_config(overrides, durable_config)
     config = LlamaCppConfig(
         executable_path=resolved.executable_path,

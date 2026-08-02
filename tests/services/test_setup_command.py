@@ -174,3 +174,48 @@ def test_setup_persists_optional_thread_and_timeout_defaults(
     assert loaded is not None
     assert loaded.threads == threads
     assert loaded.timeout_seconds == (float(timeout) if timeout is not None else None)
+
+
+def test_setup_persists_absolute_paths_independent_of_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Relative paths validated in one cwd must resolve the same way from any
+    later working directory once they are durable."""
+    dir_a = tmp_path / "invocation-dir-a"
+    dir_b = tmp_path / "invocation-dir-b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+
+    exe_file = dir_a / "llama-completion"
+    exe_file.write_bytes(b"dummy")
+    model_file = dir_a / "model.gguf"
+    model_file.write_bytes(b"dummy_model")
+    configured_db = dir_a / "library" / "econpapers.db"
+
+    config_path = tmp_path / "config.json"
+    backend = JSONConfigStorage(config_path)
+
+    monkeypatch.chdir(dir_a)
+    exit_code = run_setup_command(
+        _options(
+            executable_path=Path("llama-completion"),
+            model_path=Path("model.gguf"),
+            db_path=Path("library") / "econpapers.db",
+        ),
+        config_backend=backend,
+        readiness_checker=_ok_checker,
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+    assert exit_code == CLIExitCode.SUCCESS
+
+    monkeypatch.chdir(dir_b)
+    loaded = JSONConfigStorage(config_path).load()
+
+    assert loaded is not None
+    assert loaded.executable_path.is_absolute()
+    assert loaded.model_path.is_absolute()
+    assert loaded.db_path is not None and loaded.db_path.is_absolute()
+    assert loaded.executable_path == exe_file.resolve()
+    assert loaded.model_path == model_file.resolve()
+    assert loaded.db_path == configured_db.resolve()

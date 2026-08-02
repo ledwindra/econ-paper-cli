@@ -384,14 +384,23 @@ independent of the SQLite data directory
 (`econ_paper_cli.adapters.storage_paths.get_default_config_dir`, with an
 `ECONPAPERS_CONFIG_DIR` override), using private file permissions where
 supported. A failed write never destroys previously durable configuration.
+Runtime, model, and configured database paths are canonicalized to absolute
+paths (`Path.resolve()`) at the point they become durable, in
+`run_setup_command`, so a relative path validated in one working directory
+resolves identically from any later invocation directory; the domain
+constructor itself performs no resolution, preserving pure validation there.
+`ConfigBackend.exists()` reports whether a configuration file is present,
+independent of `load()`'s parse/validation outcome, so a malformed file is
+distinguishable from a missing one.
 
 `econpapers setup` (`econ_paper_cli.services.setup_command`) validates a
 proposed configuration and verifies local runtime/model readiness through the
 existing `LlamaCppGenerator.check_readiness()` boundary before persisting;
-nothing is written on validation or readiness failure. `econpapers status`
+nothing is written on validation or readiness failure. It accepts an optional
+`--db-path` default alongside the runtime/model arguments. `econpapers status`
 (`econ_paper_cli.services.status_command`) is a strictly read-only report of
-configuration validity, runtime/model readiness, resolved database path,
-schema version, and durable paper/passage counts; it never creates or
+configuration presence, validity, runtime/model readiness, resolved database
+path, schema version, and durable paper/passage counts; it never creates or
 migrates a database or configuration file.
 
 `econ_paper_cli.services.config_resolution.resolve_runtime_model_config`
@@ -402,14 +411,26 @@ runtime/model identity fields (executable path, model path, model id,
 expected size, expected checksum) are resolved as one unit — a CLI invocation
 supplies all five together or none of them, since a durable configuration is
 already one coherent, previously verified identity that partial CLI mixing
-could silently break. `analyze` and `chat` now accept these five arguments as
-optional; durable configuration is read once per invocation and never
-mutated, and existing lazy-model-resolution guarantees are preserved exactly:
-exact analysis-plus-library reuse, generator-free library backfill, and the
+could silently break. `validate_identity_override_shape` performs this
+partial-override check independent of whether durable configuration exists or
+a generator will ever be constructed, and `analyze`/`chat` call it eagerly, so
+a malformed partial override is rejected immediately rather than only on a
+path that happens to build a generator. `analyze` and `chat` now accept these
+five arguments as optional.
+
+Durable configuration is read through `config_resolution.LazyConfigLoader`,
+which loads a `ConfigBackend` at most once per invocation and caches either
+the resulting value or the raised `ConfigError`, so a later access never
+re-triggers a load. `analyze` and `chat` only call it when actually needed —
+for a database-path fallback (skipped entirely when `--db-path` is explicit),
+or inside generator construction (skipped when all five identity arguments are
+already CLI-specified, via `config_resolution.identity_fully_specified`).
+Existing lazy-model-resolution guarantees are preserved exactly: exact
+analysis-plus-library reuse, generator-free library backfill, and the
 `EMPTY_LIBRARY`/`NO_MATCHES` chat outcomes still require neither configuration
-nor accessible runtime/model artifacts, because resolution and readiness
-verification happen only inside the generator-construction closure that those
-paths never call.
+nor accessible runtime/model artifacts even when combined with an explicit
+`--db-path` and a fully-specified runtime/model override, because no code path
+they can take ever calls `LazyConfigLoader.get()`.
 
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.

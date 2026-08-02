@@ -60,14 +60,19 @@ def run_setup_command(
 
     try:
         config = LocalRuntimeModelConfig(
-            executable_path=options.executable_path,
-            model_path=options.model_path,
+            # Canonicalize to absolute paths before they become durable: a
+            # relative path validated in this invocation's cwd must resolve
+            # the same way from any later working directory.
+            executable_path=Path(options.executable_path).resolve(),
+            model_path=Path(options.model_path).resolve(),
             model_id=options.model_id,
             model_bytes=options.model_bytes,
             model_checksum=options.model_checksum,
             threads=options.threads,
             timeout_seconds=options.timeout,
-            db_path=options.db_path,
+            db_path=(
+                Path(options.db_path).resolve() if options.db_path is not None else None
+            ),
         )
     except LocalConfigValidationError as error:
         err.write(f"Configuration error: {error}\n")

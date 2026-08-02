@@ -73,6 +73,7 @@ def execute_status_command(
     """Inspect durable configuration and library state without mutating anything."""
     backend = config_backend or JSONConfigStorage()
 
+    config_present = backend.exists()
     config: LocalRuntimeModelConfig | None = None
     config_error: str | None = None
     try:
@@ -139,7 +140,7 @@ def execute_status_command(
 
     return StatusReport(
         config_path=backend.config_path,
-        config_present=config is not None,
+        config_present=config_present,
         config_valid=config_error is None,
         config_error=config_error,
         model_id=config.model_id if config is not None else None,
@@ -160,10 +161,11 @@ def format_status_report(report: StatusReport) -> str:
         "=== Local Status ===",
         f"Configuration Path: {report.config_path}",
     ]
-    if not report.config_present and report.config_error is None:
+    if report.config_error is not None:
+        state = "present but invalid" if report.config_present else "invalid"
+        lines.append(f"Configuration: {state} ({report.config_error})")
+    elif not report.config_present:
         lines.append("Configuration: missing (run `econpapers setup`)")
-    elif report.config_error is not None:
-        lines.append(f"Configuration: invalid ({report.config_error})")
     else:
         lines.append("Configuration: present and valid")
         lines.append(f"Model ID: {report.model_id}")

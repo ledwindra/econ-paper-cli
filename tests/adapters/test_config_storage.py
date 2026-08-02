@@ -3,6 +3,7 @@
 import json
 import stat
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -135,6 +136,31 @@ def test_failed_persistence_leaves_prior_configuration_untouched(
 
     # The original, unrelated configuration remains exactly as written.
     assert config_path.read_bytes() == original_bytes
+
+
+def test_mkstemp_failure_is_wrapped_and_leaves_prior_configuration_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure creating the temp file itself (directory exists and is
+    writable, but mkstemp fails for another reason) must surface as a typed
+    ConfigPersistenceError, not a raw OSError, and must not leave stray
+    temp files or disturb prior durable configuration."""
+    config_path = tmp_path / "config.json"
+    storage = JSONConfigStorage(config_path)
+    storage.save(_sample_config(model_id="original-model"))
+    original_bytes = config_path.read_bytes()
+
+    def failing_mkstemp(*args: object, **kwargs: object) -> tuple[int, str]:
+        raise OSError("simulated mkstemp failure")
+
+    monkeypatch.setattr(tempfile, "mkstemp", failing_mkstemp)
+
+    with pytest.raises(ConfigPersistenceError):
+        storage.save(_sample_config(model_id="replacement-model"))
+
+    assert config_path.read_bytes() == original_bytes
+    remaining = list(tmp_path.iterdir())
+    assert remaining == [config_path]
 
 
 def test_config_path_property_reflects_constructor_argument(tmp_path: Path) -> None:

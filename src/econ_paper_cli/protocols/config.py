@@ -31,6 +31,11 @@ class ConfigBackend(Protocol):
         """Return the canonical local filesystem path for this backend's configuration."""
         ...
 
+    def exists(self) -> bool:
+        """Return whether durable configuration data is present, independent of
+        whether it can be successfully parsed or validated."""
+        ...
+
     def load(self) -> LocalRuntimeModelConfig | None:
         """Return the durable configuration, or None if none has been written yet."""
         ...

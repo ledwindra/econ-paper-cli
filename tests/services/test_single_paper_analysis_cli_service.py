@@ -1538,3 +1538,187 @@ def test_new_analysis_full_cli_override_wins_over_durable_config(
 
     assert len(captured_commands) == 1
     assert captured_commands[0][0] == str(cli_exe)
+
+
+class RaisingConfigBackend:
+    """Config backend double that fails the test if load() is ever called."""
+
+    @property
+    def config_path(self) -> Path:
+        return Path("/unused/config.json")
+
+    def exists(self) -> bool:
+        return False
+
+    def load(self) -> LocalRuntimeModelConfig | None:
+        raise AssertionError("config load() must not be called on this path")
+
+    def save(self, config: LocalRuntimeModelConfig) -> None:
+        raise AssertionError("save() must not be called on this path")
+
+
+def test_exact_reuse_never_calls_config_load(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Exact reuse with an explicit --db-path must never touch durable config,
+    even if the configured backend would fail if load() were called."""
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    db_path = tmp_path / "no-config-reuse.db"
+    full_options = _make_options(pdf_path, tmp_path, db_path=db_path)
+    storage = SQLiteStorage(db_path)
+    storage.initialize()
+    response = _make_success_response_json(
+        "Abstract\nWe evaluate trade policy.", "We evaluate trade policy."
+    )
+    assert (
+        run_single_paper_analysis_command(
+            full_options,
+            extractor=FakePDFExtractor(),
+            generator=FakeGenerator(response_text=response),
+            storage=storage,
+        )
+        == CLIExitCode.SUCCESS
+    )
+
+    no_identity_options = AnalyzeCommandOptions(target_path=pdf_path, db_path=db_path)
+    capsys.readouterr()
+
+    code = run_single_paper_analysis_command(
+        no_identity_options,
+        extractor=FakePDFExtractor(),
+        storage=storage,
+        config_backend=RaisingConfigBackend(),
+    )
+
+    assert code == CLIExitCode.SUCCESS
+    assert "Outcome: reused" in capsys.readouterr().out
+
+
+def test_backfill_never_calls_config_load(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Generator-free library backfill with an explicit --db-path must never
+    touch durable config."""
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    db_path = tmp_path / "no-config-backfill.db"
+    full_options = _make_options(pdf_path, tmp_path, db_path=db_path)
+    storage = SQLiteStorage(db_path)
+    storage.initialize()
+    response = _make_success_response_json(
+        "Abstract\nWe evaluate trade policy.", "We evaluate trade policy."
+    )
+    assert (
+        run_single_paper_analysis_command(
+            full_options,
+            extractor=FakePDFExtractor(),
+            generator=FakeGenerator(response_text=response),
+            storage=storage,
+        )
+        == CLIExitCode.SUCCESS
+    )
+    paper_id = storage.list_early_section_records()[0].paper.paper_id
+    assert storage.delete_early_section_record(paper_id)
+
+    no_identity_options = AnalyzeCommandOptions(target_path=pdf_path, db_path=db_path)
+    capsys.readouterr()
+
+    code = run_single_paper_analysis_command(
+        no_identity_options,
+        extractor=FakePDFExtractor(),
+        storage=storage,
+        config_backend=RaisingConfigBackend(),
+    )
+
+    assert code == CLIExitCode.SUCCESS
+    assert storage.get_early_section_record(paper_id) is not None
+    assert "Outcome: stored" in capsys.readouterr().out
+
+
+def test_fully_specified_cli_override_with_explicit_db_path_never_calls_config_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A brand-new analysis with a fully-specified CLI override and an explicit
+    --db-path must never touch durable config, even during generator readiness."""
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    exe_file = tmp_path / "cli-exe"
+    exe_file.write_bytes(b"dummy")
+    exe_file.chmod(exe_file.stat().st_mode | 0o111)
+    model_content = b"cli_only_model_bytes"
+    model_file = tmp_path / "cli-model.gguf"
+    model_file.write_bytes(model_content)
+    options = AnalyzeCommandOptions(
+        target_path=pdf_path,
+        db_path=tmp_path / "cli-only.db",
+        executable_path=exe_file,
+        model_path=model_file,
+        model_id="cli-only-model",
+        model_bytes=len(model_content),
+        model_checksum=hashlib.sha256(model_content).hexdigest(),
+    )
+
+    captured_commands: list[tuple[str, ...]] = []
+
+    def fake_run(
+        self_runner: object,
+        command: tuple[str, ...],
+        *,
+        timeout_seconds: float,
+        max_output_bytes: int,
+        cancellation_requested: object,
+        environment: object,
+    ) -> ProcessResult:
+        captured_commands.append(tuple(command))
+        return ProcessResult(returncode=0, stdout="unexpected-version", stderr="")
+
+    monkeypatch.setattr(
+        "econ_paper_cli.adapters.llama_cpp.SubprocessRunner.run",
+        fake_run,
+    )
+
+    run_single_paper_analysis_command(
+        options,
+        extractor=FakePDFExtractor(),
+        config_backend=RaisingConfigBackend(),
+    )
+
+    assert len(captured_commands) == 1
+    assert captured_commands[0][0] == str(exe_file)
+
+
+def test_partial_override_on_reuse_only_path_is_rejected_eagerly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A partial CLI identity override must be rejected before a reuse-only
+    run ever decides whether it would need a generator."""
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    db_path = tmp_path / "partial-on-reuse.db"
+    full_options = _make_options(pdf_path, tmp_path, db_path=db_path)
+    storage = SQLiteStorage(db_path)
+    storage.initialize()
+    response = _make_success_response_json(
+        "Abstract\nWe evaluate trade policy.", "We evaluate trade policy."
+    )
+    assert (
+        run_single_paper_analysis_command(
+            full_options,
+            extractor=FakePDFExtractor(),
+            generator=FakeGenerator(response_text=response),
+            storage=storage,
+        )
+        == CLIExitCode.SUCCESS
+    )
+
+    partial_options = AnalyzeCommandOptions(
+        target_path=pdf_path, db_path=db_path, model_id="cli-only-model-id"
+    )
+    capsys.readouterr()
+
+    code = run_single_paper_analysis_command(
+        partial_options,
+        extractor=FakePDFExtractor(),
+        storage=storage,
+        config_backend=RaisingConfigBackend(),
+    )
+
+    assert code == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    assert "Partial runtime/model override" in capsys.readouterr().err

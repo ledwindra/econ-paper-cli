@@ -865,3 +865,102 @@ def test_db_path_resolution_prefers_cli_then_config_then_default(
     )
 
     assert result.db_path == config_db_path
+
+
+class RaisingConfigBackend:
+    """Config backend double that fails the test if load() is ever called."""
+
+    @property
+    def config_path(self) -> Path:
+        return Path("/unused/config.json")
+
+    def exists(self) -> bool:
+        return False
+
+    def load(self) -> LocalRuntimeModelConfig | None:
+        raise AssertionError("config load() must not be called on this path")
+
+    def save(self, config: LocalRuntimeModelConfig) -> None:
+        raise AssertionError("save() must not be called on this path")
+
+
+def test_empty_library_never_calls_config_load_with_explicit_db_path(
+    tmp_path: Path,
+) -> None:
+    storage = SQLiteStorage(tmp_path / "empty.db")
+
+    result = execute_chat_command(
+        ChatCommandOptions(question="trade policy", db_path=tmp_path / "empty.db"),
+        storage=storage,
+        config_backend=RaisingConfigBackend(),
+    )
+
+    assert result.outcome is ChatTerminalOutcome.EMPTY_LIBRARY
+
+
+def test_no_matches_never_calls_config_load_with_explicit_db_path(
+    tmp_path: Path,
+) -> None:
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(_record(tmp_path))
+
+    result = execute_chat_command(
+        ChatCommandOptions(
+            question="astronomy and astrophysics", db_path=tmp_path / "chat.db"
+        ),
+        storage=storage,
+        config_backend=RaisingConfigBackend(),
+    )
+
+    assert result.outcome is ChatTerminalOutcome.NO_MATCHES
+
+
+def test_fully_specified_cli_override_with_explicit_db_path_never_calls_config_load(
+    tmp_path: Path,
+) -> None:
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(_record(tmp_path))
+    generator = FakeGenerator(
+        GenerationResponse(
+            answer_text="unused",
+            citations=(),
+            generation_method="fake-generator",
+            abstained=True,
+            abstention_reason=AbstentionReason.INSUFFICIENT_EVIDENCE,
+            finding_kinds=(),
+        )
+    )
+
+    result = execute_chat_command(
+        _options(tmp_path),
+        storage=storage,
+        config_backend=RaisingConfigBackend(),
+        generator_provider=lambda _: generator,
+    )
+
+    assert result.outcome is ChatTerminalOutcome.ABSTAINED
+    assert generator.call_count == 1
+
+
+def test_partial_override_on_no_matches_path_is_rejected_eagerly(
+    tmp_path: Path,
+) -> None:
+    """A partial CLI identity override must be rejected before chat ever
+    decides whether it would need a generator."""
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(_record(tmp_path))
+    options = ChatCommandOptions(
+        question="astronomy and astrophysics",
+        db_path=tmp_path / "chat.db",
+        model_id="cli-only-model-id",
+    )
+
+    result = execute_chat_command(
+        options,
+        storage=storage,
+        config_backend=RaisingConfigBackend(),
+    )
+
+    assert result.outcome is ChatTerminalOutcome.FAILED
+    assert result.exit_code == 2
+    assert "Partial runtime/model override" in (result.error_message or "")

@@ -59,9 +59,12 @@ from econ_paper_cli.services.analysis_library import (
 )
 from econ_paper_cli.services.config_resolution import (
     ConfigResolutionError,
+    LazyConfigLoader,
     RuntimeModelOverrides,
+    identity_fully_specified,
     resolve_db_path,
     resolve_runtime_model_config,
+    validate_identity_override_shape,
 )
 from econ_paper_cli.services.ingestion import (
     discover_pdf_paths,
@@ -897,8 +900,9 @@ def run_single_paper_analysis_command(
             sys.stderr.write(f"Configuration error: invalid policy version: {err}\n")
             return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
 
-        # Durable configuration is only ever read here; it is never mutated by
-        # analyze, and reuse/backfill paths below never require it.
+        # Durable configuration is read lazily and at most once below; it is
+        # never mutated by analyze, and reuse/backfill paths never force a
+        # load merely because a config_backend was supplied.
         overrides = RuntimeModelOverrides(
             executable_path=options.executable_path,
             model_path=options.model_path,
@@ -910,13 +914,22 @@ def run_single_paper_analysis_command(
             db_path=Path(options.db_path) if options.db_path is not None else None,
         )
         try:
-            config_reader = config_backend or JSONConfigStorage(options.config_path)
-            durable_config = config_reader.load()
-        except ConfigError as err:
+            validate_identity_override_shape(overrides)
+        except ConfigResolutionError as err:
             sys.stderr.write(f"Configuration error: {err}\n")
             return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
 
-        target_db_path = resolve_db_path(overrides, durable_config)
+        lazy_config = LazyConfigLoader(
+            config_backend or JSONConfigStorage(options.config_path)
+        )
+        if overrides.db_path is not None:
+            target_db_path = Path(overrides.db_path)
+        else:
+            try:
+                target_db_path = resolve_db_path(overrides, lazy_config.get())
+            except ConfigError as err:
+                sys.stderr.write(f"Configuration error: {err}\n")
+                return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
 
         # 2. Initialize storage
         if storage is None:
@@ -946,7 +959,10 @@ def run_single_paper_analysis_command(
             if cached_generator is not None:
                 return cached_generator
             try:
-                resolved = resolve_runtime_model_config(overrides, durable_config)
+                needed_config = (
+                    None if identity_fully_specified(overrides) else lazy_config.get()
+                )
+                resolved = resolve_runtime_model_config(overrides, needed_config)
                 cfg = LlamaCppConfig(
                     executable_path=resolved.executable_path,
                     model_path=resolved.model_path,
@@ -960,6 +976,7 @@ def run_single_paper_analysis_command(
                 gen.check_readiness()
                 cached_generator = gen
             except (
+                ConfigError,
                 ConfigResolutionError,
                 LlamaCppConfigurationError,
                 LlamaCppReadinessError,

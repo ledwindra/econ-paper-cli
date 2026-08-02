@@ -60,7 +60,7 @@ python -m pip install -e .
 The package currently exposes these commands:
 
 ```bash
-econpapers setup --llama-cpp-path EXECUTABLE_PATH --model-path MODEL_PATH --model-id MODEL_ID --model-bytes BYTES --model-checksum SHA256
+econpapers setup --llama-cpp-path EXECUTABLE_PATH --model-path MODEL_PATH --model-id MODEL_ID --model-bytes BYTES --model-checksum SHA256 [--threads N] [--timeout SECONDS] [--db-path DB_PATH]
 econpapers status
 econpapers chat QUESTION
 econpapers update
@@ -73,8 +73,11 @@ econpapers analyze TARGET_PATH [--max-passage-characters 1200]
 model (path, expected size, expected SHA-256 checksum, and optional thread
 count, timeout, and database-path defaults), verifies local readiness, and —
 only on success — durably and atomically persists that configuration to a
-canonical per-user configuration file. It downloads nothing and writes
-nothing on validation or readiness failure.
+canonical per-user configuration file. Runtime, model, and database paths are
+canonicalized to absolute paths before they become durable, so a relative
+path validated in one working directory resolves the same way from any later
+directory. It downloads nothing and writes nothing on validation or
+readiness failure.
 
 `econpapers status` is a read-only report of whether durable configuration
 exists and is valid, runtime/model readiness, the resolved database path,
@@ -242,12 +245,19 @@ A separate, database-independent configuration boundary makes `analyze` and
 - **Resolution precedence:** explicit CLI value, then durable configuration,
   then a documented default; the five runtime/model identity fields resolve
   as one unit so a partial CLI override can never silently combine with an
-  unrelated stored value.
-- **Model-independence preserved:** configuration is loaded read-only and
-  resolved only inside the generator-construction path, so exact
+  unrelated stored value. A partial override is rejected immediately, before
+  `analyze`/`chat` even determine whether a generator will be needed.
+- **Working-directory independence:** `econpapers setup` canonicalizes the
+  runtime, model, and configured database paths to absolute paths before
+  persisting them, so a relative path validated in one directory resolves
+  identically from any later invocation directory.
+- **Model-independence preserved:** durable configuration is loaded lazily
+  and at most once per invocation, and only when actually needed — for a
+  database-path fallback, or inside generator construction. Exact
   analysis-plus-library reuse, generator-free library backfill, and the
-  `chat` `EMPTY_LIBRARY`/`NO_MATCHES` outcomes still need neither
-  configuration nor accessible runtime/model artifacts.
+  `chat` `EMPTY_LIBRARY`/`NO_MATCHES` outcomes need neither configuration nor
+  accessible runtime/model artifacts, even when an explicit `--db-path` is
+  combined with a fully-specified runtime/model override.
 
 ## Repository direction
 

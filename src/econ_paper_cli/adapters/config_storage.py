@@ -39,6 +39,11 @@ class JSONConfigStorage:
     def config_path(self) -> Path:
         return self._config_path
 
+    def exists(self) -> bool:
+        """Return whether a configuration file is present, independent of
+        whether it can be successfully parsed or validated."""
+        return self._config_path.exists()
+
     def load(self) -> LocalRuntimeModelConfig | None:
         """Read and validate durable configuration without mutating anything.
 
@@ -96,11 +101,12 @@ class JSONConfigStorage:
                 f"Cannot create configuration directory '{directory}': {err}"
             ) from err
 
-        fd, tmp_name = tempfile.mkstemp(
-            prefix=".econpapers-config-", suffix=".tmp", dir=str(directory)
-        )
-        tmp_path = Path(tmp_name)
+        tmp_path: Path | None = None
         try:
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=".econpapers-config-", suffix=".tmp", dir=str(directory)
+            )
+            tmp_path = Path(tmp_name)
             with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
                 tmp_file.write(payload)
                 tmp_file.flush()
@@ -111,7 +117,8 @@ class JSONConfigStorage:
                 pass  # Best-effort on platforms without POSIX permission bits.
             os.replace(tmp_path, self._config_path)
         except OSError as err:
-            tmp_path.unlink(missing_ok=True)
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
             raise ConfigPersistenceError(
                 f"Failed to persist configuration to '{self._config_path}': {err}"
             ) from err

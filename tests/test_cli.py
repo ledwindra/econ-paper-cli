@@ -271,9 +271,67 @@ def test_setup_help_lists_all_options(capsys: pytest.CaptureFixture[str]) -> Non
         "--model-checksum",
         "--threads",
         "--timeout",
+        "--db-path",
         "--config-path",
     ):
         assert flag in output
+
+
+def test_setup_parser_accepts_db_path() -> None:
+    arguments = build_parser().parse_args(
+        [
+            "setup",
+            "--llama-cpp-path",
+            "llama-completion",
+            "--model-path",
+            "model.gguf",
+            "--model-id",
+            "local-model",
+            "--model-bytes",
+            "100",
+            "--model-checksum",
+            "a" * 64,
+            "--db-path",
+            "/custom/econpapers.db",
+        ]
+    )
+
+    assert arguments.db_path == Path("/custom/econpapers.db")
+
+
+def test_setup_command_maps_db_path_into_setup_command_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The full parser-to-service path: --db-path must reach
+    SetupCommandOptions.db_path, not just the raw argparse namespace."""
+    captured: dict[str, object] = {}
+
+    def fake_run_setup_command(options: object, **kwargs: object) -> int:
+        captured["options"] = options
+        return 0
+
+    monkeypatch.setattr(commands, "run_setup_command", fake_run_setup_command)
+    assert (
+        main(
+            [
+                "setup",
+                "--llama-cpp-path",
+                "llama-completion",
+                "--model-path",
+                "model.gguf",
+                "--model-id",
+                "local-model",
+                "--model-bytes",
+                "100",
+                "--model-checksum",
+                "a" * 64,
+                "--db-path",
+                "/custom/econpapers.db",
+            ]
+        )
+        == 0
+    )
+    assert getattr(captured["options"], "db_path") == Path("/custom/econpapers.db")
 
 
 def test_status_help_lists_all_options(capsys: pytest.CaptureFixture[str]) -> None:
