@@ -4,18 +4,19 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import TextIO
 
 from econ_paper_cli.adapters.config_storage import JSONConfigStorage
-from econ_paper_cli.adapters.filesystem import VerificationError
-from econ_paper_cli.adapters.llama_cpp import (
-    LlamaCppConfig,
-    LlamaCppConfigurationError,
-    LlamaCppGenerator,
-    LlamaCppReadinessError,
+from econ_paper_cli.adapters.filesystem import (
+    ArtifactFileNotFoundError,
+    VerificationError,
+    verify_local_file,
 )
+from econ_paper_cli.adapters.llama_cpp import LlamaCppConfig
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
+from econ_paper_cli.adapters.storage_paths import get_default_runtime_dir
 from econ_paper_cli.domain.local_config import LocalRuntimeModelConfig
 from econ_paper_cli.protocols.config import ConfigBackend, ConfigError
 from econ_paper_cli.protocols.storage import (
@@ -28,9 +29,49 @@ from econ_paper_cli.services.config_resolution import (
     RuntimeModelOverrides,
     resolve_db_path,
 )
+from econ_paper_cli.services.platform_detection import detect_current_platform
+from econ_paper_cli.services.runtime_provisioning import (
+    CorruptManagedInstallError,
+    RuntimeProvisioningError,
+    locate_managed_install_root,
+    verify_executable_runs,
+    verify_managed_install,
+)
 from econ_paper_cli.services.single_paper_analysis_cli import CLIExitCode
 
-ReadinessChecker = Callable[[LlamaCppConfig], None]
+RuntimeReadinessChecker = Callable[[Path, str], None]
+ModelReadinessChecker = Callable[[LlamaCppConfig], None]
+
+
+class RuntimeOrigin(str, Enum):
+    """Where the configured runtime executable came from."""
+
+    MANAGED = "managed"
+    EXTERNAL = "external"
+    UNKNOWN = "unknown"
+
+
+class RuntimeState(str, Enum):
+    """Independent runtime-executable readiness classification.
+
+    Distinct from ``ModelState``: a missing/corrupt model must never be
+    misreported as a corrupt managed runtime, and vice versa.
+    """
+
+    VERIFIED = "verified"
+    MISSING = "missing"
+    CORRUPT_OR_MISMATCHED = "corrupt_or_mismatched"
+    UNSUPPORTED_PLATFORM = "unsupported_platform"
+    NOT_CHECKED = "not_checked"
+
+
+class ModelState(str, Enum):
+    """Independent model-artifact readiness classification."""
+
+    VERIFIED = "verified"
+    MISSING = "missing"
+    CORRUPT_OR_MISMATCHED = "corrupt_or_mismatched"
+    NOT_CONFIGURED = "not_configured"
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,8 +90,11 @@ class StatusReport:
     config_valid: bool
     config_error: str | None
     model_id: str | None
-    runtime_ready: bool | None
+    runtime_origin: RuntimeOrigin
+    runtime_state: RuntimeState
     runtime_error: str | None
+    model_state: ModelState
+    model_error: str | None
     db_path: Path
     db_state: str
     db_error: str | None
@@ -58,9 +102,83 @@ class StatusReport:
     paper_count: int | None
     passage_count: int | None
 
+    @property
+    def overall_ready(self) -> bool:
+        """Convenience: both the runtime executable and model are verified."""
+        return (
+            self.runtime_state is RuntimeState.VERIFIED
+            and self.model_state is ModelState.VERIFIED
+        )
 
-def _default_readiness_checker(config: LlamaCppConfig) -> None:
-    LlamaCppGenerator(config).check_readiness()
+
+def _default_runtime_readiness_checker(
+    executable_path: Path, version_marker: str
+) -> None:
+    verify_executable_runs(executable_path, version_marker)
+
+
+def _default_model_readiness_checker(config: LlamaCppConfig) -> None:
+    verify_local_file(
+        config.model_path, config.model_expected_size_bytes, config.model_sha256
+    )
+
+
+def _classify_runtime(
+    config: LocalRuntimeModelConfig,
+    llama_config: LlamaCppConfig,
+    runtime_checker: RuntimeReadinessChecker,
+) -> tuple[RuntimeOrigin, RuntimeState, str | None]:
+    """Classify the configured runtime's origin and independent readiness state.
+
+    Managed/external classification comes from locating a validated
+    install receipt owning the configured executable path, not merely from
+    the executable living under the default runtime directory.
+    """
+    runtime_dir = get_default_runtime_dir()
+    managed_root = locate_managed_install_root(config.executable_path, runtime_dir)
+
+    if managed_root is not None:
+        try:
+            receipt = verify_managed_install(managed_root)
+        except CorruptManagedInstallError as error:
+            return RuntimeOrigin.MANAGED, RuntimeState.CORRUPT_OR_MISMATCHED, str(error)
+
+        expected_executable = (
+            managed_root / receipt.executable_relative_path
+        ).resolve()
+        if expected_executable != config.executable_path.resolve():
+            return (
+                RuntimeOrigin.MANAGED,
+                RuntimeState.CORRUPT_OR_MISMATCHED,
+                f"Configured executable '{config.executable_path}' does not match "
+                f"the managed install's receipt executable '{expected_executable}'.",
+            )
+        try:
+            runtime_checker(config.executable_path, receipt.version_marker)
+        except RuntimeProvisioningError as error:
+            return RuntimeOrigin.MANAGED, RuntimeState.CORRUPT_OR_MISMATCHED, str(error)
+        return RuntimeOrigin.MANAGED, RuntimeState.VERIFIED, None
+
+    try:
+        runtime_checker(config.executable_path, llama_config.runtime_version_marker)
+    except RuntimeProvisioningError as error:
+        if not config.executable_path.exists():
+            return RuntimeOrigin.EXTERNAL, RuntimeState.MISSING, str(error)
+        return RuntimeOrigin.EXTERNAL, RuntimeState.CORRUPT_OR_MISMATCHED, str(error)
+    return RuntimeOrigin.EXTERNAL, RuntimeState.VERIFIED, None
+
+
+def _classify_model(
+    llama_config: LlamaCppConfig,
+    model_checker: ModelReadinessChecker,
+) -> tuple[ModelState, str | None]:
+    try:
+        model_checker(llama_config)
+    except ArtifactFileNotFoundError as error:
+        return ModelState.MISSING, str(error)
+    except VerificationError as error:
+        return ModelState.CORRUPT_OR_MISMATCHED, str(error)
+    return ModelState.VERIFIED, None
 
 
 def execute_status_command(
@@ -68,7 +186,8 @@ def execute_status_command(
     *,
     config_backend: ConfigBackend | None = None,
     storage: StorageBackend | None = None,
-    readiness_checker: ReadinessChecker | None = None,
+    runtime_readiness_checker: RuntimeReadinessChecker | None = None,
+    model_readiness_checker: ModelReadinessChecker | None = None,
 ) -> StatusReport:
     """Inspect durable configuration and library state without mutating anything."""
     backend = config_backend or JSONConfigStorage()
@@ -81,9 +200,31 @@ def execute_status_command(
     except ConfigError as error:
         config_error = str(error)
 
-    runtime_ready: bool | None = None
-    runtime_error: str | None = None
-    if config is not None:
+    runtime_checker = runtime_readiness_checker or _default_runtime_readiness_checker
+    model_checker = model_readiness_checker or _default_model_readiness_checker
+
+    runtime_origin: RuntimeOrigin
+    runtime_state: RuntimeState
+    runtime_error: str | None
+    model_state: ModelState
+    model_error: str | None
+
+    if config is None:
+        runtime_origin = RuntimeOrigin.UNKNOWN
+        model_state = ModelState.NOT_CONFIGURED
+        model_error = None
+        detected = detect_current_platform()
+        if detected.is_supported:
+            runtime_state, runtime_error = RuntimeState.NOT_CHECKED, None
+        else:
+            runtime_state = RuntimeState.UNSUPPORTED_PLATFORM
+            runtime_error = (
+                "No configuration is present, and this platform "
+                f"({detected.raw_system}/{detected.raw_machine}) has no pinned "
+                "managed runtime artifact; `econpapers setup` requires an "
+                "explicit --llama-cpp-path here."
+            )
+    else:
         llama_config = LlamaCppConfig(
             executable_path=config.executable_path,
             model_path=config.model_path,
@@ -95,17 +236,10 @@ def execute_status_command(
                 config.timeout_seconds if config.timeout_seconds is not None else 300.0
             ),
         )
-        checker = readiness_checker or _default_readiness_checker
-        try:
-            checker(llama_config)
-            runtime_ready = True
-        except (
-            LlamaCppConfigurationError,
-            LlamaCppReadinessError,
-            VerificationError,
-        ) as error:
-            runtime_ready = False
-            runtime_error = str(error)
+        runtime_origin, runtime_state, runtime_error = _classify_runtime(
+            config, llama_config, runtime_checker
+        )
+        model_state, model_error = _classify_model(llama_config, model_checker)
 
     resolved_db_path = resolve_db_path(
         RuntimeModelOverrides(db_path=options.db_path), config
@@ -144,8 +278,11 @@ def execute_status_command(
         config_valid=config_error is None,
         config_error=config_error,
         model_id=config.model_id if config is not None else None,
-        runtime_ready=runtime_ready,
+        runtime_origin=runtime_origin,
+        runtime_state=runtime_state,
         runtime_error=runtime_error,
+        model_state=model_state,
+        model_error=model_error,
         db_path=resolved_db_path,
         db_state=db_state,
         db_error=db_error,
@@ -170,12 +307,20 @@ def format_status_report(report: StatusReport) -> str:
         lines.append("Configuration: present and valid")
         lines.append(f"Model ID: {report.model_id}")
 
-    if report.runtime_ready is None:
-        lines.append("Runtime/Model Readiness: not checked (no configuration)")
-    elif report.runtime_ready:
-        lines.append("Runtime/Model Readiness: ready")
+    lines.append(f"Runtime Origin: {report.runtime_origin.value}")
+    if report.runtime_error is not None:
+        lines.append(
+            f"Runtime State: {report.runtime_state.value} ({report.runtime_error})"
+        )
     else:
-        lines.append(f"Runtime/Model Readiness: not ready ({report.runtime_error})")
+        lines.append(f"Runtime State: {report.runtime_state.value}")
+
+    if report.model_error is not None:
+        lines.append(f"Model State: {report.model_state.value} ({report.model_error})")
+    else:
+        lines.append(f"Model State: {report.model_state.value}")
+
+    lines.append(f"Overall Ready: {report.overall_ready}")
 
     lines.append(f"Database Path: {report.db_path}")
     lines.append(f"Database State: {report.db_state}")
@@ -196,7 +341,8 @@ def run_status_command(
     *,
     config_backend: ConfigBackend | None = None,
     storage: StorageBackend | None = None,
-    readiness_checker: ReadinessChecker | None = None,
+    runtime_readiness_checker: RuntimeReadinessChecker | None = None,
+    model_readiness_checker: ModelReadinessChecker | None = None,
     stdout: TextIO | None = None,
 ) -> int:
     """Execute the status command and render deterministic terminal output."""
@@ -210,7 +356,8 @@ def run_status_command(
         options,
         config_backend=config_backend,
         storage=storage,
-        readiness_checker=readiness_checker,
+        runtime_readiness_checker=runtime_readiness_checker,
+        model_readiness_checker=model_readiness_checker,
     )
     out.write(format_status_report(report) + "\n")
     return CLIExitCode.SUCCESS

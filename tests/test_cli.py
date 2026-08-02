@@ -336,6 +336,80 @@ def test_setup_command_maps_db_path_into_setup_command_options(
     assert getattr(captured["options"], "db_path") == Path("/custom/econpapers.db")
 
 
+def test_setup_parser_allows_omitting_llama_cpp_path() -> None:
+    """Issue #58: --llama-cpp-path becomes optional (triggers managed
+    provisioning); the other four model-identity flags stay required."""
+    arguments = build_parser().parse_args(
+        [
+            "setup",
+            "--model-path",
+            "model.gguf",
+            "--model-id",
+            "local-model",
+            "--model-bytes",
+            "100",
+            "--model-checksum",
+            "a" * 64,
+        ]
+    )
+    assert arguments.llama_cpp_path is None
+
+
+def test_setup_parser_still_requires_model_flags_when_path_omitted(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        build_parser().parse_args(["setup", "--model-path", "model.gguf"])
+
+    assert exit_info.value.code == 2
+    err = capsys.readouterr().err
+    required_line = next(
+        line
+        for line in err.splitlines()
+        if "the following arguments are required" in line
+    )
+    assert "--llama-cpp-path" not in required_line
+
+
+def test_setup_help_lists_offline_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["setup", "--help"])
+
+    assert exit_info.value.code == 0
+    assert "--offline" in capsys.readouterr().out
+
+
+def test_setup_command_maps_offline_flag_into_setup_command_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_setup_command(options: object, **kwargs: object) -> int:
+        captured["options"] = options
+        return 0
+
+    monkeypatch.setattr(commands, "run_setup_command", fake_run_setup_command)
+    assert (
+        main(
+            [
+                "setup",
+                "--model-path",
+                "model.gguf",
+                "--model-id",
+                "local-model",
+                "--model-bytes",
+                "100",
+                "--model-checksum",
+                "a" * 64,
+                "--offline",
+            ]
+        )
+        == 0
+    )
+    assert getattr(captured["options"], "offline") is True
+    assert getattr(captured["options"], "executable_path") is None
+
+
 def test_status_help_lists_all_options(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exit_info:
         main(["status", "--help"])

@@ -37,6 +37,20 @@ from econ_paper_cli.protocols.retrieval import (
     Retriever,
     validate_retrieval_results,
 )
+from econ_paper_cli.protocols.runtime_provisioning import (
+    ArchiveExtractor,
+    Downloader,
+    DownloadError,
+    DownloadNetworkError,
+    DownloadSizeExceededError,
+    DownloadTimeoutError,
+    DownloadTruncatedError,
+    ExtractionError,
+    InsecureURLError,
+    TooManyRedirectsError,
+    UnsafeArchiveMemberError,
+    UnsupportedArchiveFormatError,
+)
 from econ_paper_cli.protocols.storage import (
     ChecksumConflictError,
     StorageBackend,
@@ -50,13 +64,22 @@ from econ_paper_cli.protocols.storage import (
 
 __all__ = [
     "AbstentionReason",
+    "ArchiveExtractor",
     "ChecksumConflictError",
     "ConfigBackend",
     "ConfigError",
     "ConfigIncompatibleSchemaError",
     "ConfigMalformedError",
     "ConfigPersistenceError",
+    "DownloadError",
+    "DownloadNetworkError",
+    "Downloader",
+    "DownloadSizeExceededError",
+    "DownloadTimeoutError",
+    "DownloadTruncatedError",
+    "ExtractionError",
     "FindingKind",
+    "InsecureURLError",
     "GenerationContractError",
     "GenerationRequest",
     "GenerationRequestValidationError",
@@ -84,6 +107,9 @@ __all__ = [
     "StorageMigrationError",
     "StorageTransactionError",
     "StorageValidationError",
+    "TooManyRedirectsError",
+    "UnsafeArchiveMemberError",
+    "UnsupportedArchiveFormatError",
     "validate_generation_response",
     "validate_retrieval_results",
 ]
