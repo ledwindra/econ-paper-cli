@@ -40,6 +40,11 @@ from econ_paper_cli.protocols.generation import (
     Generator,
     validate_generation_response,
 )
+from econ_paper_cli.protocols.retrieval import (
+    RetrievalRequest,
+    validate_retrieval_results,
+)
+from econ_paper_cli.services.analysis_library import LibraryPopulationStatus
 from econ_paper_cli.services.early_section_library import (
     project_early_section_library_record,
 )
@@ -134,7 +139,10 @@ class DeterministicMockGenerator(Generator):
             )
         first_ev = request.evidence[0]
         citation = Citation(
-            citation_id="cit-1",
+            # The project's validation boundary derives allowed citation ids
+            # from evidence rank ("e1", "e2", ...); a bespoke id would be
+            # rejected, so this mock must speak the real contract.
+            citation_id=f"e{first_ev.rank}",
             paper_id=first_ev.passage.paper_id,
             passage_id=first_ev.passage.passage_id,
         )
@@ -307,16 +315,17 @@ def run_pdf_acceptance_harness(papers_dir: Path, db_dir: Path) -> dict[str, str]
     assert len(corpus.passages) > 0
 
     # 6. BM25 Retrieval & Grounded Response Validation
+    #
+    # Goes through the project's real retrieval and generation boundary
+    # (RetrievalRequest -> Retriever.retrieve -> GenerationRequest ->
+    # validate_generation_response), never a bespoke helper, so the
+    # citation check exercises the same validation production does.
     retriever = BM25Retriever(corpus)
-    retrieved_passages = retriever.search("economic model analysis", top_k=5)
-    assert len(retrieved_passages) > 0
+    retrieval_request = RetrievalRequest(query="economic model analysis", top_k=5)
+    evidence = retriever.retrieve(retrieval_request)
+    validate_retrieval_results(retrieval_request, evidence)
+    assert len(evidence) > 0
 
-    evidence = tuple(
-        retrieved_passages[0]
-        .passages[0]
-        .to_retrieval_evidence(retrieved_passages[0].score)
-        for _ in [0]
-    )
     request = GenerationRequest(question="What is the model?", evidence=evidence)
     response = generator.generate(request)
     validate_generation_response(request, response)
@@ -327,24 +336,34 @@ def run_pdf_acceptance_harness(papers_dir: Path, db_dir: Path) -> dict[str, str]
     sample_pdf = matched_files["case_a"]
     checksum_sample = hashlib.sha256(sample_pdf.read_bytes()).hexdigest()
     candidate = PreflightCandidate(
-        path=sample_pdf,
+        source_path=sample_pdf.resolve(),
         content_checksum=checksum_sample,
         file_size_bytes=sample_pdf.stat().st_size,
+        is_stored=True,
+        is_batch_duplicate=False,
     )
     reuse_outcome = _process_candidate(
         candidate=candidate,
-        pdf_path=sample_pdf,
+        pdf_path=sample_pdf.resolve(),
         storage=reopened_storage,
         extractor=extractor,
-        generator=generator,
+        generator_provider=lambda: generator,
         analysis_settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
         conversion_settings=conversion_settings,
         timestamp_provider=lambda: "2026-08-02T12:00:00Z",
     )
     assert reuse_outcome.kind is BatchOutcomeKind.REUSED
+    assert reuse_outcome.library_result is not None
+    assert reuse_outcome.library_result.status is LibraryPopulationStatus.REUSED, (
+        "second pass over an already-ingested paper must hit the production "
+        "reuse path, not re-ingest it"
+    )
 
+    # Re-analyzing the same paper under a *different* section policy must
+    # produce a distinct analysis identity that persists independently,
+    # rather than silently colliding with the record stored above.
     modified_settings = SinglePaperAnalysisSettings(
-        section_settings=PDFSectionSettings(max_candidate_search_lines=150)
+        section_settings=PDFSectionSettings(policy_version="pdf-section-detection-v1")
     )
     modified_result = analyze_single_paper(
         sample_pdf,
@@ -352,7 +371,11 @@ def run_pdf_acceptance_harness(papers_dir: Path, db_dir: Path) -> dict[str, str]
         generator,
         settings=modified_settings,
     )
-    modified_record = SinglePaperAnalysisRecord.from_result(modified_result)
+    # settings= is required: without it the record would be built against
+    # the default settings and misrepresent the modified analysis identity.
+    modified_record = SinglePaperAnalysisRecord.from_result(
+        modified_result, settings=modified_settings
+    )
     reopened_storage.save_single_paper_analysis(modified_record)
 
     reopened_storage.close()
@@ -361,7 +384,9 @@ def run_pdf_acceptance_harness(papers_dir: Path, db_dir: Path) -> dict[str, str]
     final_storage.initialize()
     replaced_read = final_storage.get_single_paper_analysis(modified_record.analysis_id)
     assert replaced_read is not None
-    assert replaced_read.settings.section_settings.max_candidate_search_lines == 150
+    assert replaced_read.settings.section_settings.policy_version == (
+        "pdf-section-detection-v1"
+    )
     final_storage.close()
 
     return case_summaries

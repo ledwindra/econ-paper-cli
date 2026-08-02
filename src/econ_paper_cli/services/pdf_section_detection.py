@@ -64,6 +64,7 @@ _FOOTNOTE_AFFILIATION_RE = re.compile(
     r"^(?:[\*\dagger\d]\s*)?(?:Department\s+of|Faculty\s+of|School\s+of|University\s+of|Email\:|Corresponding\s+author|Financial\s+support)",
     re.IGNORECASE,
 )
+_SENTENCE_TERMINATOR_RE = re.compile(r"[.!?][\"'\u201d\u2019)\]]*$")
 _ACKNOWLEDGMENTS_RE = re.compile(
     r"^\s*(?:We\s+thank|Thanks\s+to|Financial\s+support|The\s+authors\s+thank|Acknowledge?ments?)\b",
     re.IGNORECASE,
@@ -631,12 +632,59 @@ def _find_next_section_candidate(
         is_last_line = (
             idx == len(lines) - 1 or lines[idx + 1].page_number != line.page_number
         )
-        is_boundary = prev_blank or next_blank or is_first_line or is_last_line
+        is_boundary = (
+            prev_blank
+            or next_blank
+            or is_first_line
+            or is_last_line
+            or _is_paragraph_break_heading_context(lines, idx)
+        )
         if _is_genuine_next_top_level_heading(
             line, is_boundary, is_implicit_intro=is_implicit_intro
         ):
             return _CandidateMatch(PDFSectionKind.INTRODUCTION, idx, line, 2)
     return None
+
+
+def _is_paragraph_break_heading_context(lines: list[_LineInfo], idx: int) -> bool:
+    """Return whether line ``idx`` sits at a heading-shaped paragraph break.
+
+    Several real journal layouts (issue #59 cases A, B, D, E) emit the next
+    top-level heading with no blank line and no page edge around it, so the
+    blank-line/page-edge signal alone misses them. The remaining
+    layout-derived evidence is that a heading interrupts hard-wrapped body
+    text: the preceding line completes a sentence rather than wrapping, and
+    the candidate is markedly shorter than the surrounding wrapped column
+    width.
+
+    This stays deterministic and generic — it reads only line lengths and
+    terminal punctuation, never journal names, fixed pages, or article
+    text — and is *additive*: it only ever admits a candidate that
+    ``_is_genuine_next_top_level_heading`` must still independently accept.
+    """
+    previous = None
+    for back in range(idx - 1, -1, -1):
+        if lines[back].trimmed:
+            previous = lines[back]
+            break
+    if previous is None:
+        return False
+    if previous.page_number != lines[idx].page_number:
+        return False
+    if not _SENTENCE_TERMINATOR_RE.search(previous.trimmed):
+        return False
+
+    neighbour_lengths = sorted(
+        len(lines[offset].trimmed)
+        for offset in range(max(0, idx - 8), min(len(lines), idx + 9))
+        if lines[offset].trimmed and offset != idx
+    )
+    if len(neighbour_lengths) < 4:
+        return False
+    median_width = neighbour_lengths[len(neighbour_lengths) // 2]
+    if median_width <= 0:
+        return False
+    return len(lines[idx].trimmed) <= 0.7 * median_width
 
 
 def _is_genuine_next_top_level_heading(
