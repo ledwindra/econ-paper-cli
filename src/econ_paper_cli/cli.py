@@ -32,7 +32,12 @@ def build_parser() -> ArgumentParser:
         "setup",
         help="Validate and durably persist local runtime/model configuration.",
     )
-    _add_runtime_model_arguments(setup_parser, required=True)
+    _add_runtime_model_arguments(
+        setup_parser,
+        required=True,
+        require_executable_path=False,
+        supports_auto_provisioning=True,
+    )
     setup_parser.add_argument(
         "--db-path",
         type=Path,
@@ -44,6 +49,16 @@ def build_parser() -> ArgumentParser:
         type=Path,
         default=None,
         help="Optional local configuration file path override.",
+    )
+    setup_parser.add_argument(
+        "--offline",
+        action="store_true",
+        default=False,
+        help=(
+            "Never download a managed llama.cpp runtime; fail with a typed "
+            "error unless --llama-cpp-path is given or a verified managed "
+            "runtime is already installed."
+        ),
     )
     setup_parser.set_defaults(handler=commands.run_setup)
 
@@ -159,25 +174,52 @@ def build_parser() -> ArgumentParser:
     return parser
 
 
-def _add_runtime_model_arguments(parser: ArgumentParser, *, required: bool) -> None:
+def _add_runtime_model_arguments(
+    parser: ArgumentParser,
+    *,
+    required: bool,
+    require_executable_path: bool | None = None,
+    supports_auto_provisioning: bool = False,
+) -> None:
     """Add the shared runtime/model identity and option flags to a subparser.
 
     When ``required`` is False (``analyze``/``chat``), omitting all five
     identity flags falls back to durable configuration written by
     ``econpapers setup``; supplying any of them requires supplying all five
     together for one coherent, explicitly verified identity.
+
+    ``require_executable_path`` overrides ``required`` for just
+    ``--llama-cpp-path`` (defaults to ``required``); ``setup`` passes
+    ``False`` here since omitting it triggers managed-runtime provisioning
+    instead of an error, while the other four model-identity flags stay
+    required for ``setup``.
+
+    ``supports_auto_provisioning`` controls only the help text: it must be
+    True exclusively for ``setup`` (the one command that can actually
+    download/install a runtime). ``analyze``/``chat`` also allow omitting
+    ``--llama-cpp-path``, but only ever fall back to durable configuration
+    and must remain network-free, so their help text must never claim
+    omission triggers provisioning.
     """
+    executable_required = (
+        required if require_executable_path is None else require_executable_path
+    )
     identity_help_suffix = (
         "" if required else " (falls back to durable `econpapers setup` configuration)"
+    )
+    executable_help_suffix = (
+        " (omit to auto-provision a managed llama.cpp runtime)"
+        if supports_auto_provisioning
+        else identity_help_suffix
     )
     parser.add_argument(
         "--llama-cpp-path",
         "--executable-path",
         dest="llama_cpp_path",
-        required=required,
+        required=executable_required,
         default=None,
         type=Path,
-        help=f"Path to the local llama.cpp executable.{identity_help_suffix}",
+        help=f"Path to the local llama.cpp executable.{executable_help_suffix}",
     )
     parser.add_argument(
         "--model-path",

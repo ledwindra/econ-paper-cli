@@ -168,6 +168,10 @@ Not yet implemented:
   retrieval, generation, citation, and configuration boundaries, with a
   lazily constructed and reused generator and no conversation memory yet
   (Issue 56 implemented)
+- Managed `llama.cpp` runtime provisioning during `econpapers setup` — pinned
+  per-platform manifest, checksum-verified download, safe extraction, atomic
+  content-addressed install, and an install receipt independent of model
+  acquisition (Issue 58 implemented)
 - Connect update, follow-up, and evidence inspection
 - Connect the approved library, ingestion, retrieval, and generation adapters
 - Verify offline operation, privacy, restart safety, and cross-platform behavior

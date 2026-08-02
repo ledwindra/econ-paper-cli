@@ -4,11 +4,13 @@ from pathlib import Path
 
 import pytest
 
+from econ_paper_cli.adapters.llama_cpp import LlamaCppConfig
 from econ_paper_cli.domain.local_config import LocalRuntimeModelConfig
 from econ_paper_cli.services.config_resolution import (
     DEFAULT_GENERATION_TIMEOUT_SECONDS,
     ConfigResolutionError,
     RuntimeModelOverrides,
+    build_llama_cpp_config_kwargs,
     resolve_db_path,
     resolve_runtime_model_config,
 )
@@ -58,6 +60,48 @@ def test_config_only_resolves_from_durable_config() -> None:
     assert resolved.model_id == config.model_id
     assert resolved.model_bytes == config.model_bytes
     assert resolved.model_checksum == config.model_checksum
+
+
+def test_config_source_threads_runtime_identity_when_present() -> None:
+    """Issue #58: a managed-runtime-provisioned durable config's
+    runtime_id/runtime_version_marker must survive resolution so
+    generation uses the identity that was actually installed."""
+    config = _durable_config(
+        runtime_id="llama.cpp-b10199", runtime_version_marker="10199"
+    )
+    resolved = resolve_runtime_model_config(_cli_overrides(), config)
+    assert resolved.source == "config"
+    assert resolved.runtime_id == "llama.cpp-b10199"
+    assert resolved.runtime_version_marker == "10199"
+
+
+def test_config_source_runtime_identity_defaults_to_none_when_absent() -> None:
+    """A durable config from an explicit --llama-cpp-path setup (no managed
+    provisioning) has no recorded identity; resolution must not invent one."""
+    config = _durable_config()
+    resolved = resolve_runtime_model_config(_cli_overrides(), config)
+    assert resolved.runtime_id is None
+    assert resolved.runtime_version_marker is None
+
+
+def test_full_cli_override_never_carries_durable_runtime_identity() -> None:
+    """A fully-specified CLI override is a per-invocation identity unrelated
+    to durable configuration; it must never pick up the durable config's
+    runtime_id/runtime_version_marker even if durable config has them."""
+    config = _durable_config(
+        runtime_id="llama.cpp-b10199", runtime_version_marker="10199"
+    )
+    overrides = _cli_overrides(
+        executable_path=Path("/cli/llama-completion"),
+        model_path=Path("/cli/model.gguf"),
+        model_id="cli-model",
+        model_bytes=222,
+        model_checksum="d" * 64,
+    )
+    resolved = resolve_runtime_model_config(overrides, config)
+    assert resolved.source == "cli"
+    assert resolved.runtime_id is None
+    assert resolved.runtime_version_marker is None
 
 
 def test_no_cli_and_no_config_raises_typed_error() -> None:
@@ -125,6 +169,30 @@ def test_db_path_prefers_cli_then_config_then_default() -> None:
     resolved_default = resolve_db_path(_cli_overrides(), _durable_config())
     assert resolved_default != Path("/config/db.sqlite")
     assert resolved_default.name == "econpapers.db"
+
+
+def test_build_llama_cpp_config_kwargs_includes_identity_when_resolved() -> None:
+    config = _durable_config(
+        runtime_id="llama.cpp-b99999", runtime_version_marker="99999"
+    )
+    resolved = resolve_runtime_model_config(_cli_overrides(), config)
+
+    llama_config = LlamaCppConfig(**build_llama_cpp_config_kwargs(resolved))
+
+    assert llama_config.runtime_id == "llama.cpp-b99999"
+    assert llama_config.runtime_version_marker == "99999"
+
+
+def test_build_llama_cpp_config_kwargs_omits_identity_when_unresolved() -> None:
+    """No recorded identity must fall through to LlamaCppConfig's own
+    defaults, not an explicit None passed into the constructor."""
+    config = _durable_config()
+    resolved = resolve_runtime_model_config(_cli_overrides(), config)
+
+    llama_config = LlamaCppConfig(**build_llama_cpp_config_kwargs(resolved))
+
+    assert llama_config.runtime_id == "llama.cpp-b10199"
+    assert llama_config.runtime_version_marker == "10199"
 
 
 def test_resolve_rejects_wrong_types() -> None:

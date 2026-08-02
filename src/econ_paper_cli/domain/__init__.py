@@ -111,6 +111,17 @@ from econ_paper_cli.domain.research_question import (
     ResearchQuestionWarning,
     ResearchQuestionWarningCode,
 )
+from econ_paper_cli.domain.runtime_manifest import (
+    ArchiveFormat,
+    ManagedRuntimeArtifact,
+    ManagedRuntimeManifest,
+    ManagedRuntimeManifestError,
+    SupportedArchitecture,
+    SupportedPlatform,
+    select_artifact_for_platform,
+)
+from econ_paper_cli.domain.runtime_manifest_data import MANAGED_RUNTIME_MANIFEST
+from econ_paper_cli.domain.runtime_receipt import InstallReceipt, InstallReceiptError
 from econ_paper_cli.domain.single_paper_analysis import (
     DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     SinglePaperAnalysisEvidenceRecord,
@@ -138,6 +149,7 @@ from econ_paper_cli.domain.storage import (
 )
 
 __all__ = [
+    "ArchiveFormat",
     "ArtifactKind",
     "ArtifactManifest",
     "ArtifactManifestError",
@@ -223,6 +235,15 @@ __all__ = [
     "ResearchQuestionWarning",
     "ResearchQuestionWarningCode",
     "DEFAULT_RESEARCH_QUESTION_SETTINGS",
+    "InstallReceipt",
+    "InstallReceiptError",
+    "ManagedRuntimeArtifact",
+    "ManagedRuntimeManifest",
+    "ManagedRuntimeManifestError",
+    "MANAGED_RUNTIME_MANIFEST",
+    "SupportedArchitecture",
+    "SupportedPlatform",
+    "select_artifact_for_platform",
     "SinglePaperAnalysisEvidenceRecord",
     "SinglePaperAnalysisFailureCode",
     "SinglePaperAnalysisQuestionRecord",

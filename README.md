@@ -71,7 +71,7 @@ The package currently exposes these commands:
 
 ```bash
 econpapers                                                                    # interactive shell
-econpapers setup --llama-cpp-path EXECUTABLE_PATH --model-path MODEL_PATH --model-id MODEL_ID --model-bytes BYTES --model-checksum SHA256 [--threads N] [--timeout SECONDS] [--db-path DB_PATH]
+econpapers setup --model-path MODEL_PATH --model-id MODEL_ID --model-bytes BYTES --model-checksum SHA256 [--llama-cpp-path EXECUTABLE_PATH] [--offline] [--threads N] [--timeout SECONDS] [--db-path DB_PATH]
 econpapers status
 econpapers chat QUESTION
 econpapers update
@@ -90,13 +90,36 @@ only on success — durably and atomically persists that configuration to a
 canonical per-user configuration file. Runtime, model, and database paths are
 canonicalized to absolute paths before they become durable, so a relative
 path validated in one working directory resolves the same way from any later
-directory. It downloads nothing and writes nothing on validation or
-readiness failure.
+directory. On validation or readiness failure, the prior durable configuration
+is left unreplaced — though when managed runtime provisioning was involved, a
+verified managed runtime install may still remain on disk for reuse by a later
+`setup` attempt, since that install is validated independently of whether the
+overall command ultimately succeeds.
+
+`--llama-cpp-path` is optional (issue #58): a fresh user can run `econpapers
+setup --model-path ... --model-id ... --model-bytes ... --model-checksum
+...` with no `--llama-cpp-path` at all, and setup will reuse an
+already-verified managed `llama.cpp` install or download, checksum-verify,
+safely extract, and atomically install the one pinned release for the
+current platform/architecture into an application-managed directory — no
+manual `llama.cpp` build, `PATH` edit, or executable discovery required.
+Supplying `--llama-cpp-path` always bypasses managed provisioning entirely
+(no download is ever triggered) and takes precedence, exactly as before.
+`--offline` refuses any download, failing with a typed error unless an
+explicit path is given or a verified managed runtime is already installed.
+See [`docs/managed-runtime-provisioning.md`](docs/managed-runtime-provisioning.md)
+for the manifest/receipt schema, the pinned release's license and
+attribution, and recovery instructions. Model acquisition remains manual
+and out of scope for this issue.
 
 `econpapers status` is a read-only report of whether durable configuration
-exists and is valid, runtime/model readiness, the resolved database path,
-schema version, and stored paper/passage counts. It never creates or
-modifies the configuration file or database.
+exists and is valid, independent runtime-executable and model-artifact
+readiness (runtime is further classified as managed/external/unknown origin,
+and verified/missing/corrupt-or-mismatched/unsupported-platform/not-checked
+state — a missing or corrupt model is never conflated with a corrupt managed
+runtime, or vice versa), the resolved database path, schema version, and
+stored paper/passage counts. It never creates or modifies the configuration
+file or database, and never downloads anything.
 
 `econpapers analyze` and `econpapers chat` accept the same five runtime/model
 flags (`--llama-cpp-path`, `--model-path`, `--model-id`, `--model-bytes`,
@@ -170,8 +193,12 @@ The repository implements a configurable `llama-completion` subprocess adapter
 for the existing backend-independent `Generator` protocol. It uses explicit
 local paths, offline mode, a versioned evidence-only prompt, a fingerprinted
 GBNF constraint derived from the authoritative JSON schema, authoritative
-citation resolution, and final response validation. It does not download a
-runtime or model. The `analyze` and `chat` commands construct this adapter
+citation resolution, and final response validation. This adapter itself does
+not download anything; the only network access anywhere in the application is
+the explicit managed-runtime provisioning step inside `econpapers setup`
+described above (issue #58) — `analyze`, `chat`, bare `econpapers`, and
+`status` remain unconditionally network-free. The `analyze` and `chat`
+commands construct this adapter
 only from local runtime and model paths — either explicit per-invocation CLI
 overrides or durable configuration written by `econpapers setup` — and only
 when a local generator is actually required.

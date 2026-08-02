@@ -994,6 +994,46 @@ def _config_for_threads_timeout(
     return LocalRuntimeModelConfig(**base)
 
 
+def test_build_generator_uses_persisted_managed_runtime_identity_after_restart(
+    tmp_path: Path,
+) -> None:
+    """Issue #58: a config-sourced identity recorded by managed-runtime
+    provisioning must reach the generator actually constructed at restart —
+    not silently fall back to LlamaCppConfig's hard-coded adapter default."""
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(
+        _config_for_threads_timeout(
+            tmp_path,
+            runtime_id="llama.cpp-b99999",
+            runtime_version_marker="99999",
+        )
+    )
+    lazy_config = LazyConfigLoader(config_backend)
+
+    generator = _build_llama_cpp_generator(RuntimeModelOverrides(), lazy_config)
+
+    # A distinct, non-default value proves the persisted identity was
+    # actually threaded through, not merely coinciding with the adapter's
+    # own default (which happens to also be "llama.cpp-b10199"/"10199").
+    assert generator._config.runtime_id == "llama.cpp-b99999"
+    assert generator._config.runtime_version_marker == "99999"
+
+
+def test_build_generator_falls_back_to_adapter_default_identity_when_unset(
+    tmp_path: Path,
+) -> None:
+    """A durable config from an explicit --llama-cpp-path setup (no recorded
+    identity) must still resolve to LlamaCppConfig's own default, unchanged."""
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(_config_for_threads_timeout(tmp_path))
+    lazy_config = LazyConfigLoader(config_backend)
+
+    generator = _build_llama_cpp_generator(RuntimeModelOverrides(), lazy_config)
+
+    assert generator._config.runtime_id == "llama.cpp-b10199"
+    assert generator._config.runtime_version_marker == "10199"
+
+
 def test_build_generator_honors_durable_threads_and_timeout_when_config_loaded(
     tmp_path: Path,
 ) -> None:

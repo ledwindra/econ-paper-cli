@@ -44,7 +44,7 @@ def run_setup(args: Namespace | None = None) -> int:
     """Validate and durably persist local runtime/model configuration."""
     try:
         options = SetupCommandOptions(
-            executable_path=Path(args.llama_cpp_path),
+            executable_path=_optional_path(args.llama_cpp_path),
             model_path=Path(args.model_path),
             model_id=str(args.model_id),
             model_bytes=int(args.model_bytes),
@@ -52,6 +52,7 @@ def run_setup(args: Namespace | None = None) -> int:
             threads=_optional_int(getattr(args, "threads", None)),
             timeout=_optional_float(getattr(args, "timeout", None)),
             db_path=_optional_path(getattr(args, "db_path", None)),
+            offline=bool(getattr(args, "offline", False)),
         )
     except (AttributeError, ValueError, TypeError) as err:
         sys.stderr.write(f"Invalid CLI argument values: {err}\n")
