@@ -9,6 +9,7 @@ from econ_paper_cli.domain import (
     ExtractedPDFPage,
     PDFDocumentMetadata,
     PDFExtractionResult,
+    PDFSectionBoundaryEvidenceType,
     PDFSectionDetectionMethod,
     PDFSectionKind,
     PDFSectionWarningCode,
@@ -667,27 +668,61 @@ def test_synthetic_layout_cases_b_c_d_e_f() -> None:
     assert "ARTICLE HISTORY" not in res_e.sections[0].text
     assert "Keywords:" not in res_e.sections[0].text
 
-    # Case F: Unheaded Abstract terminated by We thank..., parenthetical findings, page furniture
+    # Case F: Unheaded Abstract terminated by same-page We thank..., Page 2 header and explicit I. Introduction
     f_p1 = (
         "Copyright 2026 American Economic Association\n"
         "Optimal Tax Progressivity\n"
         "We quantify optimal income tax schedules with heterogeneous skills.\n"
-        "We thank the editor and anonymous referees for helpful comments.\n\n"
+        "We thank the editor and anonymous referees for helpful comments.\n"
+    )
+    f_p2 = (
+        "123 JOURNAL OF POLITICAL ECONOMY\n"
         "I. Introduction\n"
         "Progressive taxation balances efficiency and equity.\n"
         "In this paper (1) we find high top rates; (2) we find broad base.\n\n"
         "II. Model\n"
         "Model equations here.\n"
     )
-    res_f = detect_pdf_sections(
-        _extraction(f_p1), settings=DEFAULT_PDF_SECTION_SETTINGS
-    )
+    ext_f = _extraction(f_p1, f_p2)
+    res_f = detect_pdf_sections(ext_f, settings=DEFAULT_PDF_SECTION_SETTINGS)
     assert len(res_f.sections) == 2
     assert res_f.sections[0].kind is PDFSectionKind.ABSTRACT
     assert (
         res_f.sections[0].detection_method
         is PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER
     )
+    ev_types_f = {e.evidence_type for e in res_f.sections[0].boundary_evidence}
+    assert PDFSectionBoundaryEvidenceType.TITLE_BLOCK in ev_types_f
+    assert PDFSectionBoundaryEvidenceType.ACKNOWLEDGMENTS_START in ev_types_f
+    assert "We thank the editor" not in res_f.sections[0].text
+    assert "We quantify optimal" in res_f.sections[0].text
+
     assert res_f.sections[1].kind is PDFSectionKind.INTRODUCTION
+    assert (
+        res_f.sections[1].detection_method is PDFSectionDetectionMethod.EXPLICIT_HEADING
+    )
     assert res_f.sections[1].observed_heading_text == "I. Introduction"
+    assert "JOURNAL OF POLITICAL ECONOMY" not in res_f.sections[1].text
     assert "(1) we find high top rates" in res_f.sections[1].text
+
+
+def test_metadata_words_in_body_prose_not_excluded() -> None:
+    prose_text = (
+        "Macroeconomic Risk and Asset Prices\n"
+        "ABSTRACT\n"
+        "This paper analyzes macroeconomic risk.\n\n"
+        "1. Introduction\n"
+        "The keywords used in this literature are reviewed extensively.\n"
+        "In addition, the JEL classification scheme was updated in recent years.\n"
+        "We thank the authors who pioneered this literature.\n\n"
+        "2. Literature\n"
+        "Prior work includes...\n"
+    )
+    res = detect_pdf_sections(
+        _extraction(prose_text), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+    assert len(res.sections) == 2
+    intro = res.sections[1]
+    assert "keywords used in this literature" in intro.text
+    assert "JEL classification scheme was updated" in intro.text
+    assert "We thank the authors who pioneered" in intro.text

@@ -760,6 +760,7 @@ def _select_candidate(
 
 
 def _build_spans_and_text(
+    kind: PDFSectionKind,
     lines_slice: list[_LineInfo],
     start_line_index: int,
     all_lines: list[_LineInfo],
@@ -783,6 +784,7 @@ def _build_spans_and_text(
         page_lines = lines_by_page[p_num]
 
         current_run: list[_LineInfo] = []
+        in_excluded_block = False
 
         for global_idx, line in page_lines:
             is_first_on_page = (
@@ -806,21 +808,42 @@ def _build_spans_and_text(
                 and line.trimmed.isdigit()
                 and (is_first_on_page or is_last_on_page)
             )
-            is_metadata = bool(_JEL_KEYWORDS_RE.match(line.trimmed)) or bool(
-                _ARTICLE_HISTORY_RE.match(line.trimmed)
-            )
-            is_affiliation = bool(_FOOTNOTE_AFFILIATION_RE.match(line.trimmed))
-            is_acknowledgments = bool(_ACKNOWLEDGMENTS_RE.match(line.trimmed))
             is_cover = bool(_PUBLISHER_COVER_SHEET_RE.search(line.text)) and p_num == 1
 
-            if (
-                is_rh
-                or is_page_num
-                or is_metadata
-                or is_affiliation
-                or is_acknowledgments
-                or is_cover
-            ):
+            has_prose_verb = any(
+                f" {verb} " in f" {line.trimmed.lower()} "
+                for verb in _LOWERCASE_PROSE_VERBS
+            )
+            is_metadata_start = (
+                bool(_JEL_KEYWORDS_RE.match(line.trimmed))
+                or bool(_ARTICLE_HISTORY_RE.match(line.trimmed))
+            ) and not has_prose_verb
+
+            is_affiliation_start = bool(_FOOTNOTE_AFFILIATION_RE.match(line.trimmed))
+            is_ack_start = (
+                kind is PDFSectionKind.ABSTRACT
+                and bool(_ACKNOWLEDGMENTS_RE.match(line.trimmed))
+                and not (
+                    "in this paper" in line.trimmed.lower()
+                    or "we show" in line.trimmed.lower()
+                )
+            )
+
+            if is_metadata_start or is_affiliation_start or is_ack_start:
+                in_excluded_block = True
+                is_excluded = True
+            elif in_excluded_block:
+                if not line.trimmed or (
+                    has_prose_verb and len(line.trimmed.split()) > 4
+                ):
+                    in_excluded_block = False
+                    is_excluded = is_rh or is_page_num or is_cover
+                else:
+                    is_excluded = True
+            else:
+                is_excluded = is_rh or is_page_num or is_cover
+
+            if is_excluded:
                 if current_run:
                     _emit_run_span(
                         current_run, p_num, page_text, spans_list, text_parts
@@ -881,6 +904,7 @@ def _build_section(
         return None
 
     res = _build_spans_and_text(
+        kind,
         lines_slice,
         start_line_index,
         all_lines,
@@ -920,6 +944,7 @@ def _build_implicit_section(
         return None
 
     res = _build_spans_and_text(
+        kind,
         lines_slice,
         start_line_index,
         all_lines,

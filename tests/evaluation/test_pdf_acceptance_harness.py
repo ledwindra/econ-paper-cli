@@ -27,9 +27,9 @@ from econ_paper_cli.domain import (
     PDFSectionDetectionMethod,
     PDFSectionKind,
     PDFSectionSettings,
+    PreflightCandidate,
     SinglePaperAnalysisRecord,
     SinglePaperAnalysisSettings,
-    compute_analysis_id,
 )
 from econ_paper_cli.protocols.generation import (
     AbstentionReason,
@@ -37,6 +37,7 @@ from econ_paper_cli.protocols.generation import (
     GenerationRequest,
     GenerationResponse,
     Generator,
+    validate_generation_response,
 )
 from econ_paper_cli.services.early_section_library import (
     project_early_section_library_record,
@@ -44,6 +45,10 @@ from econ_paper_cli.services.early_section_library import (
 from econ_paper_cli.services.pdf_conversion import convert_pdf_early_sections
 from econ_paper_cli.services.pdf_section_detection import detect_pdf_sections
 from econ_paper_cli.services.single_paper_analysis import analyze_single_paper
+from econ_paper_cli.services.single_paper_analysis_cli import (
+    BatchOutcomeKind,
+    _process_candidate,
+)
 
 ACCEPTANCE_ENV_VAR = "ECONPAPERS_TEST_ACCEPTANCE_DIR"
 ACCEPTANCE_PAPER_DIR_ENV_VAR = "ECONPAPERS_ACCEPTANCE_PAPER_DIR"
@@ -244,7 +249,7 @@ def run_pdf_acceptance_harness(papers_dir: Path, db_dir: Path) -> dict[str, str]
     assert len(corpus.papers) == 6
     assert len(corpus.passages) > 0
 
-    # 6. BM25 Retrieval & Generator Citation Verification
+    # 6. BM25 Retrieval & Grounded Response Validation
     retriever = BM25Retriever(corpus)
     retrieved_passages = retriever.search("economic model analysis", top_k=5)
     assert len(retrieved_passages) > 0
@@ -257,17 +262,29 @@ def run_pdf_acceptance_harness(papers_dir: Path, db_dir: Path) -> dict[str, str]
     )
     request = GenerationRequest(question="What is the model?", evidence=evidence)
     response = generator.generate(request)
+    validate_generation_response(request, response)
     assert not response.abstained
     assert len(response.citations) == 1
 
-    # 7. Repeated Analysis Reuse & Replacement Verification
+    # 7. Production CLI Candidate Reuse & Settings Replacement
     sample_pdf = matched_files["case_a"]
     checksum_sample = hashlib.sha256(sample_pdf.read_bytes()).hexdigest()
-    reused_analysis_id = compute_analysis_id(
-        checksum_sample, DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS, source_path=sample_pdf
+    candidate = PreflightCandidate(
+        path=sample_pdf,
+        content_checksum=checksum_sample,
+        file_size_bytes=sample_pdf.stat().st_size,
     )
-    reused_record = reopened_storage.get_single_paper_analysis(reused_analysis_id)
-    assert reused_record is not None
+    reuse_outcome = _process_candidate(
+        candidate=candidate,
+        pdf_path=sample_pdf,
+        storage=reopened_storage,
+        extractor=extractor,
+        generator=generator,
+        analysis_settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+        conversion_settings=conversion_settings,
+        timestamp_provider=lambda: "2026-08-02T12:00:00Z",
+    )
+    assert reuse_outcome.kind is BatchOutcomeKind.REUSED
 
     modified_settings = SinglePaperAnalysisSettings(
         section_settings=PDFSectionSettings(max_candidate_search_lines=150)
