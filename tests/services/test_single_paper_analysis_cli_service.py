@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from econ_paper_cli.adapters.llama_cpp import LlamaCppReadinessError
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.domain import (
     PDFDocumentMetadata,
@@ -34,7 +35,6 @@ from econ_paper_cli.protocols.storage import (
 from econ_paper_cli.services.single_paper_analysis_cli import (
     AnalyzeCommandOptions,
     CLIExitCode,
-    format_analysis_record_output,
     run_single_paper_analysis_command,
 )
 
@@ -265,7 +265,26 @@ def test_run_single_paper_analysis_command_success_exact_rendering(
     assert exit_code == CLIExitCode.SUCCESS
     out = capsys.readouterr().out
     durable_rec = storage.list_single_paper_analyses()[0]
-    expected_exact_output = format_analysis_record_output(durable_rec, db_path) + "\n"
+    expected_exact_output = (
+        "=== Single-Paper Analysis Record ===\n"
+        f"Analysis ID: {durable_rec.analysis_id}\n"
+        f"Source Path: {pdf_path}\n"
+        f"Content Checksum: {durable_rec.content_checksum}\n"
+        f"Database Path: {db_path}\n"
+        "Status: success\n"
+        "Quality Status: usable_with_warnings\n\n"
+        "--- Research Question ---\n"
+        "Kind: explicit\n"
+        "Question Text: What is the impact of trade policy?\n"
+        "Sections Used: abstract\n\n"
+        "--- Evidence Excerpts ---\n"
+        "[0] section=abstract, page=1, span=[9, 34]\n"
+        '  Excerpt: "We evaluate trade policy."\n\n'
+        "--- Warnings ---\n"
+        "[quality] very_low_text_volume: The document contains very little extracted text. Confirm that extraction captured the intended content.\n"
+        "[quality] sparse_pages: Some non-empty pages contain unusually little text. Inspect the listed pages for extraction problems. (pages: [1, 2])\n"
+        "[section] missing_next_section_boundary: Introduction heading was detected, but no subsequent top-level section heading was found. Introduction extends to the end of the extracted text.\n"
+    )
     assert out == expected_exact_output
 
 
@@ -288,7 +307,18 @@ def test_run_single_paper_analysis_command_quality_halted_exact_rendering(
     assert exit_code == CLIExitCode.HALTED_OR_UNAVAILABLE
     out = capsys.readouterr().out
     durable_rec = storage.list_single_paper_analyses()[0]
-    expected_exact_output = format_analysis_record_output(durable_rec, db_path) + "\n"
+    expected_exact_output = (
+        "=== Single-Paper Analysis Record ===\n"
+        f"Analysis ID: {durable_rec.analysis_id}\n"
+        f"Source Path: {pdf_path}\n"
+        f"Content Checksum: {durable_rec.content_checksum}\n"
+        f"Database Path: {db_path}\n"
+        "Status: quality_halted\n"
+        "Quality Status: likely_needs_ocr\n\n"
+        "--- Warnings ---\n"
+        "[quality] all_pages_empty: No extractable text was found on any page. Run local OCR or inspect the document manually. (pages: [1, 2])\n"
+        "[orchestration] quality_halted - Extraction quality status is likely_needs_ocr.\n"
+    )
     assert out == expected_exact_output
 
 
@@ -311,7 +341,25 @@ def test_run_single_paper_analysis_command_question_extraction_halted_exact_rend
     assert exit_code == CLIExitCode.HALTED_OR_UNAVAILABLE
     out = capsys.readouterr().out
     durable_rec = storage.list_single_paper_analyses()[0]
-    expected_exact_output = format_analysis_record_output(durable_rec, db_path) + "\n"
+    expected_exact_output = (
+        "=== Single-Paper Analysis Record ===\n"
+        f"Analysis ID: {durable_rec.analysis_id}\n"
+        f"Source Path: {pdf_path}\n"
+        f"Content Checksum: {durable_rec.content_checksum}\n"
+        f"Database Path: {db_path}\n"
+        "Status: question_extraction_halted\n"
+        "Quality Status: usable_with_warnings\n\n"
+        "--- Research Question ---\n"
+        "Kind: unavailable\n"
+        "Question Text: N/A\n"
+        "Sections Used: None\n\n"
+        "--- Warnings ---\n"
+        "[quality] very_low_text_volume: The document contains very little extracted text. Confirm that extraction captured the intended content.\n"
+        "[quality] sparse_pages: Some non-empty pages contain unusually little text. Inspect the listed pages for extraction problems. (pages: [1, 2])\n"
+        "[section] missing_next_section_boundary: Introduction heading was detected, but no subsequent top-level section heading was found. Introduction extends to the end of the extracted text.\n"
+        "[research_question] model_abstained: Model abstained from generating a research question response due to insufficient evidence.\n"
+        "[orchestration] question_extraction_halted\n"
+    )
     assert out == expected_exact_output
 
 
@@ -335,7 +383,16 @@ def test_run_single_paper_analysis_command_preflight_failed_exact_rendering(
     assert exit_code == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
     out = capsys.readouterr().out
     durable_rec = storage.list_single_paper_analyses()[0]
-    expected_exact_output = format_analysis_record_output(durable_rec, db_path) + "\n"
+    expected_exact_output = (
+        "=== Single-Paper Analysis Record ===\n"
+        f"Analysis ID: {durable_rec.analysis_id}\n"
+        f"Source Path: {non_existent_pdf}\n"
+        "Content Checksum: N/A\n"
+        f"Database Path: {db_path}\n"
+        "Status: preflight_failed\n"
+        "Failure Code: path_not_found\n"
+        f"Error Message: Target path for ingestion does not exist: '{non_existent_pdf}'.\n"
+    )
     assert out == expected_exact_output
 
 
@@ -359,7 +416,16 @@ def test_run_single_paper_analysis_command_extraction_failed_exact_rendering(
     assert exit_code == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
     out = capsys.readouterr().out
     durable_rec = storage.list_single_paper_analyses()[0]
-    expected_exact_output = format_analysis_record_output(durable_rec, db_path) + "\n"
+    expected_exact_output = (
+        "=== Single-Paper Analysis Record ===\n"
+        f"Analysis ID: {durable_rec.analysis_id}\n"
+        f"Source Path: {pdf_path}\n"
+        f"Content Checksum: {durable_rec.content_checksum}\n"
+        f"Database Path: {db_path}\n"
+        "Status: extraction_failed\n"
+        "Failure Code: pdf_parser_error\n"
+        f"Error Message: PDF parser failed for '{pdf_path}': PDF file corrupt or unreadable..\n"
+    )
     assert out == expected_exact_output
 
 
@@ -619,6 +685,44 @@ def test_invalid_model_checksum_returns_code_2(
     )
     err = capsys.readouterr().err
     assert "Configuration or readiness error:" in err
+
+
+def test_runtime_readiness_failure_returns_code_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pdf_path = _create_valid_pdf_file(tmp_path)
+    exe_file = tmp_path / "llama-cli"
+    exe_file.write_bytes(b"dummy_exe_bytes")
+    model_content = b"dummy_model_bytes"
+    model_file = tmp_path / "model.gguf"
+    model_file.write_bytes(model_content)
+    model_sha256 = hashlib.sha256(model_content).hexdigest()
+
+    opts = AnalyzeCommandOptions(
+        pdf_path=pdf_path,
+        executable_path=exe_file,
+        model_path=model_file,
+        model_id="test-model",
+        model_bytes=len(model_content),
+        model_checksum=model_sha256,
+        db_path=tmp_path / "readiness_test.db",
+    )
+
+    def failing_check_readiness(self_gen: object) -> None:
+        raise LlamaCppReadinessError("Runtime executable exited with non-zero status.")
+
+    monkeypatch.setattr(
+        "econ_paper_cli.adapters.llama_cpp.LlamaCppGenerator.check_readiness",
+        failing_check_readiness,
+    )
+
+    assert (
+        run_single_paper_analysis_command(opts, extractor=FakePDFExtractor())
+        == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    )
+    err = capsys.readouterr().err
+    assert "Configuration or readiness error:" in err
+    assert "Runtime executable exited with non-zero status." in err
 
 
 def test_command_execution_uses_default_db_path(
