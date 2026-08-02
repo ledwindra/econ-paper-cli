@@ -443,5 +443,40 @@ loaded yet, so a fully-specified identity combined with an explicit
 command's own documented defaults rather than silently reading durable
 configuration it was never supposed to touch.
 
+Issue 56 adds a bare interactive cited-chat shell
+(`econ_paper_cli.services.interactive_shell`), reusing the Issue 54
+configuration boundary and the retrieval/generation/citation logic already
+validated by one-shot `chat`. `open_shell_session` resolves configuration
+and the database path exactly like `execute_chat_command` (eager
+`validate_identity_override_shape`, lazy `LazyConfigLoader`), then opens the
+configured SQLite library read-only exactly once and builds one immutable
+`SessionSnapshot` (database path, paper/passage counts, and one validated
+`Corpus` — or `None` for a genuinely empty library, since `Corpus` requires
+at least one paper). `InteractiveShellSession` constructs one retriever from
+that snapshot and reuses it for every question; its `ask()` method is a
+per-question, config-independent adaptation of `execute_chat_command`'s
+retrieval/generation/citation-validation body, sharing `_resolve_citations`
+and `_render_citation_lines` from `chat_command` so citation output and
+formatting stay byte-for-byte identical to one-shot chat. The local
+generator is constructed lazily on the first question with retrieval
+evidence and cached on the session for reuse; a failed construction attempt
+leaves the cache untouched so the next matched question retries from
+scratch, and empty-library/no-match questions never reach construction at
+all.
+
+`run_interactive_shell` is the read-eval-print loop: it reads lines via
+`stdin.readline()` rather than the builtin `input()`, so it has no direct
+dependency on terminal globals and is fully driven by injectable
+`stdin`/`stdout`/`stderr` streams in tests. An empty `readline()` result
+(EOF) and `/exit`/`/quit` exit with code 0; `KeyboardInterrupt` while
+blocked on `readline()` exits with code 130 and no traceback; a per-question
+failure is rendered to `stderr` and the loop continues. `econ_paper_cli.cli`
+dispatches bare `econpapers` (no subcommand) to this shell — `arguments.command
+is None` is the only signal used, so `econpapers --help` and every other
+subcommand are unaffected. The session never writes to configuration or the
+database, never reopens or reanalyzes a PDF, and never persists questions,
+answers, or citations; the library snapshot is fixed for the life of the
+process.
+
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.

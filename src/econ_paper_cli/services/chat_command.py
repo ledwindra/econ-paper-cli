@@ -22,6 +22,7 @@ from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.adapters.storage_paths import get_default_db_path
 from econ_paper_cli.domain import Corpus, RetrievalEvidence
 from econ_paper_cli.domain.corpora import CorpusValidationError
+from econ_paper_cli.domain.early_section_library import EarlySectionLibraryRecord
 from econ_paper_cli.domain.errors import CitationValidationError
 from econ_paper_cli.protocols import (
     GenerationRequest,
@@ -234,7 +235,7 @@ def execute_chat_command(
             )
 
         provider = generator_provider or (
-            lambda opts: _build_llama_cpp_generator(opts, overrides, lazy_config)
+            lambda opts: _build_llama_cpp_generator(overrides, lazy_config)
         )
         generator = provider(options)
         request = GenerationRequest(question=question, evidence=evidence)
@@ -250,7 +251,9 @@ def execute_chat_command(
                 generation_method=response.generation_method,
             )
 
-        cited = _resolve_citations(storage_backend, corpus, evidence, response)
+        cited = _resolve_citations(
+            storage_backend.get_early_section_record, corpus, evidence, response
+        )
         return ChatCommandResult(
             outcome=ChatTerminalOutcome.ANSWERED,
             exit_code=0,
@@ -390,22 +393,7 @@ def format_chat_command_output(result: ChatCommandResult) -> str:
         else:
             lines.append("Finding Kinds: N/A")
         lines.append("\n--- Citations ---")
-        for detail in result.citations:
-            lines.append(f"[{detail.citation_id}]")
-            lines.append(f"  Paper Title: {detail.paper_title}")
-            lines.append(f"  Section Heading: {detail.section_heading or 'N/A'}")
-            if detail.page_start is None:
-                page_range = "N/A"
-            elif detail.page_end is None or detail.page_end == detail.page_start:
-                page_range = str(detail.page_start)
-            else:
-                page_range = f"{detail.page_start}-{detail.page_end}"
-            lines.append(f"  Page Range: {page_range}")
-            lines.append(f"  Paper ID: {detail.paper_id}")
-            lines.append(f"  Passage ID: {detail.passage_id}")
-            lines.append(f"  Retrieval Rank: {detail.retrieval_rank}")
-            lines.append(f"  Retrieval Score: {format(detail.retrieval_score, '.12g')}")
-            lines.append(f"  Source Path: {detail.source_path}")
+        lines.extend(_render_citation_lines(result.citations))
     elif result.outcome in (
         ChatTerminalOutcome.EMPTY_LIBRARY,
         ChatTerminalOutcome.NO_MATCHES,
@@ -426,12 +414,33 @@ def format_chat_command_output(result: ChatCommandResult) -> str:
     return "\n".join(lines)
 
 
+def _render_citation_lines(citations: tuple[ChatCitationDetail, ...]) -> list[str]:
+    """Render the shared per-citation detail block used by one-shot chat and
+    the interactive shell, so both stay byte-for-byte identical."""
+    lines: list[str] = []
+    for detail in citations:
+        lines.append(f"[{detail.citation_id}]")
+        lines.append(f"  Paper Title: {detail.paper_title}")
+        lines.append(f"  Section Heading: {detail.section_heading or 'N/A'}")
+        if detail.page_start is None:
+            page_range = "N/A"
+        elif detail.page_end is None or detail.page_end == detail.page_start:
+            page_range = str(detail.page_start)
+        else:
+            page_range = f"{detail.page_start}-{detail.page_end}"
+        lines.append(f"  Page Range: {page_range}")
+        lines.append(f"  Paper ID: {detail.paper_id}")
+        lines.append(f"  Passage ID: {detail.passage_id}")
+        lines.append(f"  Retrieval Rank: {detail.retrieval_rank}")
+        lines.append(f"  Retrieval Score: {format(detail.retrieval_score, '.12g')}")
+        lines.append(f"  Source Path: {detail.source_path}")
+    return lines
+
+
 def _build_llama_cpp_generator(
-    options: ChatCommandOptions,
     overrides: RuntimeModelOverrides,
     lazy_config: LazyConfigLoader,
 ) -> Generator:
-    del options  # Resolution uses overrides/lazy_config, not raw CLI options.
     # A fully-specified CLI identity never forces a load. But if a load
     # already happened for another reason (e.g. resolving --db-path), its
     # optional threads/timeout defaults still apply per CLI > config >
@@ -454,18 +463,25 @@ def _build_llama_cpp_generator(
 
 
 def _resolve_citations(
-    storage: StorageBackend,
+    record_lookup: Callable[[str], EarlySectionLibraryRecord | None],
     corpus: Corpus,
     evidence: tuple[RetrievalEvidence, ...],
     response: GenerationResponse,
 ) -> tuple[ChatCitationDetail, ...]:
+    """Resolve citation detail from an early-section record lookup.
+
+    Callers pass either a live storage read (one-shot ``chat``) or a fixed
+    in-memory snapshot mapping (the interactive shell), so both stay
+    byte-for-byte identical in rendering while the shell never re-reads live
+    storage per turn.
+    """
     paper_by_id = {paper.paper_id: paper for paper in corpus.papers}
     evidence_by_id = {f"e{item.rank}": item for item in evidence}
     details: list[ChatCitationDetail] = []
 
     for citation in response.citations:
         evidence_item = evidence_by_id[citation.citation_id]
-        record = storage.get_early_section_record(evidence_item.passage.paper_id)
+        record = record_lookup(evidence_item.passage.paper_id)
         if record is None:
             raise StorageValidationError(
                 f"Missing early-section record for paper_id '{evidence_item.passage.paper_id}'."

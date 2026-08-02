@@ -164,6 +164,10 @@ Not yet implemented:
 - Durable, versioned local runtime/model configuration; `econpapers setup` and
   `econpapers status`; optional `analyze`/`chat` runtime/model arguments
   resolved from configuration when omitted (Issue 54 implemented)
+- Bare `econpapers` interactive cited-chat shell reusing the durable library,
+  retrieval, generation, citation, and configuration boundaries, with a
+  lazily constructed and reused generator and no conversation memory yet
+  (Issue 56 implemented)
 - Connect update, follow-up, and evidence inspection
 - Connect the approved library, ingestion, retrieval, and generation adapters
 - Verify offline operation, privacy, restart safety, and cross-platform behavior
