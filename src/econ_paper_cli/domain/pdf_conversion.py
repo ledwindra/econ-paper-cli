@@ -12,6 +12,10 @@ from econ_paper_cli.domain.pdf_sections import PDFSectionKind
 
 _SHA256_PATTERN = re.compile(r"[a-f0-9]{64}")
 _POLICY_VERSION = "early-section-markdown-v1"
+_SECTION_ORDER = {
+    PDFSectionKind.ABSTRACT: 0,
+    PDFSectionKind.INTRODUCTION: 1,
+}
 
 
 class PDFConversionStatus(str, Enum):
@@ -203,6 +207,7 @@ class PDFConversionResult:
                 "passage ordinals must be contiguous and zero-based."
             )
 
+        previous_provenance: PassageProvenance | None = None
         for passage, provenance in zip(
             self.passages, self.passage_provenance, strict=True
         ):
@@ -248,6 +253,24 @@ class PDFConversionResult:
                 raise PDFConversionValidationError(
                     "passage_id does not match its deterministic identity inputs."
                 )
+            if previous_provenance is not None:
+                if (
+                    _SECTION_ORDER[provenance.section_kind]
+                    < _SECTION_ORDER[previous_provenance.section_kind]
+                ):
+                    raise PDFConversionValidationError(
+                        "passage provenance cannot return to an earlier section."
+                    )
+                previous_end = previous_provenance.fragments[-1]
+                current_start = provenance.fragments[0]
+                if (
+                    current_start.page_number,
+                    current_start.start_character_offset,
+                ) < (previous_end.page_number, previous_end.end_character_offset):
+                    raise PDFConversionValidationError(
+                        "passage provenance must preserve source order without overlap."
+                    )
+            previous_provenance = provenance
 
 
 DEFAULT_PDF_CONVERSION_SETTINGS = PDFConversionSettings()

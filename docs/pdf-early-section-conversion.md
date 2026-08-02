@@ -31,7 +31,8 @@ The result is terminal and typed:
 The immutable conversion result validates its settings fingerprint,
 checksum-derived paper identity, zero-based contiguous passage ordinals,
 passage identities, passage budget, section headings, page ranges, and complete
-fragment accounting.
+fragment accounting. Across passages, provenance must follow canonical Abstract
+then Introduction progression and preserve non-overlapping source order.
 
 ## Markdown policy v1
 

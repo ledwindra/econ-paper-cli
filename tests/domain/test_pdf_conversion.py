@@ -139,6 +139,90 @@ def test_success_result_cross_validates_identity_and_provenance() -> None:
         )
 
 
+def _result_with_two_passages(
+    *,
+    first_kind: PDFSectionKind = PDFSectionKind.ABSTRACT,
+    second_kind: PDFSectionKind = PDFSectionKind.ABSTRACT,
+    first_source_span: tuple[int, int] = (0, 5),
+    second_source_span: tuple[int, int] = (5, 11),
+) -> PDFConversionResult:
+    settings = DEFAULT_PDF_CONVERSION_SETTINGS
+    fingerprint = compute_conversion_settings_fingerprint(settings)
+    paper_id = compute_conversion_paper_id(CHECKSUM)
+    records: list[tuple[Passage, PassageProvenance]] = []
+    for ordinal, (text, kind, source_span) in enumerate(
+        (
+            ("First", first_kind, first_source_span),
+            ("Second", second_kind, second_source_span),
+        )
+    ):
+        passage_id = compute_conversion_passage_id(
+            paper_id=paper_id,
+            settings_fingerprint=fingerprint,
+            section_kind=kind,
+            ordinal_position=ordinal,
+            text=text,
+        )
+        passage = Passage(
+            passage_id=passage_id,
+            paper_id=paper_id,
+            text=text,
+            section_heading=kind.value.title(),
+            page_start=1,
+            page_end=1,
+            ordinal_position=ordinal,
+        )
+        provenance = PassageProvenance(
+            passage_id=passage_id,
+            section_kind=kind,
+            fragments=(
+                PassageSourceFragment(
+                    page_number=1,
+                    start_character_offset=source_span[0],
+                    end_character_offset=source_span[1],
+                    passage_start_character_offset=0,
+                    passage_end_character_offset=len(text),
+                ),
+            ),
+        )
+        records.append((passage, provenance))
+    return PDFConversionResult(
+        status=PDFConversionStatus.SUCCESS,
+        content_checksum=CHECKSUM,
+        settings=settings,
+        settings_fingerprint=fingerprint,
+        paper_id=paper_id,
+        markdown="# Paper\n\n## Abstract\n\nFirstSecond",
+        passages=tuple(record[0] for record in records),
+        passage_provenance=tuple(record[1] for record in records),
+    )
+
+
+@pytest.mark.parametrize(
+    ("first_span", "second_span"),
+    [
+        ((10, 15), (0, 6)),
+        ((0, 5), (4, 10)),
+    ],
+)
+def test_result_rejects_reversed_or_overlapping_passage_provenance(
+    first_span: tuple[int, int], second_span: tuple[int, int]
+) -> None:
+    with pytest.raises(PDFConversionValidationError, match="source order"):
+        _result_with_two_passages(
+            first_source_span=first_span,
+            second_source_span=second_span,
+        )
+
+
+def test_result_rejects_return_to_earlier_section() -> None:
+    with pytest.raises(PDFConversionValidationError, match="earlier section"):
+        _result_with_two_passages(
+            first_kind=PDFSectionKind.INTRODUCTION,
+            second_kind=PDFSectionKind.ABSTRACT,
+        )
+
+
 def test_no_usable_sections_is_a_typed_empty_terminal_result() -> None:
     settings = DEFAULT_PDF_CONVERSION_SETTINGS
     result = PDFConversionResult(

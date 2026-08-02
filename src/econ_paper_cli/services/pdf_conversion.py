@@ -202,15 +202,16 @@ def _render_markdown(
         text_parts: list[str] = []
         previous_page: int | None = None
         for span in section.spans:
+            slice_text = pages[span.page_number][
+                span.start_character_offset : span.end_character_offset
+            ]
+            if not slice_text:
+                continue
             if previous_page is not None and span.page_number != previous_page:
                 if text_parts and not text_parts[-1].endswith("\n"):
                     text_parts.append("\n")
                 text_parts.append(f"<!-- econpapers-page: {span.page_number} -->\n")
-            text_parts.append(
-                pages[span.page_number][
-                    span.start_character_offset : span.end_character_offset
-                ]
-            )
+            text_parts.append(slice_text)
             previous_page = span.page_number
         if markdown.endswith("\n\n"):
             separator = ""

@@ -132,6 +132,22 @@ def test_marker_is_only_added_when_page_number_changes() -> None:
     assert "econpapers-page" not in result.markdown
 
 
+def test_empty_intermediate_page_span_does_not_emit_a_marker() -> None:
+    extraction = _extraction("first", "", "last")
+    section = _section(
+        PDFSectionKind.INTRODUCTION,
+        (
+            PDFSectionSpan(1, 0, 5),
+            PDFSectionSpan(2, 0, 0),
+            PDFSectionSpan(3, 0, 4),
+        ),
+        "firstlast",
+    )
+    result = _convert(extraction, _detection(section))
+    assert "<!-- econpapers-page: 2 -->" not in result.markdown
+    assert "<!-- econpapers-page: 3 -->\nlast" in result.markdown
+
+
 def test_title_falls_back_to_filename_stem_without_affecting_identities() -> None:
     section = _section(
         PDFSectionKind.INTRODUCTION,
