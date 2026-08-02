@@ -139,6 +139,10 @@ class PDFSectionValidationError(DomainError):
     """Raised when a PDF section-detection domain object fails validation."""
 
 
+class PDFConversionValidationError(DomainError):
+    """Raised when an early-section PDF conversion contract is invalid."""
+
+
 class ResearchQuestionValidationError(DomainError):
     """Raised when a research-question domain object fails validation."""
 

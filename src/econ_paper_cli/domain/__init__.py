@@ -22,6 +22,7 @@ from econ_paper_cli.domain.errors import (
     IngestionValidationError,
     PaperValidationError,
     PassageValidationError,
+    PDFConversionValidationError,
     PDFEncryptedError,
     PDFExtractionError,
     PDFExtractionValidationError,
@@ -44,6 +45,17 @@ from econ_paper_cli.domain.ingestion import (
 )
 from econ_paper_cli.domain.papers import Paper
 from econ_paper_cli.domain.passages import Passage
+from econ_paper_cli.domain.pdf_conversion import (
+    DEFAULT_PDF_CONVERSION_SETTINGS,
+    PassageProvenance,
+    PassageSourceFragment,
+    PDFConversionResult,
+    PDFConversionSettings,
+    PDFConversionStatus,
+    compute_conversion_paper_id,
+    compute_conversion_passage_id,
+    compute_conversion_settings_fingerprint,
+)
 from econ_paper_cli.domain.pdf_extraction import (
     ExtractedPDFPage,
     PDFDocumentMetadata,
@@ -132,6 +144,12 @@ __all__ = [
     "PaperValidationError",
     "Passage",
     "PassageValidationError",
+    "PassageProvenance",
+    "PassageSourceFragment",
+    "PDFConversionResult",
+    "PDFConversionSettings",
+    "PDFConversionStatus",
+    "PDFConversionValidationError",
     "PDFDocumentMetadata",
     "PDFEncryptedError",
     "PDFExtractionError",
@@ -152,6 +170,7 @@ __all__ = [
     "PDFQualityWarning",
     "PDFQualityWarningCode",
     "DEFAULT_PDF_QUALITY_SETTINGS",
+    "DEFAULT_PDF_CONVERSION_SETTINGS",
     "PDFHeadingCandidate",
     "PDFSection",
     "PDFSectionDetectionResult",
@@ -187,6 +206,9 @@ __all__ = [
     "SinglePaperAnalysisWarningCode",
     "DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS",
     "compute_analysis_id",
+    "compute_conversion_paper_id",
+    "compute_conversion_passage_id",
+    "compute_conversion_settings_fingerprint",
     "compute_settings_fingerprint",
     "RetrievalEvidence",
     "SourceProvenance",

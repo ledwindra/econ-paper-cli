@@ -335,5 +335,17 @@ duplicate paths, and unexpected storage failures without concealing later
 papers. The feature does not add concurrency, downloads, OCR, Markdown
 generation, indexing, or full-document ingestion.
 
+Issue 46 adds a pure early-section conversion boundary. Immutable versioned
+settings, deterministic checksum-derived paper identity, settings and passage
+fingerprints, Markdown, ordered passages, and exact page-local passage
+provenance remain independent of filesystem and storage adapters. The service
+grounds detected Abstract and Introduction spans against structured extraction
+pages, renders canonical headings and invisible page-transition markers, and
+segments each section independently with a deterministic character budget.
+It does not change the existing `Passage` contract, infer source-path equality,
+convert later sections, write derived artifacts, populate SQLite, or build a
+retrieval index. See
+[`docs/pdf-early-section-conversion.md`](pdf-early-section-conversion.md).
+
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.
