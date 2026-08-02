@@ -90,6 +90,7 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );""",
+            "CREATE INDEX IF NOT EXISTS idx_papers_checksum ON papers(content_checksum);",
             """CREATE TABLE IF NOT EXISTS source_provenance (
                 paper_id TEXT PRIMARY KEY,
                 source_path TEXT NOT NULL,
@@ -116,6 +117,7 @@ _MIGRATIONS: list[tuple[int, str, list[str]]] = [
                 ordinal_position INTEGER NOT NULL,
                 FOREIGN KEY(paper_id) REFERENCES papers(paper_id) ON DELETE CASCADE
             );""",
+            "CREATE INDEX IF NOT EXISTS idx_passages_paper_ordinal ON passages(paper_id, ordinal_position);",
             """CREATE TABLE IF NOT EXISTS ingestion_warnings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 paper_id TEXT NOT NULL,

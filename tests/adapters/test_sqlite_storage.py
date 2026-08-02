@@ -1281,4 +1281,106 @@ def test_v5_to_v6_schema_migration_creates_boundary_evidence_table(
     assert sec.detection_method is PDFSectionDetectionMethod.EXPLICIT_HEADING
     assert sec.boundary_evidence == ()
 
+    # Now save a new implicit section record with boundary evidence to migrated v6 DB
+    from econ_paper_cli.domain import (
+        PDFSectionBoundaryEvidenceType,
+        ResearchQuestionKind,
+        SinglePaperAnalysisEvidenceRecord,
+        SinglePaperAnalysisQuestionRecord,
+        SinglePaperAnalysisRecord,
+        SinglePaperAnalysisSectionBoundaryEvidenceRecord,
+        SinglePaperAnalysisSectionRecord,
+        SinglePaperAnalysisSectionSpanRecord,
+        SinglePaperAnalysisStatus,
+    )
+
+    pdf_path2 = (tmp_path / "implicit_v6.pdf").resolve()
+    ck2 = "f" * 64
+    exact_id2 = compute_analysis_id(
+        ck2, DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS, pdf_path2
+    )
+
+    span2 = SinglePaperAnalysisSectionSpanRecord(
+        page_number=1,
+        start_character_offset=0,
+        end_character_offset=50,
+        ordinal_position=0,
+    )
+    b_ev2 = SinglePaperAnalysisSectionBoundaryEvidenceRecord(
+        page_number=1,
+        start_character_offset=0,
+        end_character_offset=50,
+        evidence_type=PDFSectionBoundaryEvidenceType.TITLE_BLOCK,
+        description="Implicit front-matter inferred from title block",
+        ordinal_position=0,
+    )
+    sec_rec2 = SinglePaperAnalysisSectionRecord(
+        section_kind=PDFSectionKind.ABSTRACT,
+        heading_text="Abstract",
+        detection_method=PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER,
+        observed_heading_text=None,
+        page_start=1,
+        page_end=1,
+        spans=(span2,),
+        ordinal_position=0,
+        boundary_evidence=(b_ev2,),
+    )
+    rq2 = SinglePaperAnalysisQuestionRecord(
+        kind=ResearchQuestionKind.INFERRED,
+        question_text="Implicit question?",
+        sections_used=(PDFSectionKind.ABSTRACT,),
+    )
+    ev_rec2 = SinglePaperAnalysisEvidenceRecord(
+        section_kind=PDFSectionKind.ABSTRACT,
+        excerpt_text="Excerpt text",
+        page_number=1,
+        start_character_offset=0,
+        end_character_offset=12,
+        ordinal_position=0,
+    )
+    implicit_rec = SinglePaperAnalysisRecord(
+        analysis_id=exact_id2,
+        source_path=pdf_path2,
+        content_checksum=ck2,
+        status=SinglePaperAnalysisStatus.SUCCESS,
+        completed_stages=rec.completed_stages,
+        failed_stage=None,
+        skipped_stages=(),
+        failure_code=None,
+        error_message=None,
+        quality_status=rec.quality_status,
+        settings=rec.settings,
+        settings_fingerprint=rec.settings_fingerprint,
+        quality_warnings=(),
+        section_warnings=(),
+        research_question_warnings=(),
+        warnings=(),
+        sections=(sec_rec2,),
+        research_question=rq2,
+        evidence=(ev_rec2,),
+        created_at="2026-08-01T20:00:00Z",
+        updated_at="2026-08-01T20:00:00Z",
+    )
+
+    storage.save_single_paper_analysis(implicit_rec)
     storage.close()
+
+    # Reopen database and verify exact boundary evidence read-back after migration and save
+    storage2 = SQLiteStorage(db_file)
+    storage2.initialize()
+    restarted_rec = storage2.get_single_paper_analysis(exact_id2)
+    assert restarted_rec is not None
+    assert len(restarted_rec.sections) == 1
+    r_sec2 = restarted_rec.sections[0]
+    assert r_sec2.detection_method is PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER
+    assert r_sec2.observed_heading_text is None
+    assert len(r_sec2.boundary_evidence) == 1
+    assert (
+        r_sec2.boundary_evidence[0].evidence_type
+        is PDFSectionBoundaryEvidenceType.TITLE_BLOCK
+    )
+    assert (
+        r_sec2.boundary_evidence[0].description
+        == "Implicit front-matter inferred from title block"
+    )
+    storage2.close()

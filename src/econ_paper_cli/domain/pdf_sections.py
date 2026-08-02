@@ -45,6 +45,9 @@ class PDFSectionBoundaryEvidenceType(str, Enum):
     FIRST_SECTION_HEADING = "first_section_heading"
     PAGE_BOUNDARY = "page_boundary"
     UNHEADED_PARAGRAPH_BREAK = "unheaded_paragraph_break"
+    JEL_CLASSIFICATION_TERMINATOR = "jel_classification_terminator"
+    ACKNOWLEDGMENTS_START = "acknowledgments_start"
+    FIRST_BODY_PROSE_START = "first_body_prose_start"
 
 
 class PDFSectionWarningCode(str, Enum):
