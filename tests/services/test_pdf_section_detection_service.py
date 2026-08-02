@@ -726,3 +726,187 @@ def test_metadata_words_in_body_prose_not_excluded() -> None:
     assert "keywords used in this literature" in intro.text
     assert "JEL classification scheme was updated" in intro.text
     assert "We thank the authors who pioneered" in intro.text
+
+
+# --- Paragraph-break heading recognition (issue #59 review) ----------------
+#
+# Real journal layouts emit the next top-level heading with no blank line and
+# no page edge around it (issue #59 cases A, B, D, E). The rule that admits
+# those must not also swallow numbered prose.
+
+
+def test_next_section_heading_without_blank_line_terminates_introduction() -> None:
+    """The real structural pattern: hard-wrapped body text, a sentence-final
+    line, then a short heading, with no blank separator anywhere."""
+    page = (
+        "Abstract\n"
+        "We study how regional labour markets absorb migration inflows here.\n"
+        "\n"
+        "1. Introduction\n"
+        "The literature has long debated how local labour markets adjust to a\n"
+        "sudden inflow of workers, and whether wages or employment respond more\n"
+        "strongly over the medium run in affected metropolitan regions today.\n"
+        "2 Theoretical framework\n"
+        "We now set out a spatial equilibrium model of local labour demand and\n"
+        "supply that we take to the data in the following empirical section.\n"
+    )
+    result = detect_pdf_sections(
+        _extraction(page), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+
+    intro = next(s for s in result.sections if s.kind is PDFSectionKind.INTRODUCTION)
+    assert "sudden inflow of workers" in intro.text
+    assert "2 Theoretical framework" not in intro.text
+    assert "spatial equilibrium model" not in intro.text
+
+
+def test_numbered_prose_continuation_is_not_a_section_boundary() -> None:
+    """The review's false-positive case: a numbered fragment mid-paragraph
+    whose next line continues the sentence in lowercase is prose, not a
+    Section 2 heading."""
+    page = (
+        "Abstract\n"
+        "We study how regional labour markets absorb migration inflows here.\n"
+        "\n"
+        "1. Introduction\n"
+        "A completed introductory sentence.\n"
+        "2 Higher prices\n"
+        "continue to reduce demand in the model.\n"
+        "More body prose follows in this paragraph and should be retained.\n"
+        "\n"
+        "3. Real Next Section\n"
+        "This belongs to the following section entirely.\n"
+    )
+    result = detect_pdf_sections(
+        _extraction(page), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+
+    intro = next(s for s in result.sections if s.kind is PDFSectionKind.INTRODUCTION)
+    assert "2 Higher prices" in intro.text
+    assert "continue to reduce demand in the model." in intro.text
+    assert "This belongs to the following section entirely." not in intro.text
+
+
+def test_heading_shaped_line_without_sentence_end_before_it_is_not_a_boundary() -> None:
+    """Without a completed sentence immediately before it, a short numbered
+    line is a wrapped fragment, not a heading."""
+    page = (
+        "Abstract\n"
+        "We study how regional labour markets absorb migration inflows here.\n"
+        "\n"
+        "1. Introduction\n"
+        "The estimated elasticity is bounded above by the value reported in\n"
+        "2 Alternative specifications\n"
+        "Robustness checks confirm the same qualitative pattern in all cases.\n"
+    )
+    result = detect_pdf_sections(
+        _extraction(page), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+
+    intro = next(s for s in result.sections if s.kind is PDFSectionKind.INTRODUCTION)
+    assert "2 Alternative specifications" in intro.text
+
+
+# --- Metadata-block termination (issue #59 review) -------------------------
+
+
+def test_metadata_block_ends_at_body_prose_using_an_unlisted_verb() -> None:
+    """A verb allowlist cannot generalize: "derives" is not enumerated, but
+    the sentence is plainly body prose and must be retained."""
+    page = (
+        "Abstract\n"
+        "We summarize the result briefly here for interested readers today.\n"
+        "Keywords: trade, cities\n"
+        "Our framework derives bilateral migration flows.\n"
+        "\n"
+        "1. Introduction\n"
+        "We examine the allocation question across many competing firms here.\n"
+        "\n"
+        "2. Model\n"
+        "Next section body text.\n"
+    )
+    result = detect_pdf_sections(
+        _extraction(page), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+
+    abstract = next(s for s in result.sections if s.kind is PDFSectionKind.ABSTRACT)
+    assert "Keywords: trade, cities" not in abstract.text
+    assert "Our framework derives bilateral migration flows." in abstract.text
+
+
+def test_body_sentence_opening_with_financial_support_is_retained() -> None:
+    """ "Financial support ..." is both a funding-footnote opener and an
+    ordinary sentence opener; sentence-shaped prose must not be excluded."""
+    page = (
+        "Abstract\n"
+        "We summarize the result briefly here for interested readers today.\n"
+        "\n"
+        "1. Introduction\n"
+        "Financial support for the program declined sharply after 2015.\n"
+        "The decline reduced participation across all regions we studied.\n"
+        "\n"
+        "2. Model\n"
+        "Next section body text.\n"
+    )
+    result = detect_pdf_sections(
+        _extraction(page), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+
+    intro = next(s for s in result.sections if s.kind is PDFSectionKind.INTRODUCTION)
+    assert (
+        "Financial support for the program declined sharply after 2015." in intro.text
+    )
+    assert "The decline reduced participation" in intro.text
+
+
+def test_genuine_funding_footnote_block_is_still_excluded() -> None:
+    """The safeguard above must not disable the real exclusion: a funding
+    footnote written as fragments (no sentence shape) is still removed."""
+    page = (
+        "Abstract\n"
+        "We summarize the result briefly here for interested readers today.\n"
+        "Financial support: NSF grant 1745302; ESRC grant ES/T000001/1\n"
+        "and the Leverhulme Trust, whose assistance we note\n"
+        "\n"
+        "1. Introduction\n"
+        "We examine the allocation question across many competing firms here.\n"
+        "\n"
+        "2. Model\n"
+        "Next section body text.\n"
+    )
+    result = detect_pdf_sections(
+        _extraction(page), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+
+    abstract = next(s for s in result.sections if s.kind is PDFSectionKind.ABSTRACT)
+    assert "NSF grant 1745302" not in abstract.text
+    assert "Leverhulme Trust" not in abstract.text
+
+
+def test_interleaved_author_footnote_inside_body_prose_is_excluded() -> None:
+    """Issue #59 case C: the author-affiliation/acknowledgments footnote is
+    extracted interleaved into page-1 body text, not cleanly before it."""
+    page = (
+        "A Synthetic Title About Markets\n"
+        "By A Researcher and B Researcher*\n"
+        "We summarize the finding compactly for readers of the journal here.\n"
+        "(JEL D44, Q24)\n"
+        "Land use change contributes a large share of global emissions today,\n"
+        "and market mechanisms aim to combat this degradation at a low cost.\n"
+        "* Researcher: Yale School of the Environment (email: a@example.edu);\n"
+        "B Researcher: Harvard University (email: b@example.edu). We thank the\n"
+        "coeditor and three anonymous referees for their generous feedback,\n"
+        "\n"
+        "I. Theoretical Framework\n"
+        "There exists a continuum of landowners indexed by i in the model.\n"
+    )
+    result = detect_pdf_sections(
+        _extraction(page), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+
+    retained = "".join(s.text for s in result.sections)
+    assert "Land use change contributes" in retained
+    assert "Yale School" not in retained
+    assert "We thank the" not in retained
+    assert "@example.edu" not in retained
+    assert "There exists a continuum" not in retained

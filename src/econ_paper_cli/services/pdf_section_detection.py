@@ -64,6 +64,21 @@ _FOOTNOTE_AFFILIATION_RE = re.compile(
     r"^(?:[\*\dagger\d]\s*)?(?:Department\s+of|Faculty\s+of|School\s+of|University\s+of|Email\:|Corresponding\s+author|Financial\s+support)",
     re.IGNORECASE,
 )
+_FUNDING_PHRASE_RE = re.compile(r"^\s*Financial\s+support\b", re.IGNORECASE)
+_AFFILIATION_MARKER_RE = re.compile(
+    r"@|\bemail\b|\bdepartment\s+of\b|\buniversity\s+of\b|\bschool\s+of\b",
+    re.IGNORECASE,
+)
+# A line opening with a footnote/dagger marker that also carries contact or
+# link material is publisher/author front-matter furniture, not body prose.
+# Real extractions interleave this block directly into page-1 text (issue
+# #59 case C), where it would otherwise be retained inside the Introduction.
+_FOOTNOTE_MARKER_RE = re.compile(r"^\s*[\*\u2020\u2021\u00a7\u00b6]\s*\S")
+_CONTACT_OR_LINK_RE = re.compile(
+    r"@|\bemail\b|https?://|\bdoi\.org\b|\bUniversity\b|\bSchool\s+of\b"
+    r"|\bDepartment\s+of\b|\bCollege\b|\bInstitute\b",
+    re.IGNORECASE,
+)
 _SENTENCE_TERMINATOR_RE = re.compile(r"[.!?][\"'\u201d\u2019)\]]*$")
 _ACKNOWLEDGMENTS_RE = re.compile(
     r"^\s*(?:We\s+thank|Thanks\s+to|Financial\s+support|The\s+authors\s+thank|Acknowledge?ments?)\b",
@@ -646,6 +661,51 @@ def _find_next_section_candidate(
     return None
 
 
+def _looks_like_body_sentence(text: str) -> bool:
+    """Return whether ``text`` reads as an ordinary body-prose sentence.
+
+    Deliberately shape-based rather than vocabulary-based: a capitalized,
+    sentence-terminated, multi-word line carrying no affiliation marker is
+    body prose regardless of which verb it happens to use. A verb allowlist
+    cannot generalize — it silently discarded legitimate sentences such as
+    "Our framework derives bilateral migration flows." simply because
+    "derives" was not enumerated.
+    """
+    stripped = text.strip()
+    if len(stripped.split()) < 4:
+        return False
+    if not stripped[:1].isupper():
+        return False
+    if not _SENTENCE_TERMINATOR_RE.search(stripped):
+        return False
+    return not _AFFILIATION_MARKER_RE.search(stripped)
+
+
+def _continues_excluded_block(text: str) -> bool:
+    """Return whether ``text`` is a continuation of a metadata/footnote block.
+
+    Body prose resumes at a line that opens a new full-width wrapped
+    sentence: capitalized, several words, and carrying no contact or
+    affiliation material. Everything else — a lowercase wrap, a
+    parenthetical or symbol-led fragment, a short comma-separated code
+    list, or a line still quoting an email/institution — belongs to the
+    block.
+
+    Requiring a *terminal period* here (as a strict sentence test does)
+    would never fire on hard-wrapped body text, which ends mid-sentence by
+    construction; that silently swallowed the opening paragraphs of an
+    Introduction that followed a JEL block.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if not stripped[:1].isalpha() or not stripped[:1].isupper():
+        return True
+    if len(stripped.split()) < 6:
+        return True
+    return bool(_AFFILIATION_MARKER_RE.search(stripped))
+
+
 def _is_paragraph_break_heading_context(lines: list[_LineInfo], idx: int) -> bool:
     """Return whether line ``idx`` sits at a heading-shaped paragraph break.
 
@@ -674,6 +734,26 @@ def _is_paragraph_break_heading_context(lines: list[_LineInfo], idx: int) -> boo
     if not _SENTENCE_TERMINATOR_RE.search(previous.trimmed):
         return False
 
+    # The line after a genuine heading starts something new — another
+    # heading, or a fresh capitalized sentence. A lowercase continuation
+    # means this "heading" is really the middle of wrapped prose, which is
+    # exactly the numbered-prose false positive:
+    #     A completed introductory sentence.
+    #     2 Higher prices
+    #     continue to reduce demand in the model.
+    following = None
+    for forward in range(idx + 1, len(lines)):
+        if lines[forward].trimmed:
+            following = lines[forward]
+            break
+    if following is not None and following.trimmed[:1].islower():
+        return False
+
+    # Estimate the wrapped column width from the *long* nearby lines (75th
+    # percentile), not the median: equations, short paragraph tails, and
+    # subheadings drag a median well below the true body width and would
+    # hide a genuine heading such as case E's
+    # "2 Gravity estimation framework and spatial components".
     neighbour_lengths = sorted(
         len(lines[offset].trimmed)
         for offset in range(max(0, idx - 8), min(len(lines), idx + 9))
@@ -681,10 +761,10 @@ def _is_paragraph_break_heading_context(lines: list[_LineInfo], idx: int) -> boo
     )
     if len(neighbour_lengths) < 4:
         return False
-    median_width = neighbour_lengths[len(neighbour_lengths) // 2]
-    if median_width <= 0:
+    column_width = neighbour_lengths[(len(neighbour_lengths) * 3) // 4]
+    if column_width <= 0:
         return False
-    return len(lines[idx].trimmed) <= 0.7 * median_width
+    return len(lines[idx].trimmed) <= 0.7 * column_width
 
 
 def _is_genuine_next_top_level_heading(
@@ -833,6 +913,7 @@ def _build_spans_and_text(
 
         current_run: list[_LineInfo] = []
         in_excluded_block = False
+        previous_excluded_trimmed = ""
 
         for global_idx, line in page_lines:
             is_first_on_page = (
@@ -865,9 +946,22 @@ def _build_spans_and_text(
             is_metadata_start = (
                 bool(_JEL_KEYWORDS_RE.match(line.trimmed))
                 or bool(_ARTICLE_HISTORY_RE.match(line.trimmed))
-            ) and not has_prose_verb
+            ) and not (has_prose_verb or _looks_like_body_sentence(line.trimmed))
 
-            is_affiliation_start = bool(_FOOTNOTE_AFFILIATION_RE.match(line.trimmed))
+            # "Financial support ..." is both a real funding-footnote opener
+            # and a perfectly ordinary way to begin a body sentence, so it
+            # only starts an excluded block when the line does *not* read as
+            # ordinary prose. The structural markers (Department of, Email:,
+            # Corresponding author, ...) are never sentence openers and need
+            # no such safeguard.
+            affiliation_match = _FOOTNOTE_AFFILIATION_RE.match(line.trimmed)
+            is_affiliation_start = bool(affiliation_match) and not (
+                _FUNDING_PHRASE_RE.match(line.trimmed)
+                and _looks_like_body_sentence(line.trimmed)
+            )
+            is_footnote_start = bool(_FOOTNOTE_MARKER_RE.match(line.trimmed)) and bool(
+                _CONTACT_OR_LINK_RE.search(line.trimmed)
+            )
             is_ack_start = (
                 kind is PDFSectionKind.ABSTRACT
                 and bool(_ACKNOWLEDGMENTS_RE.match(line.trimmed))
@@ -877,12 +971,40 @@ def _build_spans_and_text(
                 )
             )
 
-            if is_metadata_start or is_affiliation_start or is_ack_start:
+            if (
+                is_metadata_start
+                or is_affiliation_start
+                or is_footnote_start
+                or is_ack_start
+            ):
                 in_excluded_block = True
                 is_excluded = True
             elif in_excluded_block:
-                if not line.trimmed or (
-                    has_prose_verb and len(line.trimmed.split()) > 4
+                # Terminate on a blank line, or as soon as the text reads as
+                # ordinary body prose. Sentence *shape* is the general
+                # signal: metadata continuation lines are comma-separated
+                # fragments, while body prose is a capitalized, terminated,
+                # multi-word sentence. Relying only on a small verb
+                # allowlist silently discarded legitimate openers such as
+                # "Our framework derives bilateral migration flows."
+                # Shape-based, not vocabulary-based. The former
+                # verb-allowlist terminator was simultaneously too loose and
+                # too tight: a stray "are"/"is" inside a wrapped
+                # acknowledgments footnote ended the block early (leaking
+                # "We are grateful to ..." into case C's Introduction),
+                # while legitimate openers using an unlisted verb stayed
+                # excluded.
+                # A previous line ending in a comma, semicolon, or a
+                # hyphenation break is explicitly mid-clause, so this line
+                # is still the same wrapped metadata/footnote sentence even
+                # if it happens to start capitalized (e.g. a name list
+                # continuing "... Parag Pathak,\nTobias Salz, and Mike
+                # Whinston ... We thank the coeditor ...").
+                wrapped_from_previous = previous_excluded_trimmed.endswith(
+                    (",", ";", "-")
+                )
+                if not line.trimmed or not (
+                    wrapped_from_previous or _continues_excluded_block(line.trimmed)
                 ):
                     in_excluded_block = False
                     is_excluded = is_rh or is_page_num or is_cover
@@ -892,6 +1014,7 @@ def _build_spans_and_text(
                 is_excluded = is_rh or is_page_num or is_cover
 
             if is_excluded:
+                previous_excluded_trimmed = line.trimmed
                 if current_run:
                     _emit_run_span(
                         current_run, p_num, page_text, spans_list, text_parts
