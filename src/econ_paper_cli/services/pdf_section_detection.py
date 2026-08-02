@@ -7,6 +7,8 @@ from econ_paper_cli.domain.pdf_sections import (
     _WARNING_ORDER,
     PDFHeadingCandidate,
     PDFSection,
+    PDFSectionBoundaryEvidence,
+    PDFSectionBoundaryEvidenceType,
     PDFSectionDetectionMethod,
     PDFSectionDetectionResult,
     PDFSectionKind,
@@ -44,6 +46,14 @@ _EMBEDDED_CROSS_REF_RE = re.compile(
 )
 _PROSE_DEMONSTRATIVE_START_RE = re.compile(
     r"^(?:This|The|These|Those|That|Here|There|Each|Every|All|Some|Many|Most|Several|We|It|A|An|In|Under|For)\b",
+    re.IGNORECASE,
+)
+_PUBLISHER_COVER_SHEET_RE = re.compile(
+    r"(?:This\s+content\s+downloaded\s+from|JSTOR\s+is\s+a\s+not-for-profit|Downloaded\s+from\s+http|NBER\s+Working\s+Paper\s+Series)",
+    re.IGNORECASE,
+)
+_JEL_KEYWORDS_RE = re.compile(
+    r"^\s*(?:JEL\s+Classification|JEL\s+codes?|Keywords?|Key\s+words?)\s*[\:\.]?\s*",
     re.IGNORECASE,
 )
 _LOWERCASE_PROSE_VERBS = {
@@ -190,6 +200,15 @@ def detect_pdf_sections(
         warnings_list,
     )
 
+    intro_ambiguous = any(
+        w.code is PDFSectionWarningCode.AMBIGUOUS_INTRODUCTION_CANDIDATES
+        for w in warnings_list
+    )
+    abstract_ambiguous = any(
+        w.code is PDFSectionWarningCode.AMBIGUOUS_ABSTRACT_CANDIDATES
+        for w in warnings_list
+    )
+
     valid_intro = selected_intro
     if (
         selected_abstract is not None
@@ -197,8 +216,23 @@ def detect_pdf_sections(
         and selected_intro.line_index <= selected_abstract.line_index
     ):
         valid_intro = None
+        warnings_list.append(
+            PDFSectionWarning(
+                PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY,
+                (all_lines[selected_abstract.line_index].page_number,),
+            )
+        )
 
-    # Determine Abstract section boundaries
+    start_line_idx = 0
+    if len(extraction.pages) > 1 and _PUBLISHER_COVER_SHEET_RE.search(
+        all_lines[0].text
+    ):
+        for idx, line in enumerate(all_lines):
+            if line.page_number > 1:
+                start_line_idx = idx
+                break
+
+    # Determine Abstract section boundaries (explicit or implicit)
     if selected_abstract is not None:
         if valid_intro is not None:
             abstract_section = _build_section(
@@ -225,8 +259,54 @@ def detect_pdf_sections(
                     (all_lines[selected_abstract.line_index].page_number,),
                 )
             )
+    elif not abstract_ambiguous:
+        # Implicit Abstract inference (Cases C & F)
+        end_search_idx = (
+            valid_intro.line_index if valid_intro is not None else len(all_lines)
+        )
+        if valid_intro is None:
+            first_sec_cand = _find_next_section_candidate(
+                all_lines,
+                start_index=start_line_idx,
+                running_headers=running_headers,
+                is_implicit_intro=True,
+            )
+            if first_sec_cand is not None:
+                end_search_idx = first_sec_cand.line_index
 
-    # Determine Introduction section boundaries
+        jel_idx = None
+        for idx in range(start_line_idx, end_search_idx):
+            if _JEL_KEYWORDS_RE.match(all_lines[idx].trimmed):
+                jel_idx = idx
+                break
+
+        if jel_idx is not None and jel_idx > start_line_idx + 1:
+            title_ev = PDFSectionBoundaryEvidence(
+                page_number=all_lines[start_line_idx].page_number,
+                start_character_offset=all_lines[start_line_idx].start_offset,
+                end_character_offset=all_lines[start_line_idx].end_offset,
+                evidence_type=PDFSectionBoundaryEvidenceType.TITLE_BLOCK,
+                description="Implicit front-matter inferred from title block and abstract text",
+            )
+            jel_ev = PDFSectionBoundaryEvidence(
+                page_number=all_lines[jel_idx].page_number,
+                start_character_offset=all_lines[jel_idx].start_offset,
+                end_character_offset=all_lines[jel_idx].end_offset,
+                evidence_type=PDFSectionBoundaryEvidenceType.JEL_CLASSIFICATION_TERMINATOR,
+                description="Bounded by JEL classification / Keywords block",
+            )
+            implicit_abs = _build_implicit_section(
+                kind=PDFSectionKind.ABSTRACT,
+                start_line_index=start_line_idx + 1,
+                end_line_index=jel_idx,
+                all_lines=all_lines,
+                extraction=extraction,
+                boundary_evidence=(title_ev, jel_ev),
+            )
+            if implicit_abs is not None:
+                sections_list.append(implicit_abs)
+
+    # Determine Introduction section boundaries (explicit or implicit)
     if valid_intro is not None:
         next_section_candidate = _find_next_section_candidate(
             all_lines,
@@ -258,6 +338,51 @@ def detect_pdf_sections(
                     (all_lines[valid_intro.line_index].page_number,),
                 )
             )
+    elif (
+        selected_intro is None
+        and not intro_ambiguous
+        and not any(
+            w.code is PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY
+            for w in warnings_list
+        )
+    ):
+        # Implicit Introduction inference (Case C)
+        intro_start_idx = start_line_idx + 1
+        if len(sections_list) > 0 and sections_list[-1].kind is PDFSectionKind.ABSTRACT:
+            abs_end_page = sections_list[-1].end_page_number
+            for idx, line in enumerate(all_lines):
+                if (
+                    line.page_number >= abs_end_page
+                    and line.start_offset
+                    >= sections_list[-1].spans[-1].end_character_offset
+                ):
+                    intro_start_idx = idx
+                    break
+
+        next_sec_cand = _find_next_section_candidate(
+            all_lines,
+            start_index=intro_start_idx,
+            running_headers=running_headers,
+            is_implicit_intro=True,
+        )
+        if next_sec_cand is not None and next_sec_cand.line_index > intro_start_idx:
+            first_sec_ev = PDFSectionBoundaryEvidence(
+                page_number=next_sec_cand.line.page_number,
+                start_character_offset=next_sec_cand.line.start_offset,
+                end_character_offset=next_sec_cand.line.end_offset,
+                evidence_type=PDFSectionBoundaryEvidenceType.FIRST_SECTION_HEADING,
+                description=f"Implicit Introduction bounded by first top-level section heading '{next_sec_cand.line.trimmed}'",
+            )
+            implicit_intro = _build_implicit_section(
+                kind=PDFSectionKind.INTRODUCTION,
+                start_line_index=intro_start_idx,
+                end_line_index=next_sec_cand.line_index,
+                all_lines=all_lines,
+                extraction=extraction,
+                boundary_evidence=(first_sec_ev,),
+            )
+            if implicit_intro is not None:
+                sections_list.append(implicit_intro)
 
     # Cross-field required missing warnings
     sec_kinds = {s.kind for s in sections_list}
@@ -615,6 +740,84 @@ def _build_section(
         end_page_number=spans_list[-1].page_number,
         spans=tuple(spans_list),
         text=section_text,
+    )
+
+
+def _build_implicit_section(
+    kind: PDFSectionKind,
+    start_line_index: int,
+    end_line_index: int,
+    all_lines: list[_LineInfo],
+    extraction: PDFExtractionResult,
+    boundary_evidence: tuple[PDFSectionBoundaryEvidence, ...],
+) -> PDFSection | None:
+    if start_line_index >= len(all_lines) or start_line_index >= end_line_index:
+        return None
+
+    lines_slice = all_lines[start_line_index:end_line_index]
+    if not lines_slice:
+        return None
+
+    spans_by_page: dict[int, list[tuple[int, int]]] = {}
+    for line in lines_slice:
+        p_num = line.page_number
+        if p_num not in spans_by_page:
+            spans_by_page[p_num] = []
+        spans_by_page[p_num].append((line.start_offset, line.line_end_offset))
+
+    spans_list: list[PDFSectionSpan] = []
+    text_parts: list[str] = []
+
+    page_map = {page.page_number: page.text for page in extraction.pages}
+
+    for p_num in sorted(spans_by_page.keys()):
+        page_text = page_map[p_num]
+        offsets = spans_by_page[p_num]
+        min_start = offsets[0][0]
+        max_end = offsets[-1][1]
+
+        max_end = min(max_end, len(page_text))
+        if min_start < max_end:
+            slice_text = page_text[min_start:max_end]
+            if slice_text:
+                spans_list.append(
+                    PDFSectionSpan(
+                        page_number=p_num,
+                        start_character_offset=min_start,
+                        end_character_offset=max_end,
+                    )
+                )
+                text_parts.append(slice_text)
+
+    if not spans_list:
+        return None
+
+    section_text = "".join(text_parts)
+    if not section_text.strip():
+        return None
+
+    sorted_evidence = tuple(
+        sorted(
+            set(boundary_evidence),
+            key=lambda e: (
+                e.page_number,
+                e.start_character_offset,
+                e.end_character_offset,
+                e.evidence_type.value,
+                e.description,
+            ),
+        )
+    )
+
+    return PDFSection(
+        kind=kind,
+        detection_method=PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER,
+        observed_heading_text=None,
+        start_page_number=spans_list[0].page_number,
+        end_page_number=spans_list[-1].page_number,
+        spans=tuple(spans_list),
+        text=section_text,
+        boundary_evidence=sorted_evidence,
     )
 
 

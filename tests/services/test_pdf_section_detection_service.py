@@ -9,6 +9,7 @@ from econ_paper_cli.domain import (
     ExtractedPDFPage,
     PDFDocumentMetadata,
     PDFExtractionResult,
+    PDFSectionDetectionMethod,
     PDFSectionKind,
     PDFSectionWarningCode,
 )
@@ -483,3 +484,69 @@ def test_generic_numbered_prose_and_embedded_cross_refs_rejected() -> None:
     assert "2 These findings imply convergence" in intro.text
     assert "2 Results in Table 4 show significant gains" in intro.text
     assert "Real section 2 text" not in intro.text
+
+
+def test_case_c_unheaded_abstract_and_unheaded_introduction_inference() -> None:
+    text = (
+        "Optimal Monetary Policy in Frictionless Credit Markets\n"
+        "Alice Smith and Bob Jones\n"
+        "This paper examines optimal central bank policy when credit markets are frictionless.\n"
+        "We show that inflation targeting maximizes welfare.\n"
+        "JEL Classification: E52, E44\n\n"
+        "Unheaded introduction prose explaining the macroeconomic model setup and literature.\n"
+        "We build upon classic search-theoretic models of money.\n\n"
+        "I. Theoretical Framework\n"
+        "Model specifications and equations follow here.\n"
+    )
+    res = detect_pdf_sections(_extraction(text), settings=DEFAULT_PDF_SECTION_SETTINGS)
+    assert len(res.sections) == 2
+    abs_sec = res.sections[0]
+    intro_sec = res.sections[1]
+
+    assert abs_sec.kind is PDFSectionKind.ABSTRACT
+    assert abs_sec.detection_method is PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER
+    assert abs_sec.observed_heading_text is None
+    assert len(abs_sec.boundary_evidence) >= 1
+
+    assert intro_sec.kind is PDFSectionKind.INTRODUCTION
+    assert intro_sec.detection_method is PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER
+    assert intro_sec.observed_heading_text is None
+    assert len(intro_sec.boundary_evidence) >= 1
+    assert "I. Theoretical Framework" not in intro_sec.text
+
+
+def test_case_f_unheaded_abstract_with_explicit_roman_introduction() -> None:
+    text = (
+        "Dynamic Fiscal Policy in Open Economies\n"
+        "Carol Vance\n"
+        "We analyze capital taxation when international asset markets are incomplete.\n"
+        "JEL Classification: F38, H21\n\n"
+        "I. Introduction\n"
+        "Fiscal policy choice is a primary determinant of sovereign spread dynamics.\n\n"
+        "II. Model Setup\n"
+        "Consider a small open economy.\n"
+    )
+    res = detect_pdf_sections(_extraction(text), settings=DEFAULT_PDF_SECTION_SETTINGS)
+    assert len(res.sections) == 2
+    abs_sec = res.sections[0]
+    intro_sec = res.sections[1]
+
+    assert abs_sec.kind is PDFSectionKind.ABSTRACT
+    assert abs_sec.detection_method is PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER
+    assert abs_sec.observed_heading_text is None
+
+    assert intro_sec.kind is PDFSectionKind.INTRODUCTION
+    assert intro_sec.detection_method is PDFSectionDetectionMethod.EXPLICIT_HEADING
+    assert intro_sec.observed_heading_text == "I. Introduction"
+    assert "II. Model Setup" not in intro_sec.text
+
+
+def test_case_e_publisher_cover_sheet_rejection() -> None:
+    p1 = "This content downloaded from 192.168.1.1 on Sun, 02 Aug 2026. JSTOR is a not-for-profit service.\n"
+    p2 = "Abstract\nAbstract text on page 2.\n\n1. Introduction\nIntro text on page 2.\n\n2. Data\nData text.\n"
+    res = detect_pdf_sections(
+        _extraction(p1, p2), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+    assert len(res.sections) == 2
+    assert res.sections[0].start_page_number == 2
+    assert res.sections[1].start_page_number == 2
