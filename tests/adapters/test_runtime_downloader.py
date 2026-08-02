@@ -17,6 +17,7 @@ from econ_paper_cli.protocols.runtime_provisioning import (
     DownloadTruncatedError,
     InsecureURLError,
     TooManyRedirectsError,
+    UntrustedRedirectHostError,
 )
 
 
@@ -129,6 +130,40 @@ def test_network_failure_on_open_raises_and_writes_nothing(tmp_path: Path) -> No
     assert not destination.exists()
 
 
+def test_incomplete_read_http_exception_wrapped_and_cleans_up(tmp_path: Path) -> None:
+    """http.client.HTTPException subtypes (e.g. IncompleteRead) are not
+    OSError subclasses and must be explicitly wrapped, not left to escape
+    the typed download boundary raw."""
+    import http.client
+
+    response = _FakeResponse(
+        [b"a" * 40],
+        raise_on_read=http.client.IncompleteRead(b"a" * 40, expected=60),
+    )
+    destination = tmp_path / "artifact.bin"
+
+    with pytest.raises(DownloadNetworkError):
+        _downloader(_FakeOpener(response)).download(
+            "https://example.com/artifact.bin", destination, expected_size_bytes=100
+        )
+
+    assert not destination.exists()
+
+
+def test_http_exception_on_open_wrapped_and_writes_nothing(tmp_path: Path) -> None:
+    import http.client
+
+    opener = _FakeOpener(open_error=http.client.BadStatusLine("garbage"))
+    destination = tmp_path / "artifact.bin"
+
+    with pytest.raises(DownloadNetworkError):
+        _downloader(opener).download(
+            "https://example.com/artifact.bin", destination, expected_size_bytes=100
+        )
+
+    assert not destination.exists()
+
+
 def test_timeout_during_read_raises_and_cleans_up(tmp_path: Path) -> None:
     response = _FakeResponse([b"a" * 40], raise_on_read=TimeoutError("timed out"))
     destination = tmp_path / "artifact.bin"
@@ -144,10 +179,24 @@ def test_timeout_during_read_raises_and_cleans_up(tmp_path: Path) -> None:
 def test_redirect_to_non_https_target_is_rejected() -> None:
     from econ_paper_cli.adapters.runtime_downloader import _BoundedHTTPSRedirectHandler
 
-    handler = _BoundedHTTPSRedirectHandler(max_redirects=3)
+    handler = _BoundedHTTPSRedirectHandler(
+        max_redirects=3, trusted_hosts=frozenset({"example.com"})
+    )
     with pytest.raises(InsecureURLError):
         handler.redirect_request(
             None, None, 302, "Found", {}, "http://example.com/evil"
+        )
+
+
+def test_redirect_to_untrusted_host_is_rejected() -> None:
+    from econ_paper_cli.adapters.runtime_downloader import _BoundedHTTPSRedirectHandler
+
+    handler = _BoundedHTTPSRedirectHandler(
+        max_redirects=3, trusted_hosts=frozenset({"github.com"})
+    )
+    with pytest.raises(UntrustedRedirectHostError):
+        handler.redirect_request(
+            None, None, 302, "Found", {}, "https://evil.example.com/payload"
         )
 
 
@@ -156,7 +205,9 @@ def test_too_many_redirects_is_rejected() -> None:
 
     from econ_paper_cli.adapters.runtime_downloader import _BoundedHTTPSRedirectHandler
 
-    handler = _BoundedHTTPSRedirectHandler(max_redirects=2)
+    handler = _BoundedHTTPSRedirectHandler(
+        max_redirects=2, trusted_hosts=frozenset({"example.com"})
+    )
     with patch(
         "urllib.request.HTTPRedirectHandler.redirect_request",
         return_value=None,
@@ -167,3 +218,23 @@ def test_too_many_redirects_is_rejected() -> None:
             handler.redirect_request(
                 None, None, 302, "Found", {}, "https://example.com/3"
             )
+
+
+def test_default_downloader_rejects_redirect_to_untrusted_host() -> None:
+    """End-to-end (real default opener_factory, no injected fake), proving
+    the trusted-host default policy actually applies when a caller doesn't
+    override opener_factory at all."""
+    from econ_paper_cli.adapters.runtime_downloader import (
+        DEFAULT_TRUSTED_REDIRECT_HOSTS,
+        _BoundedHTTPSRedirectHandler,
+        _default_opener_factory,
+    )
+
+    opener = _default_opener_factory(3, DEFAULT_TRUSTED_REDIRECT_HOSTS)
+    handler = next(
+        h for h in opener.handlers if isinstance(h, _BoundedHTTPSRedirectHandler)
+    )
+    with pytest.raises(UntrustedRedirectHostError):
+        handler.redirect_request(
+            None, None, 302, "Found", {}, "https://not-github.example.com/evil"
+        )

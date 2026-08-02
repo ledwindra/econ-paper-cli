@@ -90,7 +90,11 @@ only on success — durably and atomically persists that configuration to a
 canonical per-user configuration file. Runtime, model, and database paths are
 canonicalized to absolute paths before they become durable, so a relative
 path validated in one working directory resolves the same way from any later
-directory. It writes nothing on validation or readiness failure.
+directory. On validation or readiness failure, the prior durable configuration
+is left unreplaced — though when managed runtime provisioning was involved, a
+verified managed runtime install may still remain on disk for reuse by a later
+`setup` attempt, since that install is validated independently of whether the
+overall command ultimately succeeds.
 
 `--llama-cpp-path` is optional (issue #58): a fresh user can run `econpapers
 setup --model-path ... --model-id ... --model-bytes ... --model-checksum

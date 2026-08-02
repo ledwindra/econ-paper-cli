@@ -19,6 +19,7 @@ VALID_SHA256 = "a" * 64
 
 
 def _artifact(**overrides: object) -> ManagedRuntimeArtifact:
+    exe_path = PurePosixPath("bin/llama-completion")
     base: dict[str, object] = {
         "runtime_id": "llama.cpp-b10199",
         "version_marker": "10199",
@@ -28,7 +29,8 @@ def _artifact(**overrides: object) -> ManagedRuntimeArtifact:
         "archive_format": ArchiveFormat.TAR_GZ,
         "archive_size_bytes": 1024,
         "archive_sha256": VALID_SHA256,
-        "executable_relative_path": PurePosixPath("bin/llama-completion"),
+        "executable_relative_path": exe_path,
+        "bundle_member_checksums": ((exe_path, VALID_SHA256),),
         "license_name": "MIT",
         "attribution_text": "Some attribution.",
     }
@@ -67,6 +69,32 @@ def test_valid_artifact_constructs() -> None:
 def test_invalid_field_rejected(field: str, value: object) -> None:
     with pytest.raises(ManagedRuntimeManifestError):
         _artifact(**{field: value})
+
+
+def test_bundle_member_checksums_must_include_executable() -> None:
+    with pytest.raises(ManagedRuntimeManifestError):
+        _artifact(
+            executable_relative_path=PurePosixPath("bin/other"),
+            bundle_member_checksums=(
+                (PurePosixPath("bin/llama-completion"), VALID_SHA256),
+            ),
+        )
+
+
+def test_bundle_member_checksums_must_be_nonempty() -> None:
+    with pytest.raises(ManagedRuntimeManifestError):
+        _artifact(bundle_member_checksums=())
+
+
+def test_bundle_member_checksums_rejects_duplicate_paths() -> None:
+    exe_path = PurePosixPath("bin/llama-completion")
+    with pytest.raises(ManagedRuntimeManifestError):
+        _artifact(
+            bundle_member_checksums=(
+                (exe_path, VALID_SHA256),
+                (exe_path, "b" * 64),
+            )
+        )
 
 
 def test_manifest_requires_schema_version_one() -> None:

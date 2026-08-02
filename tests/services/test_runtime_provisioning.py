@@ -58,7 +58,21 @@ def _build_archive(
     return archive_bytes, hashlib.sha256(archive_bytes).hexdigest(), len(archive_bytes)
 
 
-def _artifact(archive_sha256: str, archive_size: int) -> ManagedRuntimeArtifact:
+# Real SHA-256 of _build_archive()'s default member contents (b"#!/bin/sh\n
+# echo ok\n" and b"shared library bytes"), so the manifest's static
+# bundle_member_checksums actually matches what gets extracted.
+_DEFAULT_TOOL_SHA256 = (
+    "b4d644d4279594903f1a9911956432d9473041f2984fc6014c14d7402c7d126c"
+)
+_DEFAULT_LIB_SHA256 = "5e294e8ac9eb5ee282721eaedfe4933f791c7982e4b0ea1ad487c9de283ca5a9"
+
+
+def _artifact(
+    archive_sha256: str,
+    archive_size: int,
+    *,
+    bundle_member_checksums: tuple[tuple[PurePosixPath, str], ...] | None = None,
+) -> ManagedRuntimeArtifact:
     return ManagedRuntimeArtifact(
         runtime_id="llama.cpp-test",
         version_marker="999",
@@ -69,6 +83,11 @@ def _artifact(archive_sha256: str, archive_size: int) -> ManagedRuntimeArtifact:
         archive_size_bytes=archive_size,
         archive_sha256=archive_sha256,
         executable_relative_path=PurePosixPath("pkg/tool"),
+        bundle_member_checksums=bundle_member_checksums
+        or (
+            (PurePosixPath("pkg/tool"), _DEFAULT_TOOL_SHA256),
+            (PurePosixPath("pkg/lib.so"), _DEFAULT_LIB_SHA256),
+        ),
         license_name="MIT",
         attribution_text="test",
     )
@@ -403,6 +422,7 @@ def test_reuse_check_rejects_receipt_that_mismatches_current_manifest(
         archive_size_bytes=changed_artifact.archive_size_bytes,
         archive_sha256=changed_artifact.archive_sha256,
         executable_relative_path=changed_artifact.executable_relative_path,
+        bundle_member_checksums=changed_artifact.bundle_member_checksums,
         license_name=changed_artifact.license_name,
         attribution_text=changed_artifact.attribution_text,
     )

@@ -10,7 +10,7 @@ from pathlib import Path
 from econ_paper_cli.adapters.storage_paths import get_default_config_path
 from econ_paper_cli.domain.errors import LocalConfigValidationError
 from econ_paper_cli.domain.local_config import (
-    LOCAL_CONFIG_SCHEMA_VERSION,
+    READABLE_LOCAL_CONFIG_SCHEMA_VERSIONS,
     LocalRuntimeModelConfig,
 )
 from econ_paper_cli.protocols.config import (
@@ -71,12 +71,12 @@ class JSONConfigStorage:
             schema_version = data.get("schema_version")
             if (
                 schema_version is not None
-                and schema_version != LOCAL_CONFIG_SCHEMA_VERSION
+                and schema_version not in READABLE_LOCAL_CONFIG_SCHEMA_VERSIONS
             ):
                 raise ConfigIncompatibleSchemaError(
                     f"Configuration file '{self._config_path}' has schema_version "
-                    f"{schema_version!r}, which is not supported; expected "
-                    f"{LOCAL_CONFIG_SCHEMA_VERSION}."
+                    f"{schema_version!r}, which is not supported; expected one of "
+                    f"{sorted(READABLE_LOCAL_CONFIG_SCHEMA_VERSIONS)}."
                 )
 
         try:

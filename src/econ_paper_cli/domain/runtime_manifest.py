@@ -48,8 +48,11 @@ class ManagedRuntimeArtifact:
 
     ``archive_sha256`` is the integrity anchor for the download step: the
     whole archive is verified against it before any extraction is attempted.
-    Per-file integrity of the *installed* bundle is a separate, install-time
-    concern captured in ``domain.runtime_receipt.InstallReceipt``.
+    ``bundle_member_checksums`` anchors per-file integrity of the
+    *installed* bundle in this version-controlled manifest itself, not only
+    in the mutable ``receipt.json`` an install writes — a modified
+    executable/library plus a correspondingly rewritten receipt must still
+    fail verification against this static declaration.
     """
 
     runtime_id: str
@@ -61,6 +64,7 @@ class ManagedRuntimeArtifact:
     archive_size_bytes: int
     archive_sha256: str
     executable_relative_path: PurePosixPath
+    bundle_member_checksums: tuple[tuple[PurePosixPath, str], ...]
     license_name: str
     attribution_text: str
 
@@ -76,6 +80,13 @@ class ManagedRuntimeArtifact:
         _validate_relative_archive_member(
             "executable_relative_path", self.executable_relative_path
         )
+        _validate_bundle_member_checksums(self.bundle_member_checksums)
+        member_paths = {path for path, _ in self.bundle_member_checksums}
+        if self.executable_relative_path not in member_paths:
+            raise ManagedRuntimeManifestError(
+                "bundle_member_checksums must include an entry for "
+                "executable_relative_path."
+            )
         _validate_nonempty_text("license_name", self.license_name)
         _validate_nonempty_text("attribution_text", self.attribution_text)
 
@@ -149,10 +160,10 @@ def _validate_positive_int(field: str, value: object) -> None:
         raise ManagedRuntimeManifestError(f"{field} must be a positive integer.")
 
 
-def _validate_sha256(value: object) -> None:
+def _validate_sha256(value: object, field: str = "archive_sha256") -> None:
     if not isinstance(value, str) or _SHA256_PATTERN.fullmatch(value) is None:
         raise ManagedRuntimeManifestError(
-            "archive_sha256 must contain exactly 64 lowercase hexadecimal characters."
+            f"{field} must contain exactly 64 lowercase hexadecimal characters."
         )
 
 
@@ -170,3 +181,25 @@ def _validate_relative_archive_member(field: str, value: object) -> None:
             f"{field} must be a nonempty relative archive member path "
             "without parent traversal or an absolute prefix."
         )
+
+
+def _validate_bundle_member_checksums(value: object) -> None:
+    if not isinstance(value, tuple) or not value:
+        raise ManagedRuntimeManifestError(
+            "bundle_member_checksums must be a nonempty tuple of (path, sha256) pairs."
+        )
+    seen_paths: set[PurePosixPath] = set()
+    for entry in value:
+        if not isinstance(entry, tuple) or len(entry) != 2:
+            raise ManagedRuntimeManifestError(
+                "Each bundle_member_checksums entry must be a (path, sha256) pair."
+            )
+        path, sha256 = entry
+        _validate_relative_archive_member("bundle_member_checksums path", path)
+        _validate_sha256(sha256, "bundle_member_checksums sha256")
+        if path in seen_paths:
+            raise ManagedRuntimeManifestError(
+                f"bundle_member_checksums contains a duplicate path: "
+                f"'{path.as_posix()}'."
+            )
+        seen_paths.add(path)

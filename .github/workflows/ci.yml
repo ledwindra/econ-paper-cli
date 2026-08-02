@@ -21,12 +21,16 @@ jobs:
           - macos-latest
           - windows-latest
         python-version:
-          # Pinned to an exact patch satisfying pyproject.toml's >=3.10.12
-          # floor (safe tarfile extraction, PEP 706 filter="data", used by
-          # managed runtime provisioning, issue #58) — the bare "3.10" minor
-          # spec resolves to whatever actions/setup-python has cached, which
-          # on some runners is still 3.10.11.
-          - "3.10.12"
+          # Minor-version spec + check-latest (below) resolves to the
+          # actual latest available 3.10.x release for each runner image,
+          # rather than trusting a possibly-stale pre-installed cache
+          # entry — this comfortably satisfies pyproject.toml's
+          # >=3.10.12 floor (safe tarfile extraction, PEP 706
+          # filter="data", used by managed runtime provisioning, issue
+          # #58) without hardcoding one exact patch that may not be
+          # published for every OS. The floor itself is pinned and
+          # explicitly tested by the separate `floor-check` job below.
+          - "3.10"
           - "3.14"
 
     steps:
@@ -37,6 +41,7 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
+          check-latest: true
 
       - name: Install project and development tools
         run: python -m pip install -e ".[dev]"
@@ -49,6 +54,27 @@ jobs:
 
       - name: Check formatting
         run: ruff format --check .
+
+      - name: Test
+        run: pytest
+
+  floor-check:
+    name: ubuntu-latest / Python 3.10.12 (exact floor)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10.12"
+
+      - name: Install project and development tools
+        run: python -m pip install -e ".[dev]"
+
+      - name: Verify installed CLI
+        run: econpapers --help
 
       - name: Test
         run: pytest

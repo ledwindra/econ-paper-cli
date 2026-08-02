@@ -21,6 +21,15 @@ class InsecureURLError(DownloadError):
     """Raised when a URL (initial or redirect target) is not HTTPS."""
 
 
+class UntrustedRedirectHostError(DownloadError):
+    """Raised when a redirect target's host is not on the trusted allowlist.
+
+    Official GitHub release assets redirect to GitHub-owned asset hosts
+    (e.g. ``objects.githubusercontent.com``); an HTTPS redirect to anywhere
+    else is refused rather than silently followed.
+    """
+
+
 class TooManyRedirectsError(DownloadError):
     """Raised when a download follows more redirects than permitted."""
 

@@ -450,6 +450,7 @@ def test_real_provisioning_checksum_mismatch_is_typed_failure_and_preserves_conf
         archive_size_bytes=len(archive_bytes),
         archive_sha256="0" * 64,  # deliberately wrong
         executable_relative_path=PurePosixPath("pkg/tool"),
+        bundle_member_checksums=((PurePosixPath("pkg/tool"), "1" * 64),),
         license_name="MIT",
         attribution_text="test",
     )

@@ -77,6 +77,10 @@ class SafeArchiveExtractor:
             raise ExtractionError(
                 f"Failed to extract tar archive '{archive_path}': {error}."
             ) from error
+        except OSError as error:
+            raise ExtractionError(
+                f"Filesystem error extracting tar archive '{archive_path}': {error}."
+            ) from error
 
     def _extract_zip(self, archive_path: Path, destination_dir: Path) -> None:
         try:
@@ -95,6 +99,10 @@ class SafeArchiveExtractor:
         except zipfile.BadZipFile as error:
             raise ExtractionError(
                 f"Failed to extract zip archive '{archive_path}': {error}."
+            ) from error
+        except OSError as error:
+            raise ExtractionError(
+                f"Filesystem error extracting zip archive '{archive_path}': {error}."
             ) from error
 
 

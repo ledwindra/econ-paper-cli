@@ -379,6 +379,7 @@ def _patch_manifest_to_match_receipt(
         archive_size_bytes=receipt.archive_size_bytes,
         archive_sha256=receipt.archive_sha256,
         executable_relative_path=receipt.executable_relative_path,
+        bundle_member_checksums=receipt.member_checksums,
         license_name="MIT",
         attribution_text="test",
     )
@@ -442,7 +443,10 @@ def test_status_classifies_corrupt_managed_receipt_distinctly_from_model(
         model_readiness_checker=_ok_model_checker,
     )
 
-    assert report.runtime_origin is RuntimeOrigin.MANAGED
+    # Origin is UNKNOWN (not MANAGED) until provenance actually validates —
+    # a directory sitting under the managed runtime root with a corrupt
+    # receipt has not earned the "managed" classification.
+    assert report.runtime_origin is RuntimeOrigin.UNKNOWN
     assert report.runtime_state is RuntimeState.CORRUPT_OR_MISMATCHED
     # The model check ran independently and was unaffected by the corrupt
     # runtime receipt.
@@ -478,6 +482,7 @@ def test_status_classifies_managed_runtime_as_corrupt_when_receipt_mismatches_ma
         archive_size_bytes=receipt.archive_size_bytes,
         archive_sha256="f" * 64,  # deliberately different from the receipt
         executable_relative_path=receipt.executable_relative_path,
+        bundle_member_checksums=receipt.member_checksums,
         license_name="MIT",
         attribution_text="test",
     )
@@ -509,7 +514,7 @@ def test_status_classifies_managed_runtime_as_corrupt_when_receipt_mismatches_ma
         model_readiness_checker=_ok_model_checker,
     )
 
-    assert report.runtime_origin is RuntimeOrigin.MANAGED
+    assert report.runtime_origin is RuntimeOrigin.UNKNOWN
     assert report.runtime_state is RuntimeState.CORRUPT_OR_MISMATCHED
 
 
@@ -537,4 +542,108 @@ def test_status_reports_unsupported_platform_when_no_config_and_unsupported(
 
     assert report.runtime_origin is RuntimeOrigin.UNKNOWN
     assert report.runtime_state is RuntimeState.UNSUPPORTED_PLATFORM
+
+
+def test_status_reports_unsupported_platform_when_no_config_and_recognized_but_unpinned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #58 review: a *recognized* platform/architecture combination
+    with no manifest entry (e.g. Linux arm64) must still report
+    unsupported_platform, not not_checked — DetectedPlatform.is_supported
+    alone is not the same as "the manifest actually has an artifact"."""
+    import econ_paper_cli.services.status_command as status_module
+    from econ_paper_cli.services.platform_detection import DetectedPlatform
+
+    config_backend = JSONConfigStorage(tmp_path / "missing-config.json")
+    storage = SQLiteStorage(str(tmp_path / "missing.db"), read_only=True)
+
+    def fake_detect() -> DetectedPlatform:
+        return DetectedPlatform(
+            platform=SupportedPlatform.LINUX,
+            architecture=SupportedArchitecture.ARM64,
+            raw_system="Linux",
+            raw_machine="aarch64",
+        )
+
+    monkeypatch.setattr(status_module, "detect_current_platform", fake_detect)
+    report = execute_status_command(
+        StatusCommandOptions(), config_backend=config_backend, storage=storage
+    )
+
+    assert report.runtime_origin is RuntimeOrigin.UNKNOWN
+    assert report.runtime_state is RuntimeState.UNSUPPORTED_PLATFORM
+
+
+def test_status_reports_unsupported_platform_for_managed_root_on_unpinned_combination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A configured executable that sits under the managed runtime root on
+    a recognized-but-unpinned platform/architecture must not be silently
+    verified without a manifest artifact to check it against."""
+    import econ_paper_cli.services.status_command as status_module
+    from econ_paper_cli.services.platform_detection import DetectedPlatform
+
+    runtime_dir = tmp_path / "runtime"
+    monkeypatch.setenv("ECONPAPERS_RUNTIME_DIR", str(runtime_dir))
+    executable_path, _receipt = _install_managed_runtime(tmp_path, runtime_dir)
+
+    monkeypatch.setattr(
+        status_module,
+        "detect_current_platform",
+        lambda: DetectedPlatform(
+            platform=SupportedPlatform.LINUX,
+            architecture=SupportedArchitecture.ARM64,
+            raw_system="Linux",
+            raw_machine="aarch64",
+        ),
+    )
+
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(_config(executable_path=executable_path))
+    storage = SQLiteStorage(str(tmp_path / "missing.db"), read_only=True)
+
+    report = execute_status_command(
+        StatusCommandOptions(),
+        config_backend=config_backend,
+        storage=storage,
+        runtime_readiness_checker=_ok_runtime_checker,
+        model_readiness_checker=_ok_model_checker,
+    )
+
+    assert report.runtime_origin is RuntimeOrigin.UNKNOWN
+    assert report.runtime_state is RuntimeState.UNSUPPORTED_PLATFORM
+
+
+def test_status_reports_corrupt_when_configured_identity_disagrees_with_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #58 review: status must compare LocalRuntimeModelConfig's own
+    persisted runtime_id/runtime_version_marker against the validated
+    receipt — a tampered config claiming a different identity than what is
+    actually installed must not be reported verified."""
+    runtime_dir = tmp_path / "runtime"
+    monkeypatch.setenv("ECONPAPERS_RUNTIME_DIR", str(runtime_dir))
+    executable_path, receipt = _install_managed_runtime(tmp_path, runtime_dir)
+    _patch_manifest_to_match_receipt(monkeypatch, receipt)
+
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(
+        _config(
+            executable_path=executable_path,
+            runtime_id="llama.cpp-b99999",
+            runtime_version_marker="99999",
+        )
+    )
+    storage = SQLiteStorage(str(tmp_path / "missing.db"), read_only=True)
+
+    report = execute_status_command(
+        StatusCommandOptions(),
+        config_backend=config_backend,
+        storage=storage,
+        runtime_readiness_checker=_ok_runtime_checker,
+        model_readiness_checker=_ok_model_checker,
+    )
+
+    assert report.runtime_origin is RuntimeOrigin.UNKNOWN
+    assert report.runtime_state is RuntimeState.CORRUPT_OR_MISMATCHED
     assert report.runtime_error is not None

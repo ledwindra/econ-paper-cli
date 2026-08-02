@@ -50,6 +50,7 @@ from econ_paper_cli.protocols.runtime_provisioning import (
     TooManyRedirectsError,
     UnsafeArchiveMemberError,
     UnsupportedArchiveFormatError,
+    UntrustedRedirectHostError,
 )
 from econ_paper_cli.protocols.storage import (
     ChecksumConflictError,
@@ -110,6 +111,7 @@ __all__ = [
     "TooManyRedirectsError",
     "UnsafeArchiveMemberError",
     "UnsupportedArchiveFormatError",
+    "UntrustedRedirectHostError",
     "validate_generation_response",
     "validate_retrieval_results",
 ]

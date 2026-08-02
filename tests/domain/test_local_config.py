@@ -46,7 +46,7 @@ def test_to_mapping_round_trips_through_from_mapping() -> None:
     )
     mapping = config.to_mapping()
     assert mapping == {
-        "schema_version": 1,
+        "schema_version": 2,
         "executable_path": str(config.executable_path),
         "model_path": str(config.model_path),
         "model_id": config.model_id,
@@ -81,7 +81,7 @@ def test_from_mapping_rejects_missing_required_fields() -> None:
         LocalRuntimeModelConfig.from_mapping(mapping)
 
 
-@pytest.mark.parametrize("schema_version", [0, 2, "1", 1.0, True])
+@pytest.mark.parametrize("schema_version", [0, 3, "1", 1.0, True])
 def test_rejects_invalid_schema_version(schema_version: object) -> None:
     with pytest.raises(LocalConfigValidationError):
         LocalRuntimeModelConfig(**_valid_kwargs(schema_version=schema_version))

@@ -9,7 +9,20 @@ from pathlib import Path
 
 from econ_paper_cli.domain.errors import LocalConfigValidationError
 
-LOCAL_CONFIG_SCHEMA_VERSION = 1
+LOCAL_CONFIG_SCHEMA_VERSION = 2
+"""Current schema version written by this build.
+
+Bumped from 1 to 2 when ``runtime_id``/``runtime_version_marker`` were
+added: those two fields are new *serialized* content, so a config written
+by this build must not claim to be schema version 1 (an older,
+stricter-schema reader would reject it with a confusing "unknown field"
+error instead of a clear "incompatible schema version" one). Version 1
+files remain fully readable — see ``READABLE_LOCAL_CONFIG_SCHEMA_VERSIONS`` — and are
+transparently upgraded to version 2 the next time ``econpapers setup``
+writes a new config.
+"""
+
+READABLE_LOCAL_CONFIG_SCHEMA_VERSIONS = frozenset({1, 2})
 
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 _MODEL_ID_PATTERN = re.compile(r"[a-z0-9]+(?:[._-][a-z0-9]+)*")
@@ -82,11 +95,12 @@ class LocalRuntimeModelConfig:
         if (
             isinstance(self.schema_version, bool)
             or not isinstance(self.schema_version, int)
-            or self.schema_version != LOCAL_CONFIG_SCHEMA_VERSION
+            or self.schema_version not in READABLE_LOCAL_CONFIG_SCHEMA_VERSIONS
         ):
             raise LocalConfigValidationError(
                 f"Unsupported local configuration schema_version "
-                f"{self.schema_version!r}; expected {LOCAL_CONFIG_SCHEMA_VERSION}."
+                f"{self.schema_version!r}; expected one of "
+                f"{sorted(READABLE_LOCAL_CONFIG_SCHEMA_VERSIONS)}."
             )
 
         object.__setattr__(

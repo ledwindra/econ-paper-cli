@@ -73,6 +73,13 @@ class CorruptManagedInstallError(RuntimeProvisioningError):
     """Raised when an existing managed install's receipt or bundle is invalid."""
 
 
+class RuntimeInstallIOError(RuntimeProvisioningError):
+    """Raised when a routine filesystem operation during install/promotion
+    fails (directory creation, receipt write, promotion, or eviction of a
+    corrupt install) — mapped from a raw ``OSError`` so it never escapes the
+    typed setup boundary as an unhandled exception."""
+
+
 ExecutableReadinessChecker = Callable[[Path, str], None]
 
 
@@ -131,17 +138,25 @@ def ensure_managed_runtime(
             f"architecture={detected_architecture.value}."
         )
 
-    final_install_dir = runtime_dir / _content_addressed_dir_name(artifact)
+    final_install_dir = runtime_dir / content_addressed_install_dir_name(artifact)
 
     if final_install_dir.exists():
-        try:
-            receipt = verify_managed_install(
-                final_install_dir, expected_artifact=artifact
-            )
-        except CorruptManagedInstallError:
-            shutil.rmtree(final_install_dir, ignore_errors=True)
-        else:
+        receipt = _reuse_if_functional(final_install_dir, artifact, checker)
+        if receipt is not None:
             return _install_result(final_install_dir, receipt)
+        if not allow_download:
+            raise OfflineProvisioningError(
+                "An installed managed runtime exists but failed integrity or "
+                "readiness verification, and downloads are disabled. Run setup "
+                "with network access, or supply an explicit executable path."
+            )
+        try:
+            shutil.rmtree(final_install_dir)
+        except OSError as error:
+            raise RuntimeInstallIOError(
+                f"Failed to remove the corrupt install at '{final_install_dir}': "
+                f"{error}."
+            ) from error
 
     if not allow_download:
         raise OfflineProvisioningError(
@@ -149,14 +164,26 @@ def ensure_managed_runtime(
             "Run setup with network access, or supply an explicit executable path."
         )
 
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(
-        prefix=".staging-", dir=str(runtime_dir)
-    ) as staging:
+    try:
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        staging_context = tempfile.TemporaryDirectory(
+            prefix=".staging-", dir=str(runtime_dir)
+        )
+    except OSError as error:
+        raise RuntimeInstallIOError(
+            f"Failed to prepare the runtime directory '{runtime_dir}': {error}."
+        ) from error
+
+    with staging_context as staging:
         staging_dir = Path(staging)
         archive_path = staging_dir / f"archive.{artifact.archive_format.value}"
         staged_extract_dir = staging_dir / "extracted"
-        staged_extract_dir.mkdir()
+        try:
+            staged_extract_dir.mkdir()
+        except OSError as error:
+            raise RuntimeInstallIOError(
+                f"Failed to create staging directory '{staged_extract_dir}': {error}."
+            ) from error
 
         downloader.download(
             artifact.source_url,
@@ -184,18 +211,17 @@ def ensure_managed_runtime(
         _ensure_staged_executable_bit(staged_executable)
 
         try:
-            member_checksums = _compute_bundle_member_checksums(staged_extract_dir)
+            _verify_staged_bundle_against_manifest(staged_extract_dir, artifact)
         except VerificationError as error:
             raise StagedRuntimeVerificationError(
                 f"Failed to inspect a staged bundle member: {error}."
             ) from error
-        member_checksum_map = dict(member_checksums)
-        executable_sha256 = member_checksum_map[
-            PurePosixPath(artifact.executable_relative_path)
-        ]
 
         checker(staged_executable, artifact.version_marker)
 
+        executable_sha256 = dict(artifact.bundle_member_checksums)[
+            artifact.executable_relative_path
+        ]
         receipt = InstallReceipt(
             schema_version=1,
             runtime_id=artifact.runtime_id,
@@ -207,23 +233,57 @@ def ensure_managed_runtime(
             archive_sha256=artifact.archive_sha256,
             executable_relative_path=artifact.executable_relative_path,
             executable_sha256=executable_sha256,
-            member_checksums=member_checksums,
+            member_checksums=artifact.bundle_member_checksums,
         )
         _write_receipt(staged_extract_dir, receipt)
 
         try:
             os.replace(staged_extract_dir, final_install_dir)
-        except OSError:
+        except OSError as error:
             if not final_install_dir.exists():
-                raise
+                raise RuntimeInstallIOError(
+                    f"Failed to promote the staged install to "
+                    f"'{final_install_dir}': {error}."
+                ) from error
             # Lost a promotion race to a concurrent installer targeting the
             # same content-addressed path; its result is byte-identical by
-            # construction, so adopt it instead of failing.
-            receipt = verify_managed_install(
-                final_install_dir, expected_artifact=artifact
-            )
+            # construction, so adopt it instead of failing — but only if it
+            # actually passes the same integrity + functional checks this
+            # install just passed.
+            adopted = _reuse_if_functional(final_install_dir, artifact, checker)
+            if adopted is None:
+                raise RuntimeInstallIOError(
+                    f"Failed to promote the staged install to "
+                    f"'{final_install_dir}', and the existing directory there "
+                    f"is not a usable managed install: {error}."
+                ) from error
+            receipt = adopted
 
     return _install_result(final_install_dir, receipt)
+
+
+def _reuse_if_functional(
+    install_dir: Path,
+    artifact: ManagedRuntimeArtifact,
+    checker: ExecutableReadinessChecker,
+) -> InstallReceipt | None:
+    """Return a receipt only if the install both integrity-verifies against
+    the pinned artifact and functionally passes the readiness checker.
+
+    Reuse requires both: a checksum-valid install whose executable bit was
+    stripped (or that otherwise fails to actually run) must not be reused
+    silently — the caller re-provisions or reports a typed offline failure.
+    """
+    try:
+        receipt = verify_managed_install(install_dir, expected_artifact=artifact)
+    except CorruptManagedInstallError:
+        return None
+    executable_path = install_dir / receipt.executable_relative_path
+    try:
+        checker(executable_path, receipt.version_marker)
+    except Exception:
+        return None
+    return receipt
 
 
 def verify_managed_install(
@@ -266,6 +326,13 @@ def verify_managed_install(
 
     if expected_artifact is not None:
         _verify_receipt_matches_artifact(receipt, expected_artifact, install_dir)
+        expected_dir_name = content_addressed_install_dir_name(expected_artifact)
+        if install_dir.name != expected_dir_name:
+            raise CorruptManagedInstallError(
+                f"Install directory '{install_dir}' does not have the expected "
+                f"content-addressed name '{expected_dir_name}' for the pinned "
+                "manifest artifact."
+            )
 
     declared_paths: set[PurePosixPath] = set()
     for relative_path, expected_sha256 in receipt.member_checksums:
@@ -284,10 +351,14 @@ def verify_managed_install(
                 "failed checksum verification."
             )
 
+    # Every non-directory entry — including symlinks and other special
+    # files a legitimate install never produces — must be declared. Only
+    # excluding symlinks here would let one hide from bundle-integrity
+    # checks entirely.
     actual_paths = {
         PurePosixPath(path.relative_to(install_dir).as_posix())
         for path in install_dir.rglob("*")
-        if path.is_file() and not path.is_symlink()
+        if not (path.is_dir() and not path.is_symlink())
     } - {PurePosixPath(_RECEIPT_FILENAME)}
     undeclared = actual_paths - declared_paths
     if undeclared:
@@ -384,30 +455,66 @@ def _install_result(
     )
 
 
-def _content_addressed_dir_name(artifact: ManagedRuntimeArtifact) -> str:
+def content_addressed_install_dir_name(artifact: ManagedRuntimeArtifact) -> str:
+    """Return the canonical install-directory name for one pinned artifact.
+
+    Public so ``status`` can validate that a managed install's directory
+    name actually matches what the current manifest would install, not only
+    that its receipt is internally self-consistent.
+    """
     return f"{artifact.runtime_id}-{artifact.archive_sha256[:16]}"
 
 
-def _compute_bundle_member_checksums(
-    root: Path,
-) -> tuple[tuple[PurePosixPath, str], ...]:
-    """Hash every regular file under ``root``, keyed by its posix-relative path."""
-    entries: list[tuple[PurePosixPath, str]] = []
-    for path in sorted(root.rglob("*")):
-        if path.is_symlink() or not path.is_file():
+def _verify_staged_bundle_against_manifest(
+    staged_extract_dir: Path,
+    artifact: ManagedRuntimeArtifact,
+) -> None:
+    """Verify every staged file against the manifest's static declaration.
+
+    Anchors per-file integrity in the version-controlled manifest itself,
+    not merely in whatever gets computed and written to ``receipt.json`` —
+    a tampered extracted file (plus a correspondingly rewritten receipt)
+    still fails here. Also rejects any staged file not declared in
+    ``bundle_member_checksums`` (an injected extra library) and any
+    non-regular entry (symlink, etc.) a legitimate archive should never
+    produce.
+    """
+    declared = dict(artifact.bundle_member_checksums)
+    for relative_path, expected_sha256 in declared.items():
+        member_path = staged_extract_dir / relative_path
+        info = inspect_local_file(member_path)
+        if info.sha256 != expected_sha256:
+            raise StagedRuntimeVerificationError(
+                f"Staged bundle member '{relative_path}' does not match the "
+                "pinned manifest's declared checksum."
+            )
+
+    actual_paths: set[PurePosixPath] = set()
+    for path in staged_extract_dir.rglob("*"):
+        if path.is_dir() and not path.is_symlink():
             continue
-        relative = PurePosixPath(path.relative_to(root).as_posix())
-        info = inspect_local_file(path)
-        entries.append((relative, info.sha256))
-    return tuple(entries)
+        relative = PurePosixPath(path.relative_to(staged_extract_dir).as_posix())
+        actual_paths.add(relative)
+
+    undeclared = actual_paths - set(declared)
+    if undeclared:
+        raise StagedRuntimeVerificationError(
+            "Staged bundle contains file(s) not declared in the pinned "
+            f"manifest: {sorted(str(p) for p in undeclared)}."
+        )
 
 
 def _write_receipt(install_dir: Path, receipt: InstallReceipt) -> None:
     payload = json.dumps(receipt.to_mapping(), indent=2, sort_keys=True) + "\n"
     receipt_path = install_dir / _RECEIPT_FILENAME
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=".receipt-", suffix=".tmp", dir=str(install_dir)
-    )
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=".receipt-", suffix=".tmp", dir=str(install_dir)
+        )
+    except OSError as error:
+        raise RuntimeInstallIOError(
+            f"Failed to create a temporary receipt file in '{install_dir}': {error}."
+        ) from error
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
@@ -415,9 +522,11 @@ def _write_receipt(install_dir: Path, receipt: InstallReceipt) -> None:
             tmp_file.flush()
             os.fsync(tmp_file.fileno())
         os.replace(tmp_path, receipt_path)
-    except OSError:
+    except OSError as error:
         tmp_path.unlink(missing_ok=True)
-        raise
+        raise RuntimeInstallIOError(
+            f"Failed to write the install receipt to '{receipt_path}': {error}."
+        ) from error
 
 
 def _offline_environment() -> dict[str, str]:

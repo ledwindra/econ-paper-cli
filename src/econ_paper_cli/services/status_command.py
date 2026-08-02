@@ -18,7 +18,10 @@ from econ_paper_cli.adapters.llama_cpp import LlamaCppConfig
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.adapters.storage_paths import get_default_runtime_dir
 from econ_paper_cli.domain.local_config import LocalRuntimeModelConfig
-from econ_paper_cli.domain.runtime_manifest import select_artifact_for_platform
+from econ_paper_cli.domain.runtime_manifest import (
+    ManagedRuntimeArtifact,
+    select_artifact_for_platform,
+)
 from econ_paper_cli.domain.runtime_manifest_data import MANAGED_RUNTIME_MANIFEST
 from econ_paper_cli.protocols.config import ConfigBackend, ConfigError
 from econ_paper_cli.protocols.storage import (
@@ -31,7 +34,10 @@ from econ_paper_cli.services.config_resolution import (
     RuntimeModelOverrides,
     resolve_db_path,
 )
-from econ_paper_cli.services.platform_detection import detect_current_platform
+from econ_paper_cli.services.platform_detection import (
+    DetectedPlatform,
+    detect_current_platform,
+)
 from econ_paper_cli.services.runtime_provisioning import (
     CorruptManagedInstallError,
     RuntimeProvisioningError,
@@ -125,46 +131,96 @@ def _default_model_readiness_checker(config: LlamaCppConfig) -> None:
     )
 
 
+def _select_pinned_artifact(
+    detected: DetectedPlatform,
+) -> ManagedRuntimeArtifact | None:
+    """Return the manifest-selected artifact for the current machine, if any.
+
+    ``DetectedPlatform.is_supported`` only means the raw system/machine
+    values mapped to a recognized enum member — a recognized combination
+    with no manifest entry (e.g. Linux arm64) is still not "supported" in
+    the sense that matters here. Callers must always treat "no artifact
+    selected" as the true unsupported-platform signal, not
+    ``is_supported`` alone.
+    """
+    if not detected.is_supported:
+        return None
+    return select_artifact_for_platform(
+        MANAGED_RUNTIME_MANIFEST,
+        detected.platform,
+        detected.architecture,
+    )
+
+
 def _classify_runtime(
     config: LocalRuntimeModelConfig,
     llama_config: LlamaCppConfig,
     runtime_checker: RuntimeReadinessChecker,
+    expected_artifact: ManagedRuntimeArtifact | None,
 ) -> tuple[RuntimeOrigin, RuntimeState, str | None]:
     """Classify the configured runtime's origin and independent readiness state.
 
     Managed/external classification comes from locating a validated
     install receipt owning the configured executable path, not merely from
-    the executable living under the default runtime directory.
+    the executable living under the default runtime directory — and origin
+    is only ever reported as ``MANAGED`` once every provenance check
+    (receipt validity, directory identity, manifest match, executable-path
+    match, and persisted-config identity) has actually passed; until then,
+    a managed-root-adjacent but unverified install is ``UNKNOWN``, not
+    ``MANAGED``.
     """
     runtime_dir = get_default_runtime_dir()
     managed_root = locate_managed_install_root(config.executable_path, runtime_dir)
 
     if managed_root is not None:
-        detected = detect_current_platform()
-        expected_artifact = (
-            select_artifact_for_platform(
-                MANAGED_RUNTIME_MANIFEST, detected.platform, detected.architecture
+        if expected_artifact is None:
+            return (
+                RuntimeOrigin.UNKNOWN,
+                RuntimeState.UNSUPPORTED_PLATFORM,
+                "Configured executable is under the managed runtime directory, "
+                "but this platform has no pinned managed runtime artifact to "
+                "validate it against.",
             )
-            if detected.is_supported
-            else None
-        )
         try:
             receipt = verify_managed_install(
                 managed_root, expected_artifact=expected_artifact
             )
         except CorruptManagedInstallError as error:
-            return RuntimeOrigin.MANAGED, RuntimeState.CORRUPT_OR_MISMATCHED, str(error)
+            return RuntimeOrigin.UNKNOWN, RuntimeState.CORRUPT_OR_MISMATCHED, str(error)
 
         expected_executable = (
             managed_root / receipt.executable_relative_path
         ).resolve()
         if expected_executable != config.executable_path.resolve():
             return (
-                RuntimeOrigin.MANAGED,
+                RuntimeOrigin.UNKNOWN,
                 RuntimeState.CORRUPT_OR_MISMATCHED,
                 f"Configured executable '{config.executable_path}' does not match "
                 f"the managed install's receipt executable '{expected_executable}'.",
             )
+        if config.runtime_id is not None and config.runtime_id != receipt.runtime_id:
+            return (
+                RuntimeOrigin.UNKNOWN,
+                RuntimeState.CORRUPT_OR_MISMATCHED,
+                f"Configured runtime_id '{config.runtime_id}' does not match "
+                f"the validated managed install's runtime_id '{receipt.runtime_id}'.",
+            )
+        if (
+            config.runtime_version_marker is not None
+            and config.runtime_version_marker != receipt.version_marker
+        ):
+            return (
+                RuntimeOrigin.UNKNOWN,
+                RuntimeState.CORRUPT_OR_MISMATCHED,
+                f"Configured runtime_version_marker '{config.runtime_version_marker}' "
+                "does not match the validated managed install's version_marker "
+                f"'{receipt.version_marker}'.",
+            )
+
+        # Provenance (receipt, directory identity, manifest match,
+        # executable path, and persisted config identity) is fully
+        # validated at this point, so origin is confidently MANAGED
+        # regardless of the functional readiness outcome below.
         try:
             runtime_checker(config.executable_path, receipt.version_marker)
         except RuntimeProvisioningError as error:
@@ -221,12 +277,14 @@ def execute_status_command(
     model_state: ModelState
     model_error: str | None
 
+    detected = detect_current_platform()
+    expected_artifact = _select_pinned_artifact(detected)
+
     if config is None:
         runtime_origin = RuntimeOrigin.UNKNOWN
         model_state = ModelState.NOT_CONFIGURED
         model_error = None
-        detected = detect_current_platform()
-        if detected.is_supported:
+        if expected_artifact is not None:
             runtime_state, runtime_error = RuntimeState.NOT_CHECKED, None
         else:
             runtime_state = RuntimeState.UNSUPPORTED_PLATFORM
@@ -256,7 +314,7 @@ def execute_status_command(
             )
         llama_config = LlamaCppConfig(**llama_config_kwargs)
         runtime_origin, runtime_state, runtime_error = _classify_runtime(
-            config, llama_config, runtime_checker
+            config, llama_config, runtime_checker, expected_artifact
         )
         model_state, model_error = _classify_model(llama_config, model_checker)
 
