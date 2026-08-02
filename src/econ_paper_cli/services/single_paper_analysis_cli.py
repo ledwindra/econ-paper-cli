@@ -2,10 +2,15 @@
 
 import enum
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from econ_paper_cli.adapters.filesystem import VerificationError
+from econ_paper_cli.adapters.filesystem import (
+    FileInspectionResult,
+    VerificationError,
+    inspect_local_file,
+)
 from econ_paper_cli.adapters.llama_cpp import (
     LlamaCppConfig,
     LlamaCppConfigurationError,
@@ -24,6 +29,7 @@ from econ_paper_cli.domain import (
     ResearchQuestionSettings,
     ResearchQuestionValidationError,
     SinglePaperAnalysisRecord,
+    SinglePaperAnalysisResult,
     SinglePaperAnalysisSettings,
     SinglePaperAnalysisStatus,
     SinglePaperAnalysisValidationError,
@@ -34,8 +40,14 @@ from econ_paper_cli.domain.single_paper_analysis import compute_analysis_id
 from econ_paper_cli.protocols.generation import Generator
 from econ_paper_cli.protocols.pdf_extraction import PDFExtractor
 from econ_paper_cli.protocols.storage import StorageBackend, StorageConnectionError
-from econ_paper_cli.services.ingestion import run_ingestion_preflight
-from econ_paper_cli.services.single_paper_analysis import analyze_single_paper
+from econ_paper_cli.services.ingestion import (
+    discover_pdf_paths,
+    run_ingestion_preflight,
+)
+from econ_paper_cli.services.single_paper_analysis import (
+    analyze_single_paper,
+    build_preflight_failure_result,
+)
 from econ_paper_cli.services.single_paper_analysis_storage import (
     save_single_paper_analysis_result,
 )
@@ -152,9 +164,6 @@ class BatchResult:
 
         expected = {
             "total_discovered": len(self.items),
-            "unique_checksums": sum(
-                item.kind is not BatchOutcomeKind.BATCH_DUPLICATE for item in self.items
-            ),
             "newly_analyzed": sum(
                 item.kind
                 in (BatchOutcomeKind.NEWLY_ANALYZED, BatchOutcomeKind.TYPED_TERMINAL)
@@ -186,6 +195,10 @@ class BatchResult:
                 raise ValueError(
                     f"{field_name} must be {expected_value} for the supplied items."
                 )
+        if self.unique_checksums > self.total_discovered - self.batch_duplicates:
+            raise ValueError(
+                "unique_checksums cannot exceed discovered non-duplicate paths."
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -382,6 +395,16 @@ def _analyze_and_persist_one(
         settings=settings,
         preflight_result=preflight_result,
     )
+    return _persist_result(pdf_path, result, storage, settings)
+
+
+def _persist_result(
+    pdf_path: Path,
+    result: SinglePaperAnalysisResult,
+    storage: StorageBackend,
+    settings: SinglePaperAnalysisSettings,
+) -> BatchItemOutcome:
+    """Persist one result and require strict durable read-back."""
     record = save_single_paper_analysis_result(storage, result, settings=settings)
     durable = storage.get_single_paper_analysis(record.analysis_id)
     if durable is None:
@@ -416,14 +439,14 @@ def run_batch_analysis(
     generator: Generator,
     storage: StorageBackend,
     settings: SinglePaperAnalysisSettings,
+    file_inspector: Callable[[Path], FileInspectionResult] = inspect_local_file,
 ) -> BatchResult:
     """Run deterministic batch analysis over a directory target.
 
-    Uses run_ingestion_preflight for discovery and duplicate detection.
-    Reuses exact stored records; analyzes and persists new unique candidates.
-    Isolates unexpected per-file failures.
+    Discovers paths first, then performs checksum inspection and all storage work
+    inside the per-candidate isolation boundary.
     """
-    preflight = run_ingestion_preflight(options.target_path)
+    pdf_paths = discover_pdf_paths(options.target_path)
 
     items: list[BatchItemOutcome] = []
     newly_analyzed = 0
@@ -433,44 +456,81 @@ def run_batch_analysis(
     halted = 0
     typed_failures = 0
     unexpected_failures = 0
-    for candidate in preflight.candidates:
-        pdf_path = candidate.source_path
+    seen_checksums: dict[str, Path] = {}
+    for pdf_path in pdf_paths:
+        try:
+            preflight = run_ingestion_preflight(
+                pdf_path,
+                file_inspector=file_inspector,
+            )
+        except IngestionError as err:
+            try:
+                result = build_preflight_failure_result(
+                    pdf_path,
+                    err,
+                    settings=settings,
+                )
+                outcome = _persist_result(pdf_path, result, storage, settings)
+                items.append(outcome)
+                newly_analyzed += 1
+                typed_failures += 1
+            except Exception as internal_err:
+                items.append(
+                    BatchItemOutcome(
+                        path=pdf_path,
+                        kind=BatchOutcomeKind.UNEXPECTED_FAILURE,
+                        error=f"{type(internal_err).__name__}: {internal_err}",
+                    )
+                )
+                unexpected_failures += 1
+            continue
+        except Exception as err:
+            items.append(
+                BatchItemOutcome(
+                    path=pdf_path,
+                    kind=BatchOutcomeKind.UNEXPECTED_FAILURE,
+                    error=f"{type(err).__name__}: {err}",
+                )
+            )
+            unexpected_failures += 1
+            continue
+
+        candidate = preflight.candidates[0]
         checksum = candidate.content_checksum
 
-        # Batch duplicate — already seen this checksum in this run
-        if candidate.is_batch_duplicate:
+        duplicate_of = seen_checksums.get(checksum)
+        if duplicate_of is not None:
             items.append(
                 BatchItemOutcome(
                     path=pdf_path,
                     kind=BatchOutcomeKind.BATCH_DUPLICATE,
-                    duplicate_of=candidate.duplicate_of_path,
+                    duplicate_of=duplicate_of,
                 )
             )
             batch_duplicates += 1
             continue
+        seen_checksums[checksum] = pdf_path
 
-        # Check for exact stored identity (same checksum + same settings fingerprint)
-        analysis_id = compute_analysis_id(checksum, settings, pdf_path)
-        existing = storage.get_single_paper_analysis(analysis_id)
-        if existing is not None:
-            items.append(
-                BatchItemOutcome(
-                    path=pdf_path,
-                    kind=BatchOutcomeKind.REUSED,
-                    record=existing,
-                )
-            )
-            reused += 1
-            if existing.status == SinglePaperAnalysisStatus.SUCCESS:
-                successes += 1
-            elif _is_halted(existing.status):
-                halted += 1
-            elif _is_typed_failure(existing.status):
-                typed_failures += 1
-            continue
-
-        # New candidate — run analysis, persist, strict read-back
         try:
+            analysis_id = compute_analysis_id(checksum, settings, pdf_path)
+            existing = storage.get_single_paper_analysis(analysis_id)
+            if existing is not None:
+                items.append(
+                    BatchItemOutcome(
+                        path=pdf_path,
+                        kind=BatchOutcomeKind.REUSED,
+                        record=existing,
+                    )
+                )
+                reused += 1
+                if existing.status is SinglePaperAnalysisStatus.SUCCESS:
+                    successes += 1
+                elif _is_halted(existing.status):
+                    halted += 1
+                elif _is_typed_failure(existing.status):
+                    typed_failures += 1
+                continue
+
             outcome = _analyze_and_persist_one(
                 pdf_path,
                 extractor,
@@ -501,9 +561,8 @@ def run_batch_analysis(
 
     return BatchResult(
         items=tuple(items),
-        total_discovered=preflight.total_candidate_count,
-        unique_checksums=preflight.total_candidate_count
-        - preflight.batch_duplicate_count,
+        total_discovered=len(pdf_paths),
+        unique_checksums=len(seen_checksums),
         newly_analyzed=newly_analyzed,
         reused=reused,
         batch_duplicates=batch_duplicates,
@@ -519,6 +578,7 @@ def run_single_paper_analysis_command(
     extractor: PDFExtractor | None = None,
     generator: Generator | None = None,
     storage: StorageBackend | None = None,
+    file_inspector: Callable[[Path], FileInspectionResult] = inspect_local_file,
 ) -> int:
     """Execute analysis from CLI options — accepts a single PDF or a directory."""
     try:
@@ -590,7 +650,12 @@ def run_single_paper_analysis_command(
         if options.target_path.is_dir():
             try:
                 batch = run_batch_analysis(
-                    options, extractor, generator, storage, settings
+                    options,
+                    extractor,
+                    generator,
+                    storage,
+                    settings,
+                    file_inspector=file_inspector,
                 )
             except IngestionError as err:
                 sys.stderr.write(f"Input preflight error: {err}\n")

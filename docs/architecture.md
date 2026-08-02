@@ -324,13 +324,16 @@ Issue 44 extends the existing offline `econpapers analyze` orchestration from a
 single PDF to either a PDF or directory target. Directory mode composes the
 existing ingestion preflight, single-paper analysis, and SQLite persistence
 services without binding core logic to concrete storage or inference
-implementations. It initializes shared adapters once, reuses the preflight
-checksum rather than inspecting a candidate twice, skips later duplicate bytes,
-and resumes exact analysis identities derived from checksum plus canonical
-settings. Ordered immutable batch outcomes preserve durable records, duplicate
-paths, typed terminal states, and isolated unexpected failures. The feature
-does not add concurrency, downloads, OCR, Markdown generation, indexing, or
-full-document ingestion.
+implementations. It initializes shared adapters once, separates deterministic
+path discovery from per-candidate checksum inspection, reuses each successful
+preflight checksum rather than inspecting a candidate twice, skips later
+duplicate bytes, and resumes exact analysis identities derived from checksum
+plus canonical settings. Candidate inspection, identity lookup, analysis,
+persistence, and strict read-back share one per-file isolation boundary. Ordered
+immutable batch outcomes therefore preserve durable typed preflight failures,
+duplicate paths, and unexpected storage failures without concealing later
+papers. The feature does not add concurrency, downloads, OCR, Markdown
+generation, indexing, or full-document ingestion.
 
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.

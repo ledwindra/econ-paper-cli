@@ -117,24 +117,10 @@ def analyze_single_paper(
         try:
             preflight_result = run_ingestion_preflight(source_path)
         except IngestionError as error:
-            failure_code = _map_ingestion_error(error)
-            return SinglePaperAnalysisResult(
-                policy_version=settings.policy_version,
-                source_path=source_path,
-                checksum=None,
-                status=SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
-                completed_stages=(),
-                failed_stage=SinglePaperAnalysisStage.PREFLIGHT,
-                skipped_stages=_SKIPPED_AFTER_PREFLIGHT,
-                failure_code=failure_code,
-                preflight_result=None,
-                extraction_result=None,
-                quality_assessment=None,
-                section_result=None,
-                research_question_result=None,
-                warnings=(),
-                error_message=str(error),
-                failure_cause=error,
+            return build_preflight_failure_result(
+                source_path,
+                error,
+                settings=settings,
             )
     elif not isinstance(preflight_result, IngestionPreflightResult):
         raise SinglePaperAnalysisValidationError(
@@ -322,6 +308,44 @@ def analyze_single_paper(
         research_question_result=research_question_result,
         warnings=(),
         error_message=None,
+    )
+
+
+def build_preflight_failure_result(
+    pdf_path: Path | str,
+    error: IngestionError,
+    settings: SinglePaperAnalysisSettings = DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+) -> SinglePaperAnalysisResult:
+    """Build the durable typed result for a failed single-PDF preflight."""
+    source_path = Path(pdf_path) if isinstance(pdf_path, str) else pdf_path
+    if not isinstance(source_path, Path):
+        raise SinglePaperAnalysisValidationError("pdf_path must be a Path or string.")
+    if not isinstance(error, IngestionError):
+        raise SinglePaperAnalysisValidationError(
+            "error must be a typed IngestionError instance."
+        )
+    if not isinstance(settings, SinglePaperAnalysisSettings):
+        raise SinglePaperAnalysisValidationError(
+            "settings must be a SinglePaperAnalysisSettings instance."
+        )
+
+    return SinglePaperAnalysisResult(
+        policy_version=settings.policy_version,
+        source_path=source_path,
+        checksum=None,
+        status=SinglePaperAnalysisStatus.PREFLIGHT_FAILED,
+        completed_stages=(),
+        failed_stage=SinglePaperAnalysisStage.PREFLIGHT,
+        skipped_stages=_SKIPPED_AFTER_PREFLIGHT,
+        failure_code=_map_ingestion_error(error),
+        preflight_result=None,
+        extraction_result=None,
+        quality_assessment=None,
+        section_result=None,
+        research_question_result=None,
+        warnings=(),
+        error_message=str(error),
+        failure_cause=error,
     )
 
 

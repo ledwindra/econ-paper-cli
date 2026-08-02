@@ -59,7 +59,9 @@ the five-stage workflow (`PREFLIGHT`, `EXTRACTION`, `QUALITY_ASSESSMENT`,
 `SECTION_DETECTION`, `QUESTION_EXTRACTION`) and are persisted atomically in
 SQLite with strict durable read-back. Directory output includes every discovered
 path and a deterministic aggregate summary. Processing remains sequential and
-offline, and source PDFs are never modified.
+offline, and source PDFs are never modified. Candidate checksum/preflight and
+storage failures are isolated per path so successfully completed records and
+later candidates remain visible.
 
 Process exit code semantics:
 - `0`: Every unique analysis succeeds or reuses an exact successful record.

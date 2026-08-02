@@ -10,6 +10,10 @@ import pytest
 import econ_paper_cli.domain.single_paper_analysis as analysis_domain
 import econ_paper_cli.services.single_paper_analysis as analysis_service
 import econ_paper_cli.services.single_paper_analysis_cli as cli_service
+from econ_paper_cli.adapters.filesystem import (
+    VerificationReadError,
+    inspect_local_file,
+)
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.domain import (
     DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
@@ -630,6 +634,61 @@ def test_mixed_outcome_batch_continues_after_typed_failures(
     assert "Unexpected failures: 0" in out
 
 
+def test_candidate_preflight_failure_is_persisted_and_later_paths_continue(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    paths = [
+        _write_pdf(papers_dir / "a-success.pdf", b"%PDF-1.4 success a").resolve(),
+        _write_pdf(papers_dir / "b-unreadable.pdf", b"%PDF-1.4 unreadable").resolve(),
+        _write_pdf(papers_dir / "c-success.pdf", b"%PDF-1.4 success c").resolve(),
+    ]
+    unreadable_path = paths[1]
+
+    def selective_inspector(path: Path):
+        if path == unreadable_path:
+            raise VerificationReadError(path, OSError("synthetic checksum failure"))
+        return inspect_local_file(path)
+
+    db = tmp_path / "preflight-isolation.db"
+    storage = SQLiteStorage(db)
+    storage.initialize()
+    extractor = FakePDFExtractor()
+    generator = CountingFakeGenerator()
+
+    code = run_single_paper_analysis_command(
+        _make_opts(papers_dir, tmp_path, db_path=db),
+        extractor=extractor,
+        generator=generator,
+        storage=storage,
+        file_inspector=selective_inspector,
+    )
+
+    assert code == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    assert extractor.called_paths == [paths[0], paths[2]]
+    assert generator.call_count == 2
+    records = storage.list_single_paper_analyses()
+    assert len(records) == 3
+    failed_record = next(record for record in records if record.source_path == paths[1])
+    assert failed_record.status is SinglePaperAnalysisStatus.PREFLIGHT_FAILED
+    assert failed_record.content_checksum is None
+
+    output = capsys.readouterr().out
+    headers = [line for line in output.splitlines() if line.startswith("=== [")]
+    assert headers == [
+        f"=== [newly_analyzed] {paths[0]} ===",
+        f"=== [typed_terminal] {paths[1]} ===",
+        f"=== [newly_analyzed] {paths[2]} ===",
+    ]
+    assert "Total discovered:    3" in output
+    assert "Unique checksums:    2" in output
+    assert "Newly analyzed:      3" in output
+    assert "Successes:           2" in output
+    assert "Typed failures:      1" in output
+    assert "Unexpected failures: 0" in output
+
+
 # ---------------------------------------------------------------------------
 # Unexpected failure isolation
 # ---------------------------------------------------------------------------
@@ -693,6 +752,65 @@ def test_unexpected_failure_isolated_other_candidates_still_run(
     assert "Total discovered:    3" in out
     # Other candidates still ran
     assert extractor.call_count >= 2
+
+
+def test_exact_record_lookup_failure_is_isolated_and_later_paths_continue(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    paths = [
+        _write_pdf(papers_dir / "a-success.pdf", b"%PDF-1.4 lookup a").resolve(),
+        _write_pdf(papers_dir / "b-lookup-fails.pdf", b"%PDF-1.4 lookup b").resolve(),
+        _write_pdf(papers_dir / "c-success.pdf", b"%PDF-1.4 lookup c").resolve(),
+    ]
+    failed_checksum = hashlib.sha256(paths[1].read_bytes()).hexdigest()
+    failed_analysis_id = analysis_domain.compute_analysis_id(
+        failed_checksum,
+        DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+        paths[1],
+    )
+
+    class SelectiveLookupFailureStorage(SQLiteStorage):
+        def get_single_paper_analysis(
+            self, analysis_id: str
+        ) -> SinglePaperAnalysisRecord | None:
+            if analysis_id == failed_analysis_id:
+                raise RuntimeError("synthetic durable lookup failure")
+            return super().get_single_paper_analysis(analysis_id)
+
+    db = tmp_path / "lookup-isolation.db"
+    storage = SelectiveLookupFailureStorage(db)
+    storage.initialize()
+    extractor = FakePDFExtractor()
+    generator = CountingFakeGenerator()
+
+    code = run_single_paper_analysis_command(
+        _make_opts(papers_dir, tmp_path, db_path=db),
+        extractor=extractor,
+        generator=generator,
+        storage=storage,
+    )
+
+    assert code == CLIExitCode.UNEXPECTED_ERROR
+    assert extractor.called_paths == [paths[0], paths[2]]
+    assert generator.call_count == 2
+    assert {record.source_path for record in storage.list_single_paper_analyses()} == {
+        paths[0],
+        paths[2],
+    }
+
+    output = capsys.readouterr().out
+    headers = [line for line in output.splitlines() if line.startswith("=== [")]
+    assert headers == [
+        f"=== [newly_analyzed] {paths[0]} ===",
+        f"=== [unexpected_failure] {paths[1]} ===",
+        f"=== [newly_analyzed] {paths[2]} ===",
+    ]
+    assert "RuntimeError: synthetic durable lookup failure" in output
+    assert "Total discovered:    3" in output
+    assert "Successes:           2" in output
+    assert "Unexpected failures: 1" in output
 
 
 # ---------------------------------------------------------------------------
