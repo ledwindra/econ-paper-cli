@@ -33,7 +33,10 @@ def build_parser() -> ArgumentParser:
         help="Validate and durably persist local runtime/model configuration.",
     )
     _add_runtime_model_arguments(
-        setup_parser, required=True, require_executable_path=False
+        setup_parser,
+        required=True,
+        require_executable_path=False,
+        supports_auto_provisioning=True,
     )
     setup_parser.add_argument(
         "--db-path",
@@ -176,6 +179,7 @@ def _add_runtime_model_arguments(
     *,
     required: bool,
     require_executable_path: bool | None = None,
+    supports_auto_provisioning: bool = False,
 ) -> None:
     """Add the shared runtime/model identity and option flags to a subparser.
 
@@ -189,6 +193,13 @@ def _add_runtime_model_arguments(
     ``False`` here since omitting it triggers managed-runtime provisioning
     instead of an error, while the other four model-identity flags stay
     required for ``setup``.
+
+    ``supports_auto_provisioning`` controls only the help text: it must be
+    True exclusively for ``setup`` (the one command that can actually
+    download/install a runtime). ``analyze``/``chat`` also allow omitting
+    ``--llama-cpp-path``, but only ever fall back to durable configuration
+    and must remain network-free, so their help text must never claim
+    omission triggers provisioning.
     """
     executable_required = (
         required if require_executable_path is None else require_executable_path
@@ -198,7 +209,7 @@ def _add_runtime_model_arguments(
     )
     executable_help_suffix = (
         " (omit to auto-provision a managed llama.cpp runtime)"
-        if not executable_required
+        if supports_auto_provisioning
         else identity_help_suffix
     )
     parser.add_argument(

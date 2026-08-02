@@ -18,6 +18,8 @@ from econ_paper_cli.adapters.llama_cpp import LlamaCppConfig
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.adapters.storage_paths import get_default_runtime_dir
 from econ_paper_cli.domain.local_config import LocalRuntimeModelConfig
+from econ_paper_cli.domain.runtime_manifest import select_artifact_for_platform
+from econ_paper_cli.domain.runtime_manifest_data import MANAGED_RUNTIME_MANIFEST
 from econ_paper_cli.protocols.config import ConfigBackend, ConfigError
 from econ_paper_cli.protocols.storage import (
     StorageBackend,
@@ -138,8 +140,18 @@ def _classify_runtime(
     managed_root = locate_managed_install_root(config.executable_path, runtime_dir)
 
     if managed_root is not None:
+        detected = detect_current_platform()
+        expected_artifact = (
+            select_artifact_for_platform(
+                MANAGED_RUNTIME_MANIFEST, detected.platform, detected.architecture
+            )
+            if detected.is_supported
+            else None
+        )
         try:
-            receipt = verify_managed_install(managed_root)
+            receipt = verify_managed_install(
+                managed_root, expected_artifact=expected_artifact
+            )
         except CorruptManagedInstallError as error:
             return RuntimeOrigin.MANAGED, RuntimeState.CORRUPT_OR_MISMATCHED, str(error)
 
@@ -225,17 +237,24 @@ def execute_status_command(
                 "explicit --llama-cpp-path here."
             )
     else:
-        llama_config = LlamaCppConfig(
-            executable_path=config.executable_path,
-            model_path=config.model_path,
-            model_id=config.model_id,
-            model_expected_size_bytes=config.model_bytes,
-            model_sha256=config.model_checksum,
-            threads=config.threads,
-            timeout_seconds=(
+        llama_config_kwargs: dict[str, object] = {
+            "executable_path": config.executable_path,
+            "model_path": config.model_path,
+            "model_id": config.model_id,
+            "model_expected_size_bytes": config.model_bytes,
+            "model_sha256": config.model_checksum,
+            "threads": config.threads,
+            "timeout_seconds": (
                 config.timeout_seconds if config.timeout_seconds is not None else 300.0
             ),
-        )
+        }
+        if config.runtime_id is not None:
+            llama_config_kwargs["runtime_id"] = config.runtime_id
+        if config.runtime_version_marker is not None:
+            llama_config_kwargs["runtime_version_marker"] = (
+                config.runtime_version_marker
+            )
+        llama_config = LlamaCppConfig(**llama_config_kwargs)
         runtime_origin, runtime_state, runtime_error = _classify_runtime(
             config, llama_config, runtime_checker
         )

@@ -181,6 +181,65 @@ def test_zip_duplicate_member_names_rejected(tmp_path: Path) -> None:
         SafeArchiveExtractor().extract(archive_path, ArchiveFormat.ZIP, destination)
 
 
+def test_zip_case_only_duplicate_rejected(tmp_path: Path) -> None:
+    """Distinct-cased names that would collide on a case-insensitive
+    filesystem (Windows/macOS default) must be rejected even when the
+    extractor itself runs on a case-sensitive host."""
+    archive_path = tmp_path / "archive.zip"
+    with zipfile.ZipFile(archive_path, mode="w") as archive:
+        archive.writestr("bin/Tool.exe", b"one")
+        archive.writestr("bin/tool.exe", b"two")
+    destination = tmp_path / "dest"
+    destination.mkdir()
+
+    with pytest.raises(UnsafeArchiveMemberError):
+        SafeArchiveExtractor().extract(archive_path, ArchiveFormat.ZIP, destination)
+
+
+def test_zip_backslash_vs_forward_slash_duplicate_rejected(tmp_path: Path) -> None:
+    archive_path = tmp_path / "archive.zip"
+    with zipfile.ZipFile(archive_path, mode="w") as archive:
+        archive.writestr("bin/tool.exe", b"one")
+        archive.writestr("bin\\tool.exe", b"two")
+    destination = tmp_path / "dest"
+    destination.mkdir()
+
+    with pytest.raises(UnsafeArchiveMemberError):
+        SafeArchiveExtractor().extract(archive_path, ArchiveFormat.ZIP, destination)
+
+
+def test_zip_trailing_dot_member_rejected(tmp_path: Path) -> None:
+    """A trailing dot/space component is silently stripped by Windows path
+    handling and must be rejected outright, not merely deduplicated."""
+    archive_path = tmp_path / "archive.zip"
+    _make_zip(archive_path, {"bin/tool.exe.": b"x"})
+    destination = tmp_path / "dest"
+    destination.mkdir()
+
+    with pytest.raises(UnsafeArchiveMemberError):
+        SafeArchiveExtractor().extract(archive_path, ArchiveFormat.ZIP, destination)
+
+
+def test_zip_alternate_data_stream_member_rejected(tmp_path: Path) -> None:
+    archive_path = tmp_path / "archive.zip"
+    _make_zip(archive_path, {"bin/tool.exe:hidden": b"x"})
+    destination = tmp_path / "dest"
+    destination.mkdir()
+
+    with pytest.raises(UnsafeArchiveMemberError):
+        SafeArchiveExtractor().extract(archive_path, ArchiveFormat.ZIP, destination)
+
+
+def test_zip_windows_reserved_device_name_rejected(tmp_path: Path) -> None:
+    archive_path = tmp_path / "archive.zip"
+    _make_zip(archive_path, {"bin/CON": b"x"})
+    destination = tmp_path / "dest"
+    destination.mkdir()
+
+    with pytest.raises(UnsafeArchiveMemberError):
+        SafeArchiveExtractor().extract(archive_path, ArchiveFormat.ZIP, destination)
+
+
 def test_zip_symlink_member_rejected(tmp_path: Path) -> None:
     import stat as stat_module
 

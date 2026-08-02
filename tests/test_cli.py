@@ -379,6 +379,49 @@ def test_setup_help_lists_offline_flag(capsys: pytest.CaptureFixture[str]) -> No
     assert "--offline" in capsys.readouterr().out
 
 
+def _collapse_whitespace(text: str) -> str:
+    """Undo argparse's help-text line wrapping for substring assertions."""
+    return " ".join(text.split())
+
+
+def test_setup_help_mentions_auto_provisioning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["setup", "--help"])
+
+    assert exit_info.value.code == 0
+    out = _collapse_whitespace(capsys.readouterr().out)
+    assert "provision a managed llama.cpp runtime" in out
+
+
+def test_analyze_help_never_claims_auto_provisioning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Issue #58 review: analyze/chat only fall back to durable
+    configuration and must remain network-free; their help text must never
+    claim omitting --llama-cpp-path triggers a download."""
+    with pytest.raises(SystemExit) as exit_info:
+        main(["analyze", "--help"])
+
+    assert exit_info.value.code == 0
+    out = _collapse_whitespace(capsys.readouterr().out)
+    assert "auto-provision" not in out
+    assert "provision" not in out
+
+
+def test_chat_help_never_claims_auto_provisioning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["chat", "--help"])
+
+    assert exit_info.value.code == 0
+    out = _collapse_whitespace(capsys.readouterr().out)
+    assert "auto-provision" not in out
+    assert "provision" not in out
+
+
 def test_setup_command_maps_offline_flag_into_setup_command_options(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

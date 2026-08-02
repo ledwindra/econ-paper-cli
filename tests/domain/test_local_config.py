@@ -55,6 +55,8 @@ def test_to_mapping_round_trips_through_from_mapping() -> None:
         "threads": 4,
         "timeout_seconds": 120.0,
         "db_path": str(config.db_path),
+        "runtime_id": None,
+        "runtime_version_marker": None,
     }
     restored = LocalRuntimeModelConfig.from_mapping(mapping)
     assert restored == config
@@ -137,3 +139,66 @@ def test_accepts_valid_optional_fields() -> None:
     assert config.threads == 8
     assert config.timeout_seconds == 90.0
     assert config.db_path == Path("/data/db.sqlite")
+
+
+# --- runtime_id / runtime_version_marker (issue #58 identity persistence) --
+
+
+def test_accepts_valid_runtime_identity() -> None:
+    config = LocalRuntimeModelConfig(
+        **_valid_kwargs(runtime_id="llama.cpp-b10199", runtime_version_marker="10199")
+    )
+    assert config.runtime_id == "llama.cpp-b10199"
+    assert config.runtime_version_marker == "10199"
+
+
+@pytest.mark.parametrize("runtime_id", ["", "Has-Upper", "bad space", 123])
+def test_rejects_invalid_runtime_id(runtime_id: object) -> None:
+    with pytest.raises(LocalConfigValidationError):
+        LocalRuntimeModelConfig(
+            **_valid_kwargs(runtime_id=runtime_id, runtime_version_marker="10199")
+        )
+
+
+@pytest.mark.parametrize("runtime_version_marker", ["", "   ", 10199])
+def test_rejects_invalid_runtime_version_marker(runtime_version_marker: object) -> None:
+    with pytest.raises(LocalConfigValidationError):
+        LocalRuntimeModelConfig(
+            **_valid_kwargs(
+                runtime_id="llama.cpp-b10199",
+                runtime_version_marker=runtime_version_marker,
+            )
+        )
+
+
+def test_rejects_runtime_id_without_version_marker() -> None:
+    with pytest.raises(LocalConfigValidationError):
+        LocalRuntimeModelConfig(**_valid_kwargs(runtime_id="llama.cpp-b10199"))
+
+
+def test_rejects_version_marker_without_runtime_id() -> None:
+    with pytest.raises(LocalConfigValidationError):
+        LocalRuntimeModelConfig(**_valid_kwargs(runtime_version_marker="10199"))
+
+
+def test_runtime_identity_round_trips_through_mapping() -> None:
+    config = LocalRuntimeModelConfig(
+        **_valid_kwargs(runtime_id="llama.cpp-b10199", runtime_version_marker="10199")
+    )
+    restored = LocalRuntimeModelConfig.from_mapping(config.to_mapping())
+    assert restored == config
+
+
+def test_from_mapping_defaults_runtime_identity_to_none_for_pre_issue_58_configs() -> (
+    None
+):
+    """A config saved before runtime_id/runtime_version_marker existed must
+    still load cleanly, with both fields defaulting to None (schema version
+    1 is unchanged; these are optional additions, not a version bump)."""
+    legacy_mapping = LocalRuntimeModelConfig(**_valid_kwargs()).to_mapping()
+    del legacy_mapping["runtime_id"]
+    del legacy_mapping["runtime_version_marker"]
+
+    restored = LocalRuntimeModelConfig.from_mapping(legacy_mapping)
+    assert restored.runtime_id is None
+    assert restored.runtime_version_marker is None

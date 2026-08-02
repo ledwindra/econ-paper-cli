@@ -420,3 +420,87 @@ def test_provisioning_failure_after_config_never_written(tmp_path: Path) -> None
 
     assert exit_code == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
     assert config_path.read_bytes() == original_bytes
+
+
+def test_real_provisioning_checksum_mismatch_is_typed_failure_and_preserves_config(
+    tmp_path: Path,
+) -> None:
+    """Issue #58 review: a real archive checksum mismatch inside the actual
+    ensure_managed_runtime service (not a fake provisioner bypassing it)
+    must surface as the documented typed exit code 2, not an unhandled
+    VerificationError, and must never touch a prior valid configuration."""
+    from econ_paper_cli.domain.runtime_manifest import (
+        ArchiveFormat,
+        ManagedRuntimeArtifact,
+        ManagedRuntimeManifest,
+        SupportedArchitecture,
+        SupportedPlatform,
+    )
+    from econ_paper_cli.services.platform_detection import DetectedPlatform
+    from econ_paper_cli.services.runtime_provisioning import ensure_managed_runtime
+
+    archive_bytes = b"not the real archive content"
+    artifact = ManagedRuntimeArtifact(
+        runtime_id="llama.cpp-test",
+        version_marker="999",
+        platform=SupportedPlatform.LINUX,
+        architecture=SupportedArchitecture.X86_64,
+        source_url="https://example.com/tool.tar.gz",
+        archive_format=ArchiveFormat.TAR_GZ,
+        archive_size_bytes=len(archive_bytes),
+        archive_sha256="0" * 64,  # deliberately wrong
+        executable_relative_path=PurePosixPath("pkg/tool"),
+        license_name="MIT",
+        attribution_text="test",
+    )
+    manifest = ManagedRuntimeManifest(schema_version=1, artifacts=(artifact,))
+
+    class FakeDownloader:
+        def download(
+            self, url: str, destination: Path, *, expected_size_bytes: int
+        ) -> None:
+            destination.write_bytes(archive_bytes)
+
+    class UnusedExtractor:
+        def extract(self, *args: object, **kwargs: object) -> None:
+            raise AssertionError("extraction must not be reached")
+
+    def real_provisioner(allow_download: bool) -> ManagedRuntimeInstall:
+        return ensure_managed_runtime(
+            runtime_dir=tmp_path / "runtime",
+            downloader=FakeDownloader(),
+            extractor=UnusedExtractor(),
+            manifest=manifest,
+            detected=DetectedPlatform(
+                platform=SupportedPlatform.LINUX,
+                architecture=SupportedArchitecture.X86_64,
+                raw_system="Linux",
+                raw_machine="x86_64",
+            ),
+            allow_download=allow_download,
+        )
+
+    config_path = tmp_path / "real_provisioning_config.json"
+    backend = JSONConfigStorage(config_path)
+    run_setup_command(
+        _options(),
+        config_backend=backend,
+        readiness_checker=_ok_checker,
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+    original_bytes = config_path.read_bytes()
+
+    err = io.StringIO()
+    exit_code = run_setup_command(
+        _options(executable_path=None),
+        config_backend=backend,
+        readiness_checker=_ok_checker,
+        runtime_provisioner=real_provisioner,
+        stdout=io.StringIO(),
+        stderr=err,
+    )
+
+    assert exit_code == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+    assert config_path.read_bytes() == original_bytes
+    assert "Managed runtime provisioning failed" in err.getvalue()

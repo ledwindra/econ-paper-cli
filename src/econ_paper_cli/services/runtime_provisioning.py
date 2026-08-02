@@ -135,7 +135,9 @@ def ensure_managed_runtime(
 
     if final_install_dir.exists():
         try:
-            receipt = verify_managed_install(final_install_dir)
+            receipt = verify_managed_install(
+                final_install_dir, expected_artifact=artifact
+            )
         except CorruptManagedInstallError:
             shutil.rmtree(final_install_dir, ignore_errors=True)
         else:
@@ -161,9 +163,15 @@ def ensure_managed_runtime(
             archive_path,
             expected_size_bytes=artifact.archive_size_bytes,
         )
-        verify_local_file(
-            archive_path, artifact.archive_size_bytes, artifact.archive_sha256
-        )
+        try:
+            verify_local_file(
+                archive_path, artifact.archive_size_bytes, artifact.archive_sha256
+            )
+        except VerificationError as error:
+            raise StagedRuntimeVerificationError(
+                f"Downloaded archive for '{artifact.source_url}' failed local "
+                f"verification: {error}."
+            ) from error
 
         extractor.extract(archive_path, artifact.archive_format, staged_extract_dir)
 
@@ -173,8 +181,14 @@ def ensure_managed_runtime(
                 f"Expected executable '{artifact.executable_relative_path}' was "
                 "not found in the extracted archive."
             )
+        _ensure_staged_executable_bit(staged_executable)
 
-        member_checksums = _compute_bundle_member_checksums(staged_extract_dir)
+        try:
+            member_checksums = _compute_bundle_member_checksums(staged_extract_dir)
+        except VerificationError as error:
+            raise StagedRuntimeVerificationError(
+                f"Failed to inspect a staged bundle member: {error}."
+            ) from error
         member_checksum_map = dict(member_checksums)
         executable_sha256 = member_checksum_map[
             PurePosixPath(artifact.executable_relative_path)
@@ -205,18 +219,30 @@ def ensure_managed_runtime(
             # Lost a promotion race to a concurrent installer targeting the
             # same content-addressed path; its result is byte-identical by
             # construction, so adopt it instead of failing.
-            receipt = verify_managed_install(final_install_dir)
+            receipt = verify_managed_install(
+                final_install_dir, expected_artifact=artifact
+            )
 
     return _install_result(final_install_dir, receipt)
 
 
-def verify_managed_install(install_dir: Path) -> InstallReceipt:
+def verify_managed_install(
+    install_dir: Path,
+    expected_artifact: ManagedRuntimeArtifact | None = None,
+) -> InstallReceipt:
     """Validate an existing managed install directory against its receipt.
 
     Raises ``CorruptManagedInstallError`` if the receipt is missing,
-    unreadable, or invalid, or if any declared bundle member is missing or
-    fails its recorded checksum. A directory merely sitting under the
-    runtime root is never treated as verified without this check passing.
+    unreadable, or invalid; if any declared bundle member is missing or
+    fails its recorded checksum; if the install directory contains any
+    regular file *not* declared in the receipt (so an injected adjacent
+    library cannot escape bundle-integrity checks); or — when
+    ``expected_artifact`` is given — if the receipt's identity (runtime id,
+    version marker, platform, architecture, source asset, archive
+    size/hash, executable path) does not exactly match the manifest-selected
+    artifact. A directory merely sitting under the runtime root, or a
+    receipt that is merely internally self-consistent, is never treated as
+    verified without both checks passing.
     """
     receipt_path = install_dir / _RECEIPT_FILENAME
     try:
@@ -238,7 +264,12 @@ def verify_managed_install(install_dir: Path) -> InstallReceipt:
             f"Install receipt at '{receipt_path}' failed validation: {error}."
         ) from error
 
+    if expected_artifact is not None:
+        _verify_receipt_matches_artifact(receipt, expected_artifact, install_dir)
+
+    declared_paths: set[PurePosixPath] = set()
     for relative_path, expected_sha256 in receipt.member_checksums:
+        declared_paths.add(relative_path)
         member_path = install_dir / relative_path
         try:
             info = inspect_local_file(member_path)
@@ -252,7 +283,68 @@ def verify_managed_install(install_dir: Path) -> InstallReceipt:
                 f"Managed install member '{relative_path}' at '{install_dir}' "
                 "failed checksum verification."
             )
+
+    actual_paths = {
+        PurePosixPath(path.relative_to(install_dir).as_posix())
+        for path in install_dir.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    } - {PurePosixPath(_RECEIPT_FILENAME)}
+    undeclared = actual_paths - declared_paths
+    if undeclared:
+        raise CorruptManagedInstallError(
+            f"Managed install at '{install_dir}' contains undeclared file(s) "
+            f"not present in the receipt: {sorted(str(p) for p in undeclared)}."
+        )
     return receipt
+
+
+def _verify_receipt_matches_artifact(
+    receipt: InstallReceipt,
+    expected_artifact: ManagedRuntimeArtifact,
+    install_dir: Path,
+) -> None:
+    mismatches = []
+    if receipt.runtime_id != expected_artifact.runtime_id:
+        mismatches.append("runtime_id")
+    if receipt.version_marker != expected_artifact.version_marker:
+        mismatches.append("version_marker")
+    if receipt.platform != expected_artifact.platform:
+        mismatches.append("platform")
+    if receipt.architecture != expected_artifact.architecture:
+        mismatches.append("architecture")
+    if receipt.source_asset_identity != expected_artifact.source_url:
+        mismatches.append("source_asset_identity")
+    if receipt.archive_size_bytes != expected_artifact.archive_size_bytes:
+        mismatches.append("archive_size_bytes")
+    if receipt.archive_sha256 != expected_artifact.archive_sha256:
+        mismatches.append("archive_sha256")
+    if receipt.executable_relative_path != expected_artifact.executable_relative_path:
+        mismatches.append("executable_relative_path")
+    if mismatches:
+        raise CorruptManagedInstallError(
+            f"Install receipt at '{install_dir}' does not match the pinned "
+            f"manifest artifact: {', '.join(mismatches)}."
+        )
+
+
+def _ensure_staged_executable_bit(staged_executable: Path) -> None:
+    """Make a freshly extracted, staged executable actually runnable.
+
+    Only ever applied to content this install just extracted into its own
+    staging directory (never to an already-installed or externally
+    configured executable) — ``verify_executable_runs`` itself stays
+    strictly read-only so ``status`` can reuse it safely.
+    """
+    if os.name == "nt" or os.access(staged_executable, os.X_OK):
+        return
+    try:
+        current_mode = staged_executable.stat().st_mode
+        os.chmod(staged_executable, current_mode | 0o111)
+    except OSError as error:
+        raise StagedRuntimeVerificationError(
+            f"Staged executable is not executable and could not be made "
+            f"executable: '{staged_executable}'."
+        ) from error
 
 
 def locate_managed_install_root(
@@ -343,21 +435,22 @@ def _offline_environment() -> dict[str, str]:
 
 
 def verify_executable_runs(executable_path: Path, version_marker: str) -> None:
-    """Run the staged executable to confirm it actually starts and reports
-    the expected pinned version marker, independent of any model."""
+    """Run an executable to confirm it actually starts and reports the
+    expected pinned version marker, independent of any model.
+
+    Strictly read-only: never modifies the executable's permissions or any
+    other metadata. ``status`` relies on this for its read-only guarantee.
+    Callers that own freshly staged content (see ``_ensure_staged_executable_bit``)
+    are responsible for making it executable *before* calling this.
+    """
     if not executable_path.is_file():
         raise StagedRuntimeVerificationError(
-            f"Staged executable is not a regular file: '{executable_path}'."
+            f"Executable is not a regular file: '{executable_path}'."
         )
     if os.name != "nt" and not os.access(executable_path, os.X_OK):
-        try:
-            current_mode = executable_path.stat().st_mode
-            os.chmod(executable_path, current_mode | 0o111)
-        except OSError as error:
-            raise StagedRuntimeVerificationError(
-                f"Staged executable is not executable and could not be made "
-                f"executable: '{executable_path}'."
-            ) from error
+        raise StagedRuntimeVerificationError(
+            f"Executable is not marked executable: '{executable_path}'."
+        )
 
     try:
         result = subprocess.run(
@@ -375,11 +468,11 @@ def verify_executable_runs(executable_path: Path, version_marker: str) -> None:
 
     if result.returncode != 0:
         raise StagedRuntimeVerificationError(
-            f"Staged executable '{executable_path}' failed its version readiness check."
+            f"Executable '{executable_path}' failed its version readiness check."
         )
     combined_output = f"{result.stdout}\n{result.stderr}"
     if version_marker not in combined_output:
         raise StagedRuntimeVerificationError(
-            f"Staged executable '{executable_path}' does not match the expected "
+            f"Executable '{executable_path}' does not match the expected "
             f"runtime version marker '{version_marker}'."
         )

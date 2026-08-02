@@ -104,9 +104,13 @@ def test_select_artifact_for_platform_returns_none_when_absent() -> None:
 # --- Real, version-controlled manifest data --------------------------------
 
 
-def test_managed_runtime_manifest_covers_ci_matrix_platforms() -> None:
+def test_managed_runtime_manifest_covers_approved_platform_matrix() -> None:
+    """The approved matrix (issue #58 plan) is macOS arm64 *and* x86_64,
+    Linux x86_64, and Windows x86_64 — not merely whatever the CI matrix
+    happens to run, so an Intel Mac is covered too."""
     for platform, architecture in (
         (SupportedPlatform.MACOS, SupportedArchitecture.ARM64),
+        (SupportedPlatform.MACOS, SupportedArchitecture.X86_64),
         (SupportedPlatform.LINUX, SupportedArchitecture.X86_64),
         (SupportedPlatform.WINDOWS, SupportedArchitecture.X86_64),
     ):

@@ -22,13 +22,22 @@ stay required, explicit, user-supplied flags.
   managed runtime is already installed.
 - `econpapers analyze`, `econpapers chat`, bare `econpapers`, and `econpapers
   status` never provision or download anything, unconditionally.
+- `econpapers status`'s runtime check is strictly read-only: it never
+  repairs a non-executable file's permission bits, even though a *fresh
+  install*'s own staging step does exactly that for content it just
+  extracted (`services.runtime_provisioning.verify_executable_runs` never
+  mutates; only `_ensure_staged_executable_bit`, called solely during
+  installation of newly staged content, does).
 
 ## Pinned release and platform matrix
 
-One `llama.cpp` release (`b10199`) is pinned, with one archive per
-platform/architecture this project's CI matrix tests — macOS arm64, Linux
-x86_64, and Windows x86_64 — each the CPU-only build (no GPU/accelerator
-variant, per the no-GPU-requirement product guardrail). The pinned data lives
+One `llama.cpp` release (`b10199`) is pinned, with one archive per approved
+platform/architecture — macOS arm64, macOS x86_64, Linux x86_64, and Windows
+x86_64 — each the CPU-only build (no GPU/accelerator variant, per the
+no-GPU-requirement product guardrail). macOS x86_64 (Intel) is included even
+though this project's own CI matrix only runs macOS arm64 today, so an Intel
+Mac user still gets managed provisioning rather than a forced manual
+`--llama-cpp-path`. The pinned data lives
 in `econ_paper_cli.domain.runtime_manifest_data.MANAGED_RUNTIME_MANIFEST`, a
 plain Python module (not a JSON/data file) so it is always included in built
 wheels/sdists with no separate packaging configuration to forget.
@@ -70,10 +79,17 @@ error) rather than silently attempting an unpinned download.
    are byte-identical by definition, so losing the promotion race just means
    adopting the winner's already-verified result instead of overwriting it.
 7. Only after promotion succeeds does `setup` persist the resolved
-   executable path through the existing durable configuration boundary
-   (`ConfigBackend.save()`) — if that save fails, the promoted install stays
-   on disk (valid and reusable on retry) and the previously configured
-   runtime is untouched.
+   executable path — **and** the installed `runtime_id`/`version_marker`
+   (optional additions to `LocalRuntimeModelConfig` schema version 1; a
+   config saved before they existed simply loads with both as `None`, and
+   `LlamaCppConfig`'s own defaults apply exactly as before) — through the
+   existing durable configuration boundary (`ConfigBackend.save()`). This is
+   what makes the pinned identity survive a process restart: `analyze`,
+   `chat`, and bare `econpapers` all resolve the same recorded identity
+   through `config_resolution.build_llama_cpp_config_kwargs` rather than
+   falling back to the adapter's hard-coded default. If the save fails, the
+   promoted install stays on disk (valid and reusable on retry) and the
+   previously configured runtime is untouched.
 
 A directory found at the target content-addressed path that fails receipt
 verification is treated as corrupt (e.g. from an interrupted previous
@@ -104,10 +120,17 @@ install (schema version 1):
 `member_checksums` is the full closure of every file actually extracted, not
 just the top-level executable — a managed `llama.cpp` install includes
 adjacent shared libraries the executable depends on, so tampering with any of
-them (not only the executable itself) is detected. `econpapers status` and
-the setup reuse-check both classify a configured executable as **managed**
-only when it resolves to a receipt whose declared members all still match
-their recorded checksums — living under the default runtime directory is
+them (not only the executable itself) is detected. Verification
+(`services.runtime_provisioning.verify_managed_install`) additionally
+rejects any regular file present on disk that is *not* declared in
+`member_checksums` (an injected extra library cannot escape bundle-integrity
+checks by simply not being listed), and — when a manifest-selected artifact
+is available for comparison — checks the receipt's own identity (runtime id,
+version marker, platform, architecture, source asset, archive size/hash,
+executable path) against it exactly, so a self-consistent but stale or
+foreign receipt is never silently reused. `econpapers status` and the setup
+reuse-check both classify a configured executable as **managed** only when
+it passes all of this — living under the default runtime directory is
 never, by itself, sufficient to call an install "managed" or "verified."
 
 ## Recovery

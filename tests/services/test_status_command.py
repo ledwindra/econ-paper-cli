@@ -212,6 +212,39 @@ def test_status_does_not_mutate_existing_configuration_bytes(tmp_path: Path) -> 
     assert config_path.stat().st_mtime_ns == before_mtime
 
 
+def test_status_never_repairs_a_non_executable_runtime_file(tmp_path: Path) -> None:
+    """Regression: status must never call chmod on a configured executable,
+    even when using the *real* (non-fake) runtime readiness checker — only
+    the provisioning install path is allowed to repair permissions on
+    content it just staged itself."""
+    import stat
+
+    executable_path = tmp_path / "llama-completion"
+    executable_path.write_bytes(b"not really runnable")
+    executable_path.chmod(0o644)  # deliberately non-executable
+    before_mode = executable_path.stat().st_mode
+    before_mtime = executable_path.stat().st_mtime_ns
+
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(_config(executable_path=executable_path))
+    storage = SQLiteStorage(str(tmp_path / "missing.db"), read_only=True)
+
+    report = execute_status_command(
+        StatusCommandOptions(),
+        config_backend=config_backend,
+        storage=storage,
+        # No runtime_readiness_checker override: exercises the real default
+        # (verify_executable_runs), not a fake that bypasses the bug.
+    )
+
+    after_mode = executable_path.stat().st_mode
+    after_mtime = executable_path.stat().st_mtime_ns
+    assert after_mode == before_mode, "status must never chmod a configured executable"
+    assert after_mtime == before_mtime
+    assert not (after_mode & stat.S_IXUSR), "exec bit must remain unset"
+    assert report.runtime_state is RuntimeState.CORRUPT_OR_MISMATCHED
+
+
 def test_run_status_command_writes_rendered_report_and_returns_zero(
     tmp_path: Path,
 ) -> None:
@@ -293,7 +326,9 @@ def test_status_reports_incompatible_newer_database_schema(tmp_path: Path) -> No
 # --- Managed vs. external runtime origin classification --------------------
 
 
-def _install_managed_runtime(tmp_path: Path, runtime_dir: Path) -> Path:
+def _install_managed_runtime(
+    tmp_path: Path, runtime_dir: Path
+) -> tuple[Path, InstallReceipt]:
     import hashlib
 
     install_dir = runtime_dir / "llama.cpp-b10199-aaaaaaaaaaaaaaaa"
@@ -318,7 +353,47 @@ def _install_managed_runtime(tmp_path: Path, runtime_dir: Path) -> Path:
     (install_dir / "receipt.json").write_text(
         json.dumps(receipt.to_mapping()), encoding="utf-8"
     )
-    return executable_path
+    return executable_path, receipt
+
+
+def _patch_manifest_to_match_receipt(
+    monkeypatch: pytest.MonkeyPatch, receipt: InstallReceipt
+) -> None:
+    """Make status compare the receipt against a manifest/detected-platform
+    pair that actually matches it, independent of the real host platform."""
+    import econ_paper_cli.services.status_command as status_module
+    from econ_paper_cli.domain.runtime_manifest import (
+        ArchiveFormat,
+        ManagedRuntimeArtifact,
+        ManagedRuntimeManifest,
+    )
+    from econ_paper_cli.services.platform_detection import DetectedPlatform
+
+    artifact = ManagedRuntimeArtifact(
+        runtime_id=receipt.runtime_id,
+        version_marker=receipt.version_marker,
+        platform=receipt.platform,
+        architecture=receipt.architecture,
+        source_url=receipt.source_asset_identity,
+        archive_format=ArchiveFormat.TAR_GZ,
+        archive_size_bytes=receipt.archive_size_bytes,
+        archive_sha256=receipt.archive_sha256,
+        executable_relative_path=receipt.executable_relative_path,
+        license_name="MIT",
+        attribution_text="test",
+    )
+    manifest = ManagedRuntimeManifest(schema_version=1, artifacts=(artifact,))
+    monkeypatch.setattr(status_module, "MANAGED_RUNTIME_MANIFEST", manifest)
+    monkeypatch.setattr(
+        status_module,
+        "detect_current_platform",
+        lambda: DetectedPlatform(
+            platform=receipt.platform,
+            architecture=receipt.architecture,
+            raw_system="TestOS",
+            raw_machine="testarch",
+        ),
+    )
 
 
 def test_status_classifies_managed_runtime_as_managed_and_verified(
@@ -326,7 +401,8 @@ def test_status_classifies_managed_runtime_as_managed_and_verified(
 ) -> None:
     runtime_dir = tmp_path / "runtime"
     monkeypatch.setenv("ECONPAPERS_RUNTIME_DIR", str(runtime_dir))
-    executable_path = _install_managed_runtime(tmp_path, runtime_dir)
+    executable_path, receipt = _install_managed_runtime(tmp_path, runtime_dir)
+    _patch_manifest_to_match_receipt(monkeypatch, receipt)
 
     config_backend = JSONConfigStorage(tmp_path / "config.json")
     config_backend.save(_config(executable_path=executable_path))
@@ -349,7 +425,8 @@ def test_status_classifies_corrupt_managed_receipt_distinctly_from_model(
 ) -> None:
     runtime_dir = tmp_path / "runtime"
     monkeypatch.setenv("ECONPAPERS_RUNTIME_DIR", str(runtime_dir))
-    executable_path = _install_managed_runtime(tmp_path, runtime_dir)
+    executable_path, receipt = _install_managed_runtime(tmp_path, runtime_dir)
+    _patch_manifest_to_match_receipt(monkeypatch, receipt)
     install_dir = executable_path.parent
     (install_dir / "receipt.json").write_text("not valid json{{{", encoding="utf-8")
 
@@ -370,6 +447,70 @@ def test_status_classifies_corrupt_managed_receipt_distinctly_from_model(
     # The model check ran independently and was unaffected by the corrupt
     # runtime receipt.
     assert report.model_state is ModelState.VERIFIED
+
+
+def test_status_classifies_managed_runtime_as_corrupt_when_receipt_mismatches_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #58 review: a self-consistent receipt that simply doesn't match
+    the manifest-pinned artifact (wrong archive hash, wrong source, etc.)
+    must not be treated as verified."""
+    runtime_dir = tmp_path / "runtime"
+    monkeypatch.setenv("ECONPAPERS_RUNTIME_DIR", str(runtime_dir))
+    executable_path, receipt = _install_managed_runtime(tmp_path, runtime_dir)
+    # Patch the manifest to expect a different archive_sha256 than the
+    # receipt actually declares.
+    import econ_paper_cli.services.status_command as status_module
+    from econ_paper_cli.domain.runtime_manifest import (
+        ArchiveFormat,
+        ManagedRuntimeArtifact,
+        ManagedRuntimeManifest,
+    )
+    from econ_paper_cli.services.platform_detection import DetectedPlatform
+
+    mismatched_artifact = ManagedRuntimeArtifact(
+        runtime_id=receipt.runtime_id,
+        version_marker=receipt.version_marker,
+        platform=receipt.platform,
+        architecture=receipt.architecture,
+        source_url=receipt.source_asset_identity,
+        archive_format=ArchiveFormat.TAR_GZ,
+        archive_size_bytes=receipt.archive_size_bytes,
+        archive_sha256="f" * 64,  # deliberately different from the receipt
+        executable_relative_path=receipt.executable_relative_path,
+        license_name="MIT",
+        attribution_text="test",
+    )
+    monkeypatch.setattr(
+        status_module,
+        "MANAGED_RUNTIME_MANIFEST",
+        ManagedRuntimeManifest(schema_version=1, artifacts=(mismatched_artifact,)),
+    )
+    monkeypatch.setattr(
+        status_module,
+        "detect_current_platform",
+        lambda: DetectedPlatform(
+            platform=receipt.platform,
+            architecture=receipt.architecture,
+            raw_system="TestOS",
+            raw_machine="testarch",
+        ),
+    )
+
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(_config(executable_path=executable_path))
+    storage = SQLiteStorage(str(tmp_path / "missing.db"), read_only=True)
+
+    report = execute_status_command(
+        StatusCommandOptions(),
+        config_backend=config_backend,
+        storage=storage,
+        runtime_readiness_checker=_ok_runtime_checker,
+        model_readiness_checker=_ok_model_checker,
+    )
+
+    assert report.runtime_origin is RuntimeOrigin.MANAGED
+    assert report.runtime_state is RuntimeState.CORRUPT_OR_MISMATCHED
 
 
 def test_status_reports_unsupported_platform_when_no_config_and_unsupported(

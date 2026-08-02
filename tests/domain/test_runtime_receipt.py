@@ -74,6 +74,17 @@ def test_executable_must_appear_in_member_checksums() -> None:
         )
 
 
+def test_executable_sha256_must_match_its_member_checksums_entry() -> None:
+    """A hand-crafted or tampered receipt where the top-level
+    executable_sha256 disagrees with the (also present) member_checksums
+    entry for the same path must never validate."""
+    with pytest.raises(InstallReceiptError):
+        _receipt(
+            executable_sha256="c" * 64,
+            member_checksums=((EXE_PATH, VALID_SHA),),  # "a" * 64, not "c" * 64
+        )
+
+
 def test_member_checksums_must_be_nonempty() -> None:
     with pytest.raises(InstallReceiptError):
         _receipt(member_checksums=())

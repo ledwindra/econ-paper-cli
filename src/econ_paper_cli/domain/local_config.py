@@ -22,7 +22,13 @@ _REQUIRED_FIELDS = (
     "model_bytes",
     "model_checksum",
 )
-_OPTIONAL_FIELDS = ("threads", "timeout_seconds", "db_path")
+_OPTIONAL_FIELDS = (
+    "threads",
+    "timeout_seconds",
+    "db_path",
+    "runtime_id",
+    "runtime_version_marker",
+)
 _ALL_FIELDS = frozenset(_REQUIRED_FIELDS + _OPTIONAL_FIELDS)
 
 
@@ -49,6 +55,15 @@ class LocalRuntimeModelConfig:
     to repeat explicit runtime/model arguments. It intentionally excludes
     fixed reproducibility constants (context size, sampling parameters, ...)
     that remain owned by the concrete generation adapter.
+
+    ``runtime_id``/``runtime_version_marker`` are optional additions to
+    schema version 1 (not a version bump): a config written before they
+    existed simply loads with both as ``None``, and ``LlamaCppConfig``'s own
+    defaults apply exactly as before. They are populated only when
+    ``econpapers setup`` resolved the executable through managed
+    provisioning, so the exact pinned identity that was actually installed
+    survives a process restart instead of silently falling back to the
+    adapter's hard-coded default.
     """
 
     executable_path: Path
@@ -59,6 +74,8 @@ class LocalRuntimeModelConfig:
     threads: int | None = None
     timeout_seconds: float | None = None
     db_path: Path | None = None
+    runtime_id: str | None = None
+    runtime_version_marker: str | None = None
     schema_version: int = LOCAL_CONFIG_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -134,6 +151,31 @@ class LocalRuntimeModelConfig:
                 self, "db_path", _validate_nonempty_path("db_path", self.db_path)
             )
 
+        if self.runtime_id is not None:
+            if (
+                not isinstance(self.runtime_id, str)
+                or _MODEL_ID_PATTERN.fullmatch(self.runtime_id) is None
+            ):
+                raise LocalConfigValidationError(
+                    "runtime_id must be a non-empty string matching "
+                    "[a-z0-9]+(?:[._-][a-z0-9]+)* when set."
+                )
+
+        if self.runtime_version_marker is not None:
+            if (
+                not isinstance(self.runtime_version_marker, str)
+                or not self.runtime_version_marker.strip()
+            ):
+                raise LocalConfigValidationError(
+                    "runtime_version_marker must be a non-empty string when set."
+                )
+
+        if (self.runtime_id is None) != (self.runtime_version_marker is None):
+            raise LocalConfigValidationError(
+                "runtime_id and runtime_version_marker must both be set or both "
+                "be omitted together."
+            )
+
     def to_mapping(self) -> dict[str, object]:
         """Return a canonical, JSON-compatible mapping of this configuration."""
         return {
@@ -146,6 +188,8 @@ class LocalRuntimeModelConfig:
             "threads": self.threads,
             "timeout_seconds": self.timeout_seconds,
             "db_path": str(self.db_path) if self.db_path is not None else None,
+            "runtime_id": self.runtime_id,
+            "runtime_version_marker": self.runtime_version_marker,
         }
 
     @staticmethod
@@ -176,5 +220,7 @@ class LocalRuntimeModelConfig:
             threads=data.get("threads"),
             timeout_seconds=data.get("timeout_seconds"),
             db_path=data.get("db_path"),
+            runtime_id=data.get("runtime_id"),
+            runtime_version_marker=data.get("runtime_version_marker"),
             schema_version=data["schema_version"],
         )

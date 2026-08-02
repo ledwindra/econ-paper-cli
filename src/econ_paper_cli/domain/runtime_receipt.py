@@ -81,10 +81,15 @@ class InstallReceipt:
         )
         _validate_sha256("executable_sha256", self.executable_sha256)
         _validate_member_checksums(self.member_checksums)
-        member_paths = {path for path, _ in self.member_checksums}
-        if self.executable_relative_path not in member_paths:
+        member_checksum_map = dict(self.member_checksums)
+        if self.executable_relative_path not in member_checksum_map:
             raise InstallReceiptError(
                 "member_checksums must include an entry for executable_relative_path."
+            )
+        if member_checksum_map[self.executable_relative_path] != self.executable_sha256:
+            raise InstallReceiptError(
+                "executable_sha256 must equal the member_checksums entry for "
+                "executable_relative_path."
             )
 
     def member_checksum_map(self) -> dict[PurePosixPath, str]:

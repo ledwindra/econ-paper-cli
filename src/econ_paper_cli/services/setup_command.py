@@ -120,6 +120,8 @@ def run_setup_command(
             db_path=(
                 Path(options.db_path).resolve() if options.db_path is not None else None
             ),
+            runtime_id=runtime_id,
+            runtime_version_marker=runtime_version_marker,
         )
     except LocalConfigValidationError as error:
         err.write(f"Configuration error: {error}\n")
@@ -160,19 +162,17 @@ def run_setup_command(
         err.write(f"Failed to persist configuration: {error}\n")
         return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
 
-    out.write(
-        "\n".join(
-            (
-                "=== Setup Result ===",
-                "Status: ready",
-                f"Configuration Path: {backend.config_path}",
-                f"Runtime Executable: {config.executable_path}",
-                f"Model Path: {config.model_path}",
-                f"Model ID: {config.model_id}",
-            )
-        )
-        + "\n"
-    )
+    result_lines = [
+        "=== Setup Result ===",
+        "Status: ready",
+        f"Configuration Path: {backend.config_path}",
+        f"Runtime Executable: {config.executable_path}",
+    ]
+    if config.runtime_id is not None:
+        result_lines.append(f"Runtime ID: {config.runtime_id}")
+    result_lines.append(f"Model Path: {config.model_path}")
+    result_lines.append(f"Model ID: {config.model_id}")
+    out.write("\n".join(result_lines) + "\n")
     return CLIExitCode.SUCCESS
 
 

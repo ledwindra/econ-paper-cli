@@ -21,11 +21,12 @@ jobs:
           - macos-latest
           - windows-latest
         python-version:
-          # "3.10" resolves to the latest 3.10.x patch, which satisfies the
-          # >=3.10.12 floor pyproject.toml requires for safe tarfile
-          # extraction (PEP 706 filter="data") used by managed runtime
-          # provisioning (issue #58).
-          - "3.10"
+          # Pinned to an exact patch satisfying pyproject.toml's >=3.10.12
+          # floor (safe tarfile extraction, PEP 706 filter="data", used by
+          # managed runtime provisioning, issue #58) — the bare "3.10" minor
+          # spec resolves to whatever actions/setup-python has cached, which
+          # on some runners is still 3.10.11.
+          - "3.10.12"
           - "3.14"
 
     steps:

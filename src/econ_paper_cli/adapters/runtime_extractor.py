@@ -7,6 +7,14 @@ alongside this module's own explicit member validation (which runs first
 and is the primary defense, since it produces the specific
 ``UnsafeArchiveMemberError`` these tests assert on rather than a generic
 ``tarfile.FilterError``).
+
+Duplicate-member and path-separator handling is Windows-safe *canonically*,
+not just by raw string comparison: two distinct-looking member names that
+would collide once actually extracted — case-only variants (case-insensitive
+default filesystems on Windows/macOS), ``a/b`` vs. ``a\\b``, a trailing
+dot/space Windows silently strips, or an NTFS alternate-data-stream suffix —
+are all rejected, so this holds even when the extractor itself runs on a
+case-sensitive Linux CI host.
 """
 
 import stat
@@ -19,6 +27,13 @@ from econ_paper_cli.protocols.runtime_provisioning import (
     ExtractionError,
     UnsafeArchiveMemberError,
     UnsupportedArchiveFormatError,
+)
+
+_WINDOWS_FORBIDDEN_CHARACTERS = frozenset('<>:"|?*')
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{number}" for number in range(1, 10)}
+    | {f"LPT{number}" for number in range(1, 10)}
 )
 
 
@@ -86,15 +101,10 @@ class SafeArchiveExtractor:
 def _validate_member_name(
     name: str,
     destination_dir: Path,
-    seen_names: set[str],
+    seen_canonical_keys: set[str],
 ) -> None:
     if not name:
         raise UnsafeArchiveMemberError("Archive contains an empty member name.")
-    if name in seen_names:
-        raise UnsafeArchiveMemberError(
-            f"Archive contains a duplicate member name: '{name}'."
-        )
-    seen_names.add(name)
 
     normalized = name.replace("\\", "/")
     if normalized.startswith("/") or (len(normalized) >= 2 and normalized[1] == ":"):
@@ -106,6 +116,20 @@ def _validate_member_name(
         raise UnsafeArchiveMemberError(
             f"Archive member '{name}' attempts parent-directory traversal."
         )
+    _validate_portable_parts(name, posix_name.parts)
+
+    # Duplicate detection uses a *canonical* key — case-folded (Windows/
+    # macOS default filesystems are case-insensitive) and with Windows'
+    # trailing dot/space stripped per component — not the raw member name,
+    # so distinct-looking members that would collide once actually
+    # extracted are caught even on a case-sensitive Linux CI host.
+    canonical_key = "/".join(part.rstrip(" .").casefold() for part in posix_name.parts)
+    if canonical_key in seen_canonical_keys:
+        raise UnsafeArchiveMemberError(
+            f"Archive member '{name}' collides with another member once "
+            "canonicalized (case, separator, or trailing dot/space)."
+        )
+    seen_canonical_keys.add(canonical_key)
 
     destination_root = destination_dir.resolve()
     resolved_target = (destination_root / posix_name).resolve()
@@ -116,3 +140,20 @@ def _validate_member_name(
         raise UnsafeArchiveMemberError(
             f"Archive member '{name}' resolves outside the destination directory."
         )
+
+
+def _validate_portable_parts(name: str, parts: tuple[str, ...]) -> None:
+    for part in parts:
+        reserved_name = part.split(".", maxsplit=1)[0].upper()
+        if (
+            any(ord(character) < 32 for character in part)
+            or any(character in _WINDOWS_FORBIDDEN_CHARACTERS for character in part)
+            or part.endswith((" ", "."))
+            or reserved_name in _WINDOWS_RESERVED_NAMES
+        ):
+            raise UnsafeArchiveMemberError(
+                f"Archive member '{name}' contains a path component that is not "
+                "portable across Windows, macOS, and Linux (forbidden character, "
+                "reserved device name, alternate-data-stream syntax, or a "
+                "trailing dot/space)."
+            )

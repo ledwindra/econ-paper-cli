@@ -284,16 +284,17 @@ def test_missing_executable_in_archive_never_promotes(tmp_path: Path) -> None:
 def test_downloaded_archive_checksum_mismatch_never_promotes(tmp_path: Path) -> None:
     """The manifest's pinned SHA-256 is verified against the *downloaded*
     archive before extraction; a mismatch must abort before anything is
-    extracted or promoted, and clean up the staging directory."""
-    from econ_paper_cli.adapters.filesystem import ChecksumMismatchError
-
+    extracted or promoted, and clean up the staging directory. The raw
+    filesystem-layer error is wrapped into a RuntimeProvisioningError
+    subtype so it never escapes the typed setup boundary (issue #58
+    review)."""
     archive_bytes, _correct_sha, size = _build_archive(tmp_path)
     wrong_sha = "0" * 64
     artifact = _artifact(wrong_sha, size)
     manifest = ManagedRuntimeManifest(schema_version=1, artifacts=(artifact,))
     runtime_dir = tmp_path / "runtime"
 
-    with pytest.raises(ChecksumMismatchError):
+    with pytest.raises(StagedRuntimeVerificationError):
         ensure_managed_runtime(
             runtime_dir=runtime_dir,
             downloader=_FakeDownloader(archive_bytes),
@@ -310,9 +311,8 @@ def test_downloaded_archive_checksum_mismatch_never_promotes(tmp_path: Path) -> 
 def test_downloaded_archive_size_mismatch_never_promotes(tmp_path: Path) -> None:
     """A manifest expected_size that doesn't match the actual downloaded
     archive size is caught before extraction (independent of the
-    downloader's own incremental byte-cap enforcement)."""
-    from econ_paper_cli.adapters.filesystem import SizeMismatchError
-
+    downloader's own incremental byte-cap enforcement), and wrapped into a
+    RuntimeProvisioningError subtype rather than escaping raw."""
     archive_bytes, sha, size = _build_archive(tmp_path)
     artifact = _artifact(sha, size + 1)
     manifest = ManagedRuntimeManifest(schema_version=1, artifacts=(artifact,))
@@ -328,7 +328,7 @@ def test_downloaded_archive_size_mismatch_never_promotes(tmp_path: Path) -> None
         ) -> None:
             destination.write_bytes(archive_bytes)
 
-    with pytest.raises(SizeMismatchError):
+    with pytest.raises(StagedRuntimeVerificationError):
         ensure_managed_runtime(
             runtime_dir=runtime_dir,
             downloader=OversizedIgnoringDownloader(),
@@ -343,6 +343,91 @@ def test_downloaded_archive_size_mismatch_never_promotes(tmp_path: Path) -> None
 
 
 # --- Corruption detection --------------------------------------------------
+
+
+def test_undeclared_extra_file_in_install_dir_is_detected_as_corrupt(
+    tmp_path: Path,
+) -> None:
+    """An injected file not present in the receipt's member_checksums (e.g.
+    a malicious adjacent library) must not silently pass verification just
+    because every *declared* member still checks out."""
+    manifest, archive_bytes = _manifest_and_bytes(tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    install = ensure_managed_runtime(
+        runtime_dir=runtime_dir,
+        downloader=_FakeDownloader(archive_bytes),
+        extractor=_FakeExtractor(),
+        manifest=manifest,
+        detected=_DETECTED,
+        executable_readiness_checker=_noop_checker,
+    )
+
+    (install.install_dir / "pkg" / "injected-extra.so").write_bytes(b"malicious")
+
+    with pytest.raises(CorruptManagedInstallError):
+        verify_managed_install(install.install_dir)
+
+
+def test_reuse_check_rejects_receipt_that_mismatches_current_manifest(
+    tmp_path: Path,
+) -> None:
+    """A self-consistent receipt (every declared member checksum matches)
+    that simply does not match the manifest-selected artifact anymore (e.g.
+    a stale install from a since-changed pinned release) must be treated as
+    corrupt and reinstalled, not silently reused."""
+    manifest, archive_bytes = _manifest_and_bytes(tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    first = ensure_managed_runtime(
+        runtime_dir=runtime_dir,
+        downloader=_FakeDownloader(archive_bytes),
+        extractor=_FakeExtractor(),
+        manifest=manifest,
+        detected=_DETECTED,
+        executable_readiness_checker=_noop_checker,
+    )
+    verify_managed_install(first.install_dir)  # self-consistent, still valid alone
+
+    # A manifest update repoints the same runtime_id at a different pinned
+    # archive (different source URL), without the on-disk install having
+    # changed at all.
+    changed_artifact = _artifact(
+        first.receipt.archive_sha256, first.receipt.archive_size_bytes
+    )
+    changed_artifact = ManagedRuntimeArtifact(
+        runtime_id=changed_artifact.runtime_id,
+        version_marker=changed_artifact.version_marker,
+        platform=changed_artifact.platform,
+        architecture=changed_artifact.architecture,
+        source_url="https://example.com/a-different-pinned-release.tar.gz",
+        archive_format=changed_artifact.archive_format,
+        archive_size_bytes=changed_artifact.archive_size_bytes,
+        archive_sha256=changed_artifact.archive_sha256,
+        executable_relative_path=changed_artifact.executable_relative_path,
+        license_name=changed_artifact.license_name,
+        attribution_text=changed_artifact.attribution_text,
+    )
+
+    with pytest.raises(CorruptManagedInstallError):
+        verify_managed_install(first.install_dir, expected_artifact=changed_artifact)
+
+    # And ensure_managed_runtime itself must not silently reuse it either —
+    # it re-provisions (using the *new* artifact's download) instead.
+    changed_manifest = ManagedRuntimeManifest(
+        schema_version=1, artifacts=(changed_artifact,)
+    )
+    downloader = _FakeDownloader(archive_bytes)
+    second = ensure_managed_runtime(
+        runtime_dir=runtime_dir,
+        downloader=downloader,
+        extractor=_FakeExtractor(),
+        manifest=changed_manifest,
+        detected=_DETECTED,
+        executable_readiness_checker=_noop_checker,
+    )
+    assert len(downloader.calls) == 1
+    assert second.receipt.source_asset_identity == (
+        "https://example.com/a-different-pinned-release.tar.gz"
+    )
 
 
 def test_corrupt_receipt_is_never_trusted_and_triggers_reinstall(
