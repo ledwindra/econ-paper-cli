@@ -385,21 +385,41 @@ def test_heading_grammar_variants_and_case_insensitivity() -> None:
     assert len(res3.sections) == 2
     assert "Framework text" not in res3.sections[1].text
 
+    # 4. Explicit 'Section 1: Introduction' prefix
+    text4 = "Abstract\nAbstract text.\n\nSection 1: Introduction\nIntro text.\n\n2. Data\nData text.\n"
+    res4 = detect_pdf_sections(
+        _extraction(text4), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+    assert len(res4.sections) == 2
+    assert res4.sections[1].observed_heading_text == "Section 1: Introduction"
 
-def test_false_positive_prose_and_numbered_citations_rejected() -> None:
-    # Numbered prose, in-sentence references, TOC dot leaders, parenthetical lists
+
+def test_structured_false_positive_rejections_and_legitimate_headings() -> None:
+    # Test equations, citations, cross-references, declarative prose starts, and legitimate headings
     text = (
         "Abstract\nAbstract text.\n\n"
         "1. Introduction\nIntro prose.\n\n"
-        "1. In this paper we show that institutions matter.\n"
-        "(1) We find that regional policy varies.\n"
-        "Section 1 shows that productivity increases.\n"
-        "Table of contents ........ 14\n\n"
-        "2. Data and Methods\nReal section 2 text.\n"
+        "2 Utility = income + leisure\n"
+        "2 Smith (2020) shows effects\n"
+        "2 Section 3 reports results\n"
+        "2 Table 4 reports estimates\n"
+        "2 We thank the editor\n\n"
+        "2. Our Results\nReal section 2 text.\n"
     )
     res = detect_pdf_sections(_extraction(text), settings=DEFAULT_PDF_SECTION_SETTINGS)
     assert len(res.sections) == 2
     intro = res.sections[1]
     assert intro.observed_heading_text == "1. Introduction"
-    assert "1. In this paper we show" in intro.text
+    assert "2 Utility = income + leisure" in intro.text
+    assert "2 Smith (2020) shows effects" in intro.text
+    assert "2 Section 3 reports results" in intro.text
+    assert "2 Table 4 reports estimates" in intro.text
+    assert "2 We thank the editor" in intro.text
     assert "Real section 2 text" not in intro.text
+
+
+def test_legitimate_headings_with_results_or_test_words() -> None:
+    text = "Abstract\nAbstract text.\n\n1. Introduction\nIntro text.\n\n2. What We Test\nTest section text.\n"
+    res = detect_pdf_sections(_extraction(text), settings=DEFAULT_PDF_SECTION_SETTINGS)
+    assert len(res.sections) == 2
+    assert "Test section text" not in res.sections[1].text

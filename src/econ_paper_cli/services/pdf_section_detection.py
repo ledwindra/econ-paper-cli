@@ -17,19 +17,35 @@ from econ_paper_cli.domain.pdf_sections import (
 )
 
 _ABSTRACT_HEADING_RE = re.compile(
-    r"^\s*(?:(?:1|I|A)(?:[\.\:]|\s*\|\s*)?\s+)?ABSTRACT[\.\:]?\s*$",
+    r"^\s*(?:(?:SECTION\s+)?(?:1|I|A)(?:[\.\:]|\s*\|\s*)?\s+)?ABSTRACT[\.\:]?\s*$",
     re.IGNORECASE,
 )
 _INTRODUCTION_HEADING_RE = re.compile(
-    r"^\s*(?:(?:1|1\.0|I)(?:[\.\:]|\s*\|\s*)?\s+)?INTRODUCTION[\.\:]?\s*$",
+    r"^\s*(?:(?:SECTION\s+)?(?:1|1\.0|I)(?:[\.\:]|\s*\|\s*)?\s+)?INTRODUCTION[\.\:]?\s*$",
     re.IGNORECASE,
 )
 
-_NEXT_SECTION_TITLE_RE = re.compile(
-    r"^\s*(?:[2-9]|\d{2,}|II|III|IV|V|VI|VII|VIII|IX|X)(?:[\.\:]|\s*\|\s*)?\s+(.+)$",
+_EXPLICIT_NEXT_SECTION_TITLE_RE = re.compile(
+    r"^\s*(?:(?:SECTION\s+)?(?:[2-9]|\d{2,}|II|III|IV|V|VI|VII|VIII|IX|X)(?:[\.\:]|\s*\|\s*)?\s+)(.+)$",
     re.IGNORECASE,
 )
+_IMPLICIT_NEXT_SECTION_TITLE_RE = re.compile(
+    r"^\s*(?:(?:SECTION\s+)?(?:[1-9]|\d{2,}|I{1,3}|IV|V|VI|VII|VIII|IX|X)(?:[\.\:]|\s*\|\s*)?\s+)(.+)$",
+    re.IGNORECASE,
+)
+
 _TOC_DOT_LEADERS_RE = re.compile(r"\.{4,}")
+_CITATION_PATTERNS_RE = re.compile(
+    r"\b[A-Z][a-zA-Z]+(?:\s+et\s+al\.)?\s*\(\d{4}\)|\(\s*[A-Z][a-zA-Z]+(?:\s+et\s+al\.)?,\s*\d{4}\s*\)|\[\d+\]"
+)
+_CROSS_REF_PATTERNS_RE = re.compile(
+    r"^(?:Section|Table|Figure|Fig|Equation|Eq|Appendix|Column|Row)\s+\d+",
+    re.IGNORECASE,
+)
+_DECLARATIVE_PROSE_START_RE = re.compile(
+    r"^(?:We\s+(?:thank|acknowledge|show|find|estimate|evaluate|test|propose)|In\s+this|As\s+shown|The\s+results)\b",
+    re.IGNORECASE,
+)
 
 
 class _LineInfo:
@@ -362,6 +378,8 @@ def _find_next_section_candidate(
     lines: list[_LineInfo],
     start_index: int,
     running_headers: set[str],
+    *,
+    is_implicit_intro: bool = False,
 ) -> _CandidateMatch | None:
     for idx in range(start_index, len(lines)):
         line = lines[idx]
@@ -378,42 +396,34 @@ def _find_next_section_candidate(
             idx == len(lines) - 1 or lines[idx + 1].page_number != line.page_number
         )
         is_boundary = prev_blank or next_blank or is_first_line or is_last_line
-        if _is_genuine_next_top_level_heading(line, is_boundary):
+        if _is_genuine_next_top_level_heading(
+            line, is_boundary, is_implicit_intro=is_implicit_intro
+        ):
             return _CandidateMatch(PDFSectionKind.INTRODUCTION, idx, line, 2)
     return None
 
 
-_PROSE_VERB_PHRASES = (
-    "are shown",
-    "is shown",
-    "confirm the",
-    "confirms the",
-    "respond to",
-    "responds to",
-    "were collected",
-    "we estimate",
-    "they find",
-    "which shows",
-    "and we find",
-    "we show",
-    "we test",
-    "we propose",
-    "we evaluate",
-    "our results",
-    "in section",
-    "section 1",
-    "table 1",
-    "figure 1",
-)
-
-
-def _is_genuine_next_top_level_heading(line: _LineInfo, is_boundary: bool) -> bool:
-    match = _NEXT_SECTION_TITLE_RE.match(line.trimmed)
+def _is_genuine_next_top_level_heading(
+    line: _LineInfo,
+    is_boundary: bool,
+    *,
+    is_implicit_intro: bool = False,
+) -> bool:
+    pattern = (
+        _IMPLICIT_NEXT_SECTION_TITLE_RE
+        if is_implicit_intro
+        else _EXPLICIT_NEXT_SECTION_TITLE_RE
+    )
+    match = pattern.match(line.trimmed)
     if not match:
         return False
 
     title_part = match.group(1).strip()
     if not title_part or len(title_part) > 60:
+        return False
+
+    # Disambiguation: if implicit intro, title_part cannot be 'Introduction'
+    if is_implicit_intro and title_part.lower() == "introduction":
         return False
 
     # Check terminal period clause: prose sentences ending in a period with > 3 words
@@ -432,9 +442,21 @@ def _is_genuine_next_top_level_heading(line: _LineInfo, is_boundary: bool) -> bo
     if not (title_part[0].isupper() or title_part[0].isdigit()):
         return False
 
-    # Check for prose verb phrases
-    title_lower = title_part.lower()
-    if any(phrase in title_lower for phrase in _PROSE_VERB_PHRASES):
+    # Structured Non-Heading Rejections:
+    # 1. Equations (e.g. "2 Utility = income + leisure", "1 y = x + z")
+    if "=" in title_part or "+" in title_part:
+        return False
+
+    # 2. Citations (e.g. "2 Smith (2020) shows effects")
+    if _CITATION_PATTERNS_RE.search(title_part):
+        return False
+
+    # 3. Cross-references (e.g. "2 Section 3 reports results", "2 Table 4 reports estimates")
+    if _CROSS_REF_PATTERNS_RE.search(title_part):
+        return False
+
+    # 4. Declarative prose starts (e.g. "2 We thank the editor")
+    if _DECLARATIVE_PROSE_START_RE.search(title_part):
         return False
 
     # Must have structural heading context (blank line or page boundary)
