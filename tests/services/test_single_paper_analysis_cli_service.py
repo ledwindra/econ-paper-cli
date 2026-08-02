@@ -600,6 +600,7 @@ def test_invalid_executable_path_returns_code_2(
         model_id="test-model",
         model_bytes=5,
         model_checksum="a" * 64,
+        db_path=tmp_path / "invalid-executable.db",
     )
 
     assert (
@@ -624,6 +625,7 @@ def test_invalid_model_path_returns_code_2(
         model_id="test-model",
         model_bytes=5,
         model_checksum="a" * 64,
+        db_path=tmp_path / "invalid-model-path.db",
     )
 
     assert (
@@ -650,6 +652,7 @@ def test_invalid_model_size_returns_code_2(
         model_id="test-model",
         model_bytes=99999,
         model_checksum="a" * 64,
+        db_path=tmp_path / "invalid-model-size.db",
     )
 
     assert (
@@ -677,6 +680,7 @@ def test_invalid_model_checksum_returns_code_2(
         model_id="test-model",
         model_bytes=len(model_content),
         model_checksum="f" * 64,
+        db_path=tmp_path / "invalid-model-checksum.db",
     )
 
     assert (

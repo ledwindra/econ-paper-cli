@@ -3,6 +3,7 @@
 from typing import Protocol, runtime_checkable
 
 from econ_paper_cli.domain.corpora import Corpus
+from econ_paper_cli.domain.early_section_library import EarlySectionLibraryRecord
 from econ_paper_cli.domain.papers import Paper
 from econ_paper_cli.domain.passages import Passage
 from econ_paper_cli.domain.single_paper_analysis import SinglePaperAnalysisRecord
@@ -87,6 +88,24 @@ class StorageBackend(Protocol):
 
     def delete_paper_record(self, paper_id: str) -> bool:
         """Delete paper_id and all associated data in a single transaction."""
+        ...
+
+    def save_early_section_record(self, record: EarlySectionLibraryRecord) -> None:
+        """Persist or replace a complete early-section record atomically."""
+        ...
+
+    def get_early_section_record(
+        self, paper_id: str
+    ) -> EarlySectionLibraryRecord | None:
+        """Retrieve and strictly validate an early-section record."""
+        ...
+
+    def list_early_section_records(self) -> tuple[EarlySectionLibraryRecord, ...]:
+        """Return early-section records ordered by paper_id."""
+        ...
+
+    def delete_early_section_record(self, paper_id: str) -> bool:
+        """Delete an early-section record and its shared paper representation."""
         ...
 
     def count_papers(self) -> int:

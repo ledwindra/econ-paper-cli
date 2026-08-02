@@ -291,8 +291,7 @@ passage, provenance, settings, warnings, and completion tables.
 and database path resolution for Windows (`%LOCALAPPDATA%` / `%APPDATA%`), macOS
 (`~/Library/Application Support`), and Linux (`${XDG_DATA_HOME:-~/.local/share}`),
 with explicit `ECONPAPERS_LIBRARY_DIR` environment variable override. End-to-end PDF
-ingestion, OCR, Markdown conversion, retrieval-index persistence, and cloud storage
-remain unimplemented.
+ingestion, OCR, retrieval-index persistence, and cloud storage remain unimplemented.
 
 Issue 28 implements deterministic PDF discovery and ingestion preflight through
 `econ_paper_cli.services.ingestion.run_ingestion_preflight`. It accepts an explicit PDF
@@ -346,6 +345,20 @@ It does not change the existing `Passage` contract, infer source-path equality,
 convert later sections, write derived artifacts, populate SQLite, or build a
 retrieval index. See
 [`docs/pdf-early-section-conversion.md`](pdf-early-section-conversion.md).
+
+Issue 48 adds the immutable `EarlySectionLibraryRecord`, a pure projection
+service, explicit storage-protocol operations, and SQLite schema version 4.
+Successful early-section Markdown, passages, parser/conversion identity, and
+ordered page-local provenance fragments now survive database restart. Fragment
+source text is retained so strict read-back can validate each stored fragment
+against its passage slice without claiming that full extraction pages are
+stored. Atomic replacement preserves the original durable creation timestamp,
+uses the injected projection timestamp as the update timestamp, and removes
+stale passages and fragments in the same transaction. Stored passages remain
+available through `load_corpus()` and the existing in-memory BM25 adapter. This
+boundary is not yet connected to `econpapers analyze` and does not write
+Markdown files or persist a retrieval index. See
+[`docs/early-section-library-storage.md`](early-section-library-storage.md).
 
 Future changes should introduce only the narrow interfaces required by their
 issue and use dependency injection rather than global state.
