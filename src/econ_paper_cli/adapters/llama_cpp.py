@@ -25,9 +25,27 @@ from econ_paper_cli.protocols import (
     validate_generation_response,
 )
 
-PROMPT_VERSION = "generation-v1"
+# v2 makes the abstention contract structurally unrepresentable when
+# violated, rather than merely instructing the model to honour it. Under v1
+# the grammar allowed any combination of `abstained` and `abstention_reason`,
+# so a small local model routinely emitted `"abstained": false` together with
+# `"abstention_reason": "insufficient_evidence"` — a self-contradiction that
+# `validate_generation_response` correctly rejected, surfacing to the user as
+# a bare "output violated the generation response schema" and losing the
+# answer. The v2 grammar has two mutually exclusive roots that also bind
+# citation_ids and finding_kinds to the abstention state.
+#
+# v2 additionally bounds the list rules. The domain contract forbids
+# duplicate finding_kinds, but a grammar permitting unbounded repeats let a
+# small model fall into a degenerate loop emitting
+# `"causal", "causal", "causal", ...` until it exhausted the output budget
+# and truncated mid-object — reaching the user as "Local model returned
+# invalid JSON". finding_kinds is now enumerated to its legal unique
+# combinations, and citation_ids is length-capped so no runaway is
+# representable.
+PROMPT_VERSION = "generation-v2"
 OUTPUT_GRAMMAR_SHA256 = (
-    "9250e1c3b625890912906f610d87c52f4595b9bbf69233744652ca1e35e556ff"
+    "6a136e0081a86f96345c34b97649d7ba5f70eb35697a688b4314dc3bd46f84ec"
 )
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 _MODEL_ID_PATTERN = re.compile(r"[a-z0-9]+(?:[._-][a-z0-9]+)*")
@@ -44,6 +62,11 @@ _RESOURCE_DIRECTORY = Path(__file__).with_name("resources")
 _PROMPT_TEMPLATE_PATH = _RESOURCE_DIRECTORY / f"{PROMPT_VERSION}.txt"
 _OUTPUT_GRAMMAR_PATH = _RESOURCE_DIRECTORY / f"{PROMPT_VERSION}.gbnf"
 _COMPLETION_FOOTER = "\n> EOF by user"
+# llama.cpp tags severity inline, e.g.
+#   "0.00.545.833 E llama_completion: prompt is too long (4859 tokens, max 4092)"
+# Only the text after an explicit error tag is ever surfaced to the user.
+_RUNTIME_ERROR_LINE_RE = re.compile(r"\bE\s+\w+:\s*")
+_MAX_RUNTIME_ERROR_DETAIL_CHARS = 200
 
 CancellationCheck = Callable[[], bool]
 
@@ -91,8 +114,20 @@ class LlamaCppConfig:
     model_sha256: str
     runtime_id: str = "llama.cpp-b10199"
     runtime_version_marker: str = "10199"
-    context_size: int = 4096
-    max_output_tokens: int = 512
+    # Sized from a real local corpus rather than a round number: across a
+    # 248-paper economics library, the Abstract+Introduction text a prompt is
+    # built from runs ~3.3k tokens at the median and ~6.5k at the 90th
+    # percentile. A 4096 window rejected roughly half of those papers with
+    # llama.cpp's "prompt is too long", so research-question extraction failed
+    # on essentially the whole corpus while surfacing only an opaque non-zero
+    # exit status. 16384 admits ~99% of that corpus and still keeps the KV
+    # cache small for a local model.
+    context_size: int = 16384
+    # The grammar-constrained envelope must be emitted in full: a cap that
+    # truncates mid-object yields unparseable JSON, which surfaced as
+    # "Local model returned invalid JSON" on real papers whose answer text
+    # ran long. Kept well below context_size.
+    max_output_tokens: int = 1024
     threads: int | None = None
     seed: int = 42
     temperature: float = 0.2
@@ -405,8 +440,10 @@ class LlamaCppGenerator:
             result = self._run_process(command)
 
         if result.returncode != 0:
+            detail = _runtime_error_detail(result.stderr)
             raise LlamaCppProcessError(
                 f"Local generation runtime exited with status {result.returncode}."
+                + (f" {detail}" if detail else "")
             )
         response = self._parse_response(request, result.stdout)
         try:
@@ -569,6 +606,32 @@ def _parse_single_json_object(raw_output: str) -> dict[str, object]:
     if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
         raise LlamaCppOutputError("Local model output must be one JSON object.")
     return cast(dict[str, object], value)
+
+
+def _runtime_error_detail(stderr: str) -> str:
+    """Return the runtime's own final error line, or "" if none is present.
+
+    Only lines the runtime explicitly tagged as errors are surfaced, never
+    arbitrary stderr content: the captured stream can echo prompt-derived
+    material, and this project must not leak substantial document excerpts
+    into error messages or logs. The result is additionally length-capped.
+
+    Without this, a perfectly diagnosable failure such as llama.cpp's
+    "prompt is too long (4859 tokens, max 4092)" reached the user as nothing
+    but "exited with status 1".
+    """
+    if not isinstance(stderr, str):
+        return ""
+    for line in reversed(stderr.splitlines()):
+        candidate = line.strip()
+        if not candidate:
+            continue
+        marker = _RUNTIME_ERROR_LINE_RE.search(candidate)
+        if marker is not None:
+            message = candidate[marker.end() :].strip()
+            if message:
+                return message[:_MAX_RUNTIME_ERROR_DETAIL_CHARS]
+    return ""
 
 
 def _strip_completion_footer(raw_output: str) -> str:

@@ -1,5 +1,6 @@
 """Service integration tests for end-to-end single-paper research-question analysis."""
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from econ_paper_cli.domain import (
     PDFExtractionResult,
     PDFQualityStatus,
     ResearchQuestionKind,
+    ResearchQuestionSettings,
     ResearchQuestionWarningCode,
     SinglePaperAnalysisFailureCode,
     SinglePaperAnalysisStage,
@@ -145,6 +147,14 @@ def _create_valid_pdf_file(tmp_path: Path, filename: str = "paper.pdf") -> Path:
     return path
 
 
+_V1_ANALYSIS_SETTINGS = dataclasses.replace(
+    DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+    research_question_settings=ResearchQuestionSettings(
+        policy_version="research-question-extraction-v1"
+    ),
+)
+
+
 def _make_success_response_json(abs_text: str, exc: str) -> str:
     start_off = abs_text.find(exc)
     return json.dumps(
@@ -172,11 +182,10 @@ def _make_success_response_json(abs_text: str, exc: str) -> str:
 def test_successful_single_pdf_analysis_flow(tmp_path: Path) -> None:
     pdf_path = _create_valid_pdf_file(tmp_path)
 
-    abs_text = "Abstract\nWe evaluate trade policy."
-    exc = "We evaluate trade policy."
-    resp_json = _make_success_response_json(abs_text, exc)
+    # v2 (the default): the model returns the question sentence itself and
+    # cites a section; provenance is derived from the detected spans.
     extractor = FakePDFExtractor()
-    generator = FakeGenerator(response_text=resp_json)
+    generator = FakeGenerator(response_text="What is the impact of trade policy?")
 
     res = analyze_single_paper(
         pdf_path, extractor, generator, settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS
@@ -192,7 +201,9 @@ def test_successful_single_pdf_analysis_flow(tmp_path: Path) -> None:
     assert res.quality_assessment is not None
     assert res.section_result is not None
     assert res.research_question_result is not None
-    assert res.research_question_result.kind is ResearchQuestionKind.EXPLICIT
+    # The source section carries no interrogative sentence, so the question
+    # was inferred rather than stated outright.
+    assert res.research_question_result.kind is ResearchQuestionKind.INFERRED
     assert (
         res.research_question_result.question_text
         == "What is the impact of trade policy?"
@@ -700,13 +711,16 @@ def test_generator_failure_halts_question_extraction(tmp_path: Path) -> None:
 
 
 def test_malformed_json_response_halts_question_extraction(tmp_path: Path) -> None:
+    """v1-specific: under v1 the model had to return a structured JSON
+    object, so non-JSON is malformed. v2 asks for a plain sentence and has
+    no such failure mode."""
     pdf_path = _create_valid_pdf_file(tmp_path)
 
     extractor = FakePDFExtractor()
     generator = FakeGenerator(response_text="this is not json at all!!")
 
     res = analyze_single_paper(
-        pdf_path, extractor, generator, settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS
+        pdf_path, extractor, generator, settings=_V1_ANALYSIS_SETTINGS
     )
 
     assert res.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
@@ -718,6 +732,7 @@ def test_malformed_json_response_halts_question_extraction(tmp_path: Path) -> No
 
 
 def test_ungrounded_evidence_halts_question_extraction(tmp_path: Path) -> None:
+    """v1-specific: model-supplied offsets could disagree with the source."""
     pdf_path = _create_valid_pdf_file(tmp_path)
 
     extractor = FakePDFExtractor()
@@ -739,7 +754,7 @@ def test_ungrounded_evidence_halts_question_extraction(tmp_path: Path) -> None:
     generator = FakeGenerator(response_text=bad_json)
 
     res = analyze_single_paper(
-        pdf_path, extractor, generator, settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS
+        pdf_path, extractor, generator, settings=_V1_ANALYSIS_SETTINGS
     )
 
     assert res.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED

@@ -87,8 +87,17 @@ def test_research_question_warning_validation() -> None:
 
 
 def test_research_question_settings_validation() -> None:
+    # v2 is the default: v1 required the model to invent exact page
+    # character offsets, which no local model produced reliably.
     assert (
         DEFAULT_RESEARCH_QUESTION_SETTINGS.policy_version
+        == "research-question-extraction-v2"
+    )
+    # v1 remains readable so already-stored records keep validating.
+    assert (
+        ResearchQuestionSettings(
+            policy_version="research-question-extraction-v1"
+        ).policy_version
         == "research-question-extraction-v1"
     )
 

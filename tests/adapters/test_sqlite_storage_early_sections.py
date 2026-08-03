@@ -39,6 +39,7 @@ def _record(
     max_characters: int = 1200,
     source_path: Path | None = None,
     section_policy_version: str = "pdf-section-detection-v2",
+    checksum: str = CHECKSUM,
 ) -> EarlySectionLibraryRecord:
     """Build a record genuinely produced under ``section_policy_version``.
 
@@ -79,7 +80,7 @@ def _record(
         section_policy_version=section_policy_version,
     )
     conversion = convert_pdf_early_sections(
-        extraction, detection, content_checksum=CHECKSUM, settings=settings
+        extraction, detection, content_checksum=checksum, settings=settings
     )
     return project_early_section_library_record(
         extraction,
@@ -405,4 +406,53 @@ def test_v3_migration_preserves_legacy_markdown_path(tmp_path: Path) -> None:
     ).fetchone()
     assert tuple(row) == ("/legacy.md", "legacy-unknown")
     assert storage.get_schema_version() == 6
+    storage.close()
+
+
+def test_row_stale_under_a_since_changed_fingerprint_formula_is_skipped_not_fatal(
+    tmp_path: Path,
+) -> None:
+    """A record saved before ``section_policy_version`` was folded into the
+    composite fingerprint has passage_ids permanently derived from the
+    *old*-formula fingerprint value stored on that row. It cannot satisfy
+    today's formula (recomputing would break its own passage_id identity
+    instead) and is therefore genuinely stale — direct access reports it as
+    such, exactly like any other integrity failure. What must not happen is
+    one such row aborting ``list_early_section_records()`` (and therefore
+    ``load_corpus()``/chat) for every *other*, still-valid paper in the
+    library."""
+    database = tmp_path / "library.sqlite3"
+    storage = SQLiteStorage(database)
+    storage.initialize()
+
+    stale_record = _record(
+        source_path=Path.cwd().resolve() / "stale.pdf", checksum="a" * 64
+    )
+    healthy_record = _record(
+        source_path=Path.cwd().resolve() / "healthy.pdf",
+        timestamp="2026-08-01T13:00:00+00:00",
+        checksum="c" * 64,
+    )
+    storage.save_early_section_record(stale_record)
+    storage.save_early_section_record(healthy_record)
+
+    conn = storage._conn
+    assert conn is not None
+    # Simulate a stored fingerprint computed under a formula that predates
+    # today's code — self-consistent with nothing this build can recompute.
+    stale_fingerprint = "0" * 64
+    assert stale_fingerprint != stale_record.settings_fingerprint
+    conn.execute(
+        "UPDATE early_section_records SET settings_fingerprint = ? WHERE paper_id = ?",
+        (stale_fingerprint, stale_record.paper.paper_id),
+    )
+    conn.commit()
+
+    with pytest.raises(StorageValidationError):
+        storage.get_early_section_record(stale_record.paper.paper_id)
+
+    all_records = storage.list_early_section_records()
+    assert {record.paper.paper_id for record in all_records} == {
+        healthy_record.paper.paper_id
+    }
     storage.close()

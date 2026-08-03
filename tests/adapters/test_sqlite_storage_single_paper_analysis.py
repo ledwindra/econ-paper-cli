@@ -495,7 +495,7 @@ def test_implicit_section_roundtrip_and_restart(tmp_path: Path) -> None:
         end_character_offset=34,
     )
     rq_res = ResearchQuestionResult(
-        policy_version="research-question-extraction-v1",
+        policy_version="research-question-extraction-v2",
         question_text="What is the implicit question?",
         kind=ResearchQuestionKind.INFERRED,
         sections_used=(PDFSectionKind.ABSTRACT,),

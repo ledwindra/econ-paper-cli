@@ -260,12 +260,11 @@ def test_run_single_paper_analysis_command_success_exact_rendering(
     db_path = tmp_path / "analysis.db"
     opts = _make_options(pdf_path, tmp_path, db_path=db_path)
 
-    abs_text = "Abstract\nWe evaluate trade policy."
-    exc = "We evaluate trade policy."
-    resp_json = _make_success_response_json(abs_text, exc)
-
+    # v2 (the default policy): the model returns the question sentence and
+    # cites a section; the excerpt/offsets below are derived from the
+    # detected section spans, not from the model.
     extractor = FakePDFExtractor()
-    generator = FakeGenerator(response_text=resp_json)
+    generator = FakeGenerator(response_text="What is the impact of trade policy?")
     storage = SQLiteStorage(db_path)
     storage.initialize()
 
@@ -285,12 +284,14 @@ def test_run_single_paper_analysis_command_success_exact_rendering(
         "Status: success\n"
         "Quality Status: usable_with_warnings\n\n"
         "--- Research Question ---\n"
-        "Kind: explicit\n"
+        "Kind: inferred\n"
         "Question Text: What is the impact of trade policy?\n"
-        "Sections Used: abstract\n\n"
+        "Sections Used: abstract, introduction\n\n"
         "--- Evidence Excerpts ---\n"
-        "[0] section=abstract, page=1, span=[9, 34]\n"
-        '  Excerpt: "We evaluate trade policy."\n\n'
+        "[0] section=abstract, page=1, span=[9, 36]\n"
+        '  Excerpt: "We evaluate trade policy.\n\n"\n'
+        "[1] section=introduction, page=1, span=[52, 90]\n"
+        '  Excerpt: "Trade policy affects prices on page 1."\n\n'
         "--- Warnings ---\n"
         "[quality] very_low_text_volume: The document contains very little extracted text. Confirm that extraction captured the intended content.\n"
         "[quality] sparse_pages: Some non-empty pages contain unusually little text. Inspect the listed pages for extraction problems. (pages: [1, 2])\n"
@@ -513,12 +514,11 @@ def test_coordinated_write_rejects_modified_analysis_read_back(
     db_path = tmp_path / "readback.db"
     opts = _make_options(pdf_path, tmp_path, db_path=db_path)
 
-    abs_text = "Abstract\nWe evaluate trade policy."
-    exc = "We evaluate trade policy."
-    resp_json = _make_success_response_json(abs_text, exc)
-
+    # v2 (the default policy): the model returns the question sentence and
+    # cites a section; the excerpt/offsets below are derived from the
+    # detected section spans, not from the model.
     extractor = FakePDFExtractor()
-    generator = FakeGenerator(response_text=resp_json)
+    generator = FakeGenerator(response_text="What is the impact of trade policy?")
     storage = ModifyingStorageWrapper(db_path)
     storage.initialize()
 
@@ -831,12 +831,11 @@ def test_command_execution_uses_default_db_path(
         db_path=None,
     )
 
-    abs_text = "Abstract\nWe evaluate trade policy."
-    exc = "We evaluate trade policy."
-    resp_json = _make_success_response_json(abs_text, exc)
-
+    # v2 (the default policy): the model returns the question sentence and
+    # cites a section; the excerpt/offsets below are derived from the
+    # detected section spans, not from the model.
     extractor = FakePDFExtractor()
-    generator = FakeGenerator(response_text=resp_json)
+    generator = FakeGenerator(response_text="What is the impact of trade policy?")
 
     exit_code = run_single_paper_analysis_command(
         opts, extractor=extractor, generator=generator
@@ -855,12 +854,11 @@ def test_command_execution_uses_explicit_db_path_override(
     custom_db = tmp_path / "explicit_override.db"
     opts = _make_options(pdf_path, tmp_path, db_path=custom_db)
 
-    abs_text = "Abstract\nWe evaluate trade policy."
-    exc = "We evaluate trade policy."
-    resp_json = _make_success_response_json(abs_text, exc)
-
+    # v2 (the default policy): the model returns the question sentence and
+    # cites a section; the excerpt/offsets below are derived from the
+    # detected section spans, not from the model.
     extractor = FakePDFExtractor()
-    generator = FakeGenerator(response_text=resp_json)
+    generator = FakeGenerator(response_text="What is the impact of trade policy?")
 
     exit_code = run_single_paper_analysis_command(
         opts, extractor=extractor, generator=generator
@@ -885,12 +883,11 @@ def test_command_runs_fully_offline_without_network_or_pdf_mutation(
     initial_hash = hashlib.sha256(initial_bytes).hexdigest()
 
     opts = _make_options(pdf_path, tmp_path)
-    abs_text = "Abstract\nWe evaluate trade policy."
-    exc = "We evaluate trade policy."
-    resp_json = _make_success_response_json(abs_text, exc)
-
+    # v2 (the default policy): the model returns the question sentence and
+    # cites a section; the excerpt/offsets below are derived from the
+    # detected section spans, not from the model.
     extractor = FakePDFExtractor()
-    generator = FakeGenerator(response_text=resp_json)
+    generator = FakeGenerator(response_text="What is the impact of trade policy?")
 
     exit_code = run_single_paper_analysis_command(
         opts, extractor=extractor, generator=generator
@@ -910,12 +907,11 @@ def test_run_single_paper_analysis_command_idempotence(
     db_path = tmp_path / "idempotence.db"
     opts = _make_options(pdf_path, tmp_path, db_path=db_path)
 
-    abs_text = "Abstract\nWe evaluate trade policy."
-    exc = "We evaluate trade policy."
-    resp_json = _make_success_response_json(abs_text, exc)
-
+    # v2 (the default policy): the model returns the question sentence and
+    # cites a section; the excerpt/offsets below are derived from the
+    # detected section spans, not from the model.
     extractor = FakePDFExtractor()
-    generator = FakeGenerator(response_text=resp_json)
+    generator = FakeGenerator(response_text="What is the impact of trade policy?")
     storage = SQLiteStorage(db_path)
     storage.initialize()
 

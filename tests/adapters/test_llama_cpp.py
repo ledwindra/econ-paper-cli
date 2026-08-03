@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
@@ -302,13 +303,14 @@ def test_generation_method_includes_grammar_identity(
 
     assert str(tmp_path) not in method
     assert config.model_sha256 in method
-    assert "generation-v1" in method
+    assert llama_cpp_module.PROMPT_VERSION in method
     assert generator.generation_method != method
 
 
 def test_packaged_grammar_matches_frozen_fingerprint() -> None:
     grammar = (
-        Path(llama_cpp_module.__file__).with_name("resources") / "generation-v1.gbnf"
+        Path(llama_cpp_module.__file__).with_name("resources")
+        / f"{llama_cpp_module.PROMPT_VERSION}.gbnf"
     ).read_bytes()
 
     assert hashlib.sha256(grammar).hexdigest() == llama_cpp_module.OUTPUT_GRAMMAR_SHA256
@@ -611,3 +613,123 @@ def test_subprocess_runner_terminates_live_process_and_closes_pipes_on_overflow(
     assert process.stdout.closed
     assert process.stderr.closed
     assert not marker.exists()
+
+
+# --- Runtime error surfacing and context sizing ---------------------------
+
+
+def test_runtime_error_detail_surfaces_tagged_error_line() -> None:
+    from econ_paper_cli.adapters.llama_cpp import _runtime_error_detail
+
+    stderr = (
+        "0.00.533.533 I system_info: n_threads = 6\n"
+        "0.00.545.833 E llama_completion: prompt is too long "
+        "(4859 tokens, max 4092)\n"
+    )
+    assert _runtime_error_detail(stderr) == (
+        "prompt is too long (4859 tokens, max 4092)"
+    )
+
+
+def test_runtime_error_detail_ignores_untagged_output() -> None:
+    """Only lines the runtime explicitly tagged as errors are surfaced —
+    arbitrary stderr can echo prompt-derived material and must never leak
+    into a user-facing message."""
+    from econ_paper_cli.adapters.llama_cpp import _runtime_error_detail
+
+    assert _runtime_error_detail("") == ""
+    assert _runtime_error_detail("0.00.1 I loading model\nplain prose line\n") == ""
+
+
+def test_runtime_error_detail_is_length_capped() -> None:
+    from econ_paper_cli.adapters.llama_cpp import (
+        _MAX_RUNTIME_ERROR_DETAIL_CHARS,
+        _runtime_error_detail,
+    )
+
+    stderr = "0.1 E llama_completion: " + ("x" * 5000)
+    assert len(_runtime_error_detail(stderr)) == _MAX_RUNTIME_ERROR_DETAIL_CHARS
+
+
+def test_default_context_size_admits_typical_real_paper_sections() -> None:
+    """Regression for the empirical finding that a 4096 window rejected
+    roughly half a real 248-paper economics library, making research-question
+    extraction fail on essentially the whole corpus."""
+    import dataclasses
+
+    from econ_paper_cli.adapters.llama_cpp import LlamaCppConfig
+
+    defaults = {
+        field.name: field.default for field in dataclasses.fields(LlamaCppConfig)
+    }
+    assert defaults["context_size"] >= 16384
+    assert defaults["max_output_tokens"] < defaults["context_size"]
+
+
+# --- Grammar/contract alignment -------------------------------------------
+#
+# The GBNF grammar is the only thing standing between a small local model and
+# an output the domain contract will reject. Anything the contract forbids
+# must be *unrepresentable*, not merely discouraged by the prompt.
+
+
+def _packaged_grammar_text() -> str:
+    return (
+        Path(llama_cpp_module.__file__).with_name("resources")
+        / f"{llama_cpp_module.PROMPT_VERSION}.gbnf"
+    ).read_text(encoding="utf-8")
+
+
+def test_grammar_binds_abstention_state_to_its_dependent_fields() -> None:
+    """A non-abstaining answer carrying an abstention_reason (or an
+    abstaining one carrying citations) must not be expressible at all."""
+    grammar = _packaged_grammar_text()
+
+    assert "answering-root" in grammar and "abstaining-root" in grammar
+    answering = next(
+        line for line in grammar.splitlines() if line.startswith("answering-root ::=")
+    )
+    abstaining = next(
+        line for line in grammar.splitlines() if line.startswith("abstaining-root ::=")
+    )
+    # Answering: abstained false, reason null, at least one citation.
+    assert '"false"' in answering and '"null"' in answering
+    assert "citation-ids-nonempty" in answering
+    # Abstaining: abstained true, the one legal reason, and no citations
+    # or finding kinds.
+    assert '"true"' in abstaining
+    assert "insufficient_evidence" in abstaining
+    assert "citation-ids-empty" in abstaining
+    assert "finding-kinds-empty" in abstaining
+
+
+def test_grammar_cannot_express_duplicate_or_runaway_finding_kinds() -> None:
+    """Regression: an unbounded repeat rule let a local model loop on
+    `"causal", "causal", ...` until the output truncated mid-object, which
+    surfaced as "Local model returned invalid JSON" on real papers."""
+    grammar = _packaged_grammar_text()
+    finding_rule = next(
+        line for line in grammar.splitlines() if line.startswith("finding-kinds ::=")
+    )
+
+    # No unbounded repetition operators in the finding-kinds rule.
+    assert "*" not in finding_rule
+    assert "+" not in finding_rule
+    # Each legal value appears at most once per alternative.
+    for alternative in finding_rule.split("::=", 1)[1].split("|"):
+        assert alternative.count('\\"descriptive\\"') <= 1
+        assert alternative.count('\\"causal\\"') <= 1
+
+
+def test_grammar_bounds_citation_id_list_length() -> None:
+    """Citation ids are unbounded in principle, so the list is length-capped
+    rather than left open — an unbounded repeat is a runaway-loop hazard."""
+    grammar = _packaged_grammar_text()
+    rule = next(
+        line
+        for line in grammar.splitlines()
+        if line.startswith("citation-ids-nonempty ::=")
+    )
+
+    assert "*" not in rule
+    assert re.search(r"\{0,\d+\}", rule) is not None

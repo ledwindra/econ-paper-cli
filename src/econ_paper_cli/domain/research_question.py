@@ -62,7 +62,17 @@ _UNAVAILABLE_WARNING_CODES = frozenset(
 )
 
 _CANONICAL_RESEARCH_QUESTION_SETTINGS: dict[str, dict[str, object]] = {
-    "research-question-extraction-v1": {}
+    # v1 asked the model to emit a nested JSON object carrying its own
+    # excerpt text and exact page character offsets. A local model cannot
+    # produce that reliably — the offsets must satisfy
+    # `len(excerpt_text) == end - start` against the real page text — and in
+    # practice it failed on every paper of a real 268-paper corpus.
+    "research-question-extraction-v1": {},
+    # v2 asks the model only for the question sentence and which detected
+    # section it came from, then derives every traceable offset
+    # deterministically from the already-validated section spans. The model
+    # can no longer invent provenance it has no way to know.
+    "research-question-extraction-v2": {},
 }
 
 
@@ -70,7 +80,7 @@ _CANONICAL_RESEARCH_QUESTION_SETTINGS: dict[str, dict[str, object]] = {
 class ResearchQuestionSettings:
     """Versioned configuration for research-question extraction."""
 
-    policy_version: str = "research-question-extraction-v1"
+    policy_version: str = "research-question-extraction-v2"
 
     def __post_init__(self) -> None:
         _validate_nonempty_text("policy_version", self.policy_version)

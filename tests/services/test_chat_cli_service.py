@@ -88,10 +88,14 @@ def _record(
     *,
     title: str = "Trade Policy Paper",
     timestamp: str = "2026-08-01T12:00:00+00:00",
+    checksum: str = "c" * 64,
+    source_filename: str = "paper.pdf",
+    abstract_text: str = "Abstract trade policy evidence.",
+    introduction_text: str = "Introduction trade policy evidence.",
 ) -> EarlySectionLibraryRecord:
-    text = "Abstract trade policy evidence.\n\nIntroduction trade policy evidence."
+    text = f"{abstract_text}\n\n{introduction_text}"
     extraction = PDFExtractionResult(
-        source_path=(tmp_path / "paper.pdf").resolve(),
+        source_path=(tmp_path / source_filename).resolve(),
         pages=(ExtractedPDFPage(1, text),),
         page_count=1,
         metadata=PDFDocumentMetadata(title=title, author_text="Ada Economist"),
@@ -107,8 +111,8 @@ def _record(
                 observed_heading_text="Abstract",
                 start_page_number=1,
                 end_page_number=1,
-                spans=(PDFSectionSpan(1, 0, 31),),
-                text="Abstract trade policy evidence.",
+                spans=(PDFSectionSpan(1, 0, len(abstract_text)),),
+                text=abstract_text,
             ),
             PDFSection(
                 kind=PDFSectionKind.INTRODUCTION,
@@ -116,8 +120,8 @@ def _record(
                 observed_heading_text="Introduction",
                 start_page_number=1,
                 end_page_number=1,
-                spans=(PDFSectionSpan(1, 33, len(text)),),
-                text="Introduction trade policy evidence.",
+                spans=(PDFSectionSpan(1, len(abstract_text) + 2, len(text)),),
+                text=introduction_text,
             ),
         ),
         candidates=(),
@@ -127,7 +131,7 @@ def _record(
     conversion = convert_pdf_early_sections(
         extraction,
         detection,
-        content_checksum="c" * 64,
+        content_checksum=checksum,
         settings=settings,
     )
     return project_early_section_library_record(
@@ -371,6 +375,53 @@ def test_corrupt_durable_metadata_surfaces_as_failure(tmp_path: Path) -> None:
     assert result.exit_code == 3
     assert generator.call_count == 0
     assert "source_text" in (result.error_message or "")
+
+
+def test_one_corrupt_record_does_not_fail_chat_when_a_healthy_record_exists(
+    tmp_path: Path,
+) -> None:
+    """A single stale/corrupt early-section record (e.g. one written under a
+    since-changed conversion/section-policy fingerprint formula) must not
+    take down chat for the rest of an otherwise-healthy library — only a
+    library where *every* record is unreadable should surface as FAILED."""
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    # Deliberately unrelated to the "trade policy" question below, so BM25
+    # never retrieves (and therefore never has to cite) this record — this
+    # isolates the test to the actual observed bug (list_early_section_
+    # records() aborting the whole library) rather than the separate,
+    # narrower question of citing evidence from a record that fails
+    # reconstruction only when its own citation is resolved.
+    corrupt_record = _record(
+        tmp_path,
+        checksum="d" * 64,
+        source_filename="corrupt.pdf",
+        abstract_text="Weather patterns in coastal regions vary widely.",
+        introduction_text="This unrelated topic never matches the query below.",
+    )
+    healthy_record = _record(tmp_path, checksum="e" * 64, source_filename="healthy.pdf")
+    storage.save_early_section_record(corrupt_record)
+    storage.save_early_section_record(healthy_record)
+    conn = storage._conn
+    assert conn is not None
+    conn.execute(
+        "UPDATE passage_source_fragments SET source_text = 'corrupt' WHERE passage_id = ?",
+        (corrupt_record.passages[0].passage_id,),
+    )
+    conn.commit()
+
+    generator = AnsweringGenerator()
+    result = execute_chat_command(
+        _options(tmp_path),
+        storage=storage,
+        generator_provider=lambda _: generator,
+    )
+
+    assert result.outcome is ChatTerminalOutcome.ANSWERED
+    assert result.citations
+    assert all(
+        citation.paper_id == healthy_record.paper.paper_id
+        for citation in result.citations
+    )
 
 
 def test_chat_does_not_write_to_storage(tmp_path: Path) -> None:

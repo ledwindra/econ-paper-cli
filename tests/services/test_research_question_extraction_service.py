@@ -3,7 +3,6 @@
 import json
 
 from econ_paper_cli.domain import (
-    DEFAULT_RESEARCH_QUESTION_SETTINGS,
     Citation,
     PDFSection,
     PDFSectionDetectionMethod,
@@ -13,6 +12,7 @@ from econ_paper_cli.domain import (
     PDFSectionWarning,
     PDFSectionWarningCode,
     ResearchQuestionKind,
+    ResearchQuestionSettings,
     ResearchQuestionWarningCode,
 )
 from econ_paper_cli.protocols.generation import (
@@ -25,6 +25,11 @@ from econ_paper_cli.protocols.generation import (
 from econ_paper_cli.services.research_question_extraction import (
     extract_research_question,
 )
+
+# The tests below exercise the v1 structured-JSON response contract
+# specifically, so they pin v1 rather than tracking whatever the current
+# default policy happens to be.
+V1_SETTINGS = ResearchQuestionSettings(policy_version="research-question-extraction-v1")
 
 
 class FakeGenerator(Generator):
@@ -166,9 +171,7 @@ def test_explicit_question_in_introduction() -> None:
     )
 
     gen = FakeGenerator(response_text=resp_json)
-    res = extract_research_question(
-        sec_res, gen, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
-    )
+    res = extract_research_question(sec_res, gen, settings=V1_SETTINGS)
 
     assert res.kind is ResearchQuestionKind.EXPLICIT
     assert (
@@ -211,9 +214,7 @@ def test_explicit_question_in_abstract() -> None:
     )
 
     gen = FakeGenerator(response_text=resp_json)
-    res = extract_research_question(
-        sec_res, gen, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
-    )
+    res = extract_research_question(sec_res, gen, settings=V1_SETTINGS)
 
     assert res.kind is ResearchQuestionKind.EXPLICIT
     assert (
@@ -277,9 +278,7 @@ def test_inferred_question_from_objective_with_both_sections_multi_page() -> Non
     )
 
     gen = FakeGenerator(response_text=resp_json)
-    res = extract_research_question(
-        sec_res, gen, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
-    )
+    res = extract_research_question(sec_res, gen, settings=V1_SETTINGS)
 
     assert res.kind is ResearchQuestionKind.INFERRED
     assert res.sections_used == (PDFSectionKind.ABSTRACT, PDFSectionKind.INTRODUCTION)
@@ -298,9 +297,7 @@ def test_neither_section_usable_skips_generation() -> None:
     )
 
     gen = FakeGenerator(response_text="{}")
-    res = extract_research_question(
-        sec_res, gen, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
-    )
+    res = extract_research_question(sec_res, gen, settings=V1_SETTINGS)
 
     assert res.kind is ResearchQuestionKind.UNAVAILABLE
     assert res.question_text is None
@@ -319,9 +316,7 @@ def test_generator_abstention_emits_model_abstained_warning() -> None:
     sec_res = _make_section_result((sec_abs,))
 
     gen = FakeGenerator(abstained=True)
-    res = extract_research_question(
-        sec_res, gen, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
-    )
+    res = extract_research_question(sec_res, gen, settings=V1_SETTINGS)
 
     assert res.kind is ResearchQuestionKind.UNAVAILABLE
     assert res.question_text is None
@@ -338,9 +333,7 @@ def test_generator_failure_handled_gracefully() -> None:
     sec_res = _make_section_result((sec_abs,))
 
     gen = FakeGenerator(raise_error=RuntimeError("Model connection timeout"))
-    res = extract_research_question(
-        sec_res, gen, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
-    )
+    res = extract_research_question(sec_res, gen, settings=V1_SETTINGS)
 
     assert res.kind is ResearchQuestionKind.UNAVAILABLE
     assert res.question_text is None
@@ -375,9 +368,7 @@ def test_extra_top_level_keys_rejected() -> None:
     )
 
     gen = FakeGenerator(response_text=resp_extra_top)
-    res = extract_research_question(
-        sec_res, gen, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
-    )
+    res = extract_research_question(sec_res, gen, settings=V1_SETTINGS)
     assert res.kind is ResearchQuestionKind.UNAVAILABLE
     assert any(
         w.code is ResearchQuestionWarningCode.MALFORMED_STRUCTURED_RESPONSE
@@ -411,9 +402,7 @@ def test_extra_evidence_keys_rejected() -> None:
     )
 
     gen = FakeGenerator(response_text=resp_extra_ev)
-    res = extract_research_question(
-        sec_res, gen, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
-    )
+    res = extract_research_question(sec_res, gen, settings=V1_SETTINGS)
     assert res.kind is ResearchQuestionKind.UNAVAILABLE
     assert any(
         w.code is ResearchQuestionWarningCode.MALFORMED_STRUCTURED_RESPONSE
@@ -448,9 +437,7 @@ def test_mismatched_text_at_valid_offsets_rejected() -> None:
     )
 
     gen = FakeGenerator(response_text=resp_json)
-    res = extract_research_question(
-        sec_res, gen, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
-    )
+    res = extract_research_question(sec_res, gen, settings=V1_SETTINGS)
 
     assert res.kind is ResearchQuestionKind.UNAVAILABLE
     assert any(
@@ -489,9 +476,7 @@ def test_both_sections_supplied_but_sections_used_derived_from_abstract_evidence
     )
 
     gen = FakeGenerator(response_text=resp_json)
-    res = extract_research_question(
-        sec_res, gen, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
-    )
+    res = extract_research_question(sec_res, gen, settings=V1_SETTINGS)
 
     assert res.kind is ResearchQuestionKind.EXPLICIT
     assert res.sections_used == (
@@ -528,14 +513,10 @@ def test_deterministic_prompt_ordering_and_repeated_runs() -> None:
     )
 
     gen1 = FakeGenerator(response_text=resp_json)
-    res1 = extract_research_question(
-        sec_res, gen1, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
-    )
+    res1 = extract_research_question(sec_res, gen1, settings=V1_SETTINGS)
 
     gen2 = FakeGenerator(response_text=resp_json)
-    res2 = extract_research_question(
-        sec_res, gen2, settings=DEFAULT_RESEARCH_QUESTION_SETTINGS
-    )
+    res2 = extract_research_question(sec_res, gen2, settings=V1_SETTINGS)
 
     assert res1 == res2
     assert gen1.last_request is not None

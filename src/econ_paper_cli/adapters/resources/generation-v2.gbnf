@@ -1,0 +1,12 @@
+answer-text ::= "\"" char+ "\""
+answer-text-kv ::= "\"answer_text\"" space ":" space answer-text
+char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+citation-ids-item ::= "\"" ("e" [1-9] [0-9]*) "\""
+citation-ids-empty ::= "[" space "]"
+citation-ids-nonempty ::= "[" space citation-ids-item ("," space citation-ids-item){0,31} space "]"
+finding-kinds ::= "[" space "]" | "[" space "\"descriptive\"" space "]" | "[" space "\"causal\"" space "]" | "[" space "\"descriptive\"" space "," space "\"causal\"" space "]" | "[" space "\"causal\"" space "," space "\"descriptive\"" space "]"
+finding-kinds-empty ::= "[" space "]"
+space ::= | " " | "\n"{1,2} [ \t]{0,20}
+answering-root ::= "{" space answer-text-kv "," space "\"citation_ids\"" space ":" space citation-ids-nonempty "," space "\"abstained\"" space ":" space "false" "," space "\"abstention_reason\"" space ":" space "null" "," space "\"finding_kinds\"" space ":" space finding-kinds space "}"
+abstaining-root ::= "{" space answer-text-kv "," space "\"citation_ids\"" space ":" space citation-ids-empty "," space "\"abstained\"" space ":" space "true" "," space "\"abstention_reason\"" space ":" space "\"insufficient_evidence\"" "," space "\"finding_kinds\"" space ":" space finding-kinds-empty space "}"
+root ::= answering-root | abstaining-root

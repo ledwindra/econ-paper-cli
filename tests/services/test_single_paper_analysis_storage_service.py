@@ -1,5 +1,6 @@
 """Service integration tests for single-paper analysis storage service."""
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from econ_paper_cli.domain import (
     DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     PDFDocumentMetadata,
     PDFExtractionResult,
+    ResearchQuestionSettings,
     SinglePaperAnalysisStatus,
 )
 from econ_paper_cli.domain.pdf_extraction import ExtractedPDFPage
@@ -202,6 +204,14 @@ def test_end_to_end_multi_page_sections_round_trip(tmp_path: Path) -> None:
     storage.close()
 
 
+_V1_ANALYSIS_SETTINGS = dataclasses.replace(
+    DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+    research_question_settings=ResearchQuestionSettings(
+        policy_version="research-question-extraction-v1"
+    ),
+)
+
+
 def test_end_to_end_question_extraction_halted_terminal_causes(
     tmp_path: Path,
 ) -> None:
@@ -252,15 +262,18 @@ def test_end_to_end_question_extraction_halted_terminal_causes(
         == res_abstained.research_question_result.warnings
     )
 
-    # 3. MALFORMED_STRUCTURED_RESPONSE cause
+    # 3. MALFORMED_STRUCTURED_RESPONSE cause (v1-specific: only the v1
+    #    policy required a structured JSON payload from the model).
     res_malformed = analyze_single_paper(
         pdf_path,
         FakePDFExtractor(),
         FakeGenerator(response_text="INVALID JSON {", abstained=False),
-        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+        settings=_V1_ANALYSIS_SETTINGS,
     )
     assert res_malformed.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
-    rec_malformed = save_single_paper_analysis_result(storage, res_malformed)
+    rec_malformed = save_single_paper_analysis_result(
+        storage, res_malformed, _V1_ANALYSIS_SETTINGS
+    )
     ret_malformed = get_single_paper_analysis_record(storage, rec_malformed.analysis_id)
     assert ret_malformed is not None
     assert ret_malformed.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
@@ -289,10 +302,12 @@ def test_end_to_end_question_extraction_halted_terminal_causes(
         pdf_path,
         FakePDFExtractor(),
         FakeGenerator(response_text=ungrounded_json, abstained=False),
-        settings=DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
+        settings=_V1_ANALYSIS_SETTINGS,
     )
     assert res_ungrounded.status is SinglePaperAnalysisStatus.QUESTION_EXTRACTION_HALTED
-    rec_ungrounded = save_single_paper_analysis_result(storage, res_ungrounded)
+    rec_ungrounded = save_single_paper_analysis_result(
+        storage, res_ungrounded, _V1_ANALYSIS_SETTINGS
+    )
     ret_ungrounded = get_single_paper_analysis_record(
         storage, rec_ungrounded.analysis_id
     )

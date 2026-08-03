@@ -22,6 +22,7 @@ from econ_paper_cli.domain.research_question import (
 )
 from econ_paper_cli.protocols.generation import (
     GenerationRequest,
+    GenerationResponse,
     GenerationResponseValidationError,
     Generator,
     validate_generation_response,
@@ -72,7 +73,12 @@ def extract_research_question(
             ResearchQuestionWarning(ResearchQuestionWarningCode.MISSING_SECTION)
         )
 
-    request = _build_generation_request(usable_sections)
+    is_v2 = settings.policy_version == "research-question-extraction-v2"
+    request = (
+        _build_generation_request_v2(usable_sections)
+        if is_v2
+        else _build_generation_request(usable_sections)
+    )
 
     try:
         raw_response = generator.generate(request)
@@ -106,6 +112,14 @@ def extract_research_question(
             sections_used=(),
             evidence=(),
             warnings=_canonicalize_warnings(warnings),
+        )
+
+    if is_v2:
+        return _build_v2_result(
+            response=response,
+            usable_sections=usable_sections,
+            settings=settings,
+            initial_warnings=initial_warnings,
         )
 
     parsed_data = _parse_response_json(response.answer_text)
@@ -389,3 +403,162 @@ def _canonicalize_warnings(
 
     unique_warnings.sort(key=lambda w: _WARNING_ORDER[w.code])
     return tuple(unique_warnings)
+
+
+# --- research-question-extraction-v2 ---------------------------------------
+#
+# v2 splits responsibility by what each party can actually know. The model
+# supplies only the question sentence and which detected section it came
+# from — both things it can read off the supplied text. Everything traceable
+# (page number, character offsets, exact excerpt) is derived here from the
+# already-validated PDFSection spans, so provenance is correct by
+# construction instead of being invented by the model and then rejected.
+
+# A guard against the model echoing an entire abstract, not a style limit.
+# Real research questions from local models routinely exceed a few hundred
+# characters when they enumerate sub-questions.
+_MAX_QUESTION_TEXT_CHARACTERS = 1000
+
+
+def _build_generation_request_v2(
+    usable_sections: tuple[PDFSection, ...],
+) -> GenerationRequest:
+    prompt_parts = [
+        "Identify the primary research question of this paper.",
+        "",
+        "Answer with the research question as a single sentence, and nothing "
+        "else. Do not restate the instructions, add a preamble, or return "
+        "JSON. Cite the section the question came from.",
+        "",
+        "Sections:",
+    ]
+
+    retrieval_evidence: list[RetrievalEvidence] = []
+    for rank, sec in enumerate(usable_sections, start=1):
+        prompt_parts.append("---")
+        prompt_parts.append(f"[{sec.kind.value.capitalize()}]")
+        prompt_parts.append(sec.text)
+
+        passage = Passage(
+            passage_id=sec.kind.value,
+            paper_id="doc",
+            text=sec.text,
+            section_heading=sec.display_label,
+            page_start=sec.start_page_number,
+            page_end=sec.end_page_number,
+            ordinal_position=rank,
+        )
+        retrieval_evidence.append(
+            RetrievalEvidence(
+                passage=passage,
+                score=1.0,
+                rank=rank,
+                retrieval_method="section_detection",
+            )
+        )
+
+    return GenerationRequest(
+        question="\n".join(prompt_parts), evidence=tuple(retrieval_evidence)
+    )
+
+
+def _build_v2_result(
+    *,
+    response: GenerationResponse,
+    usable_sections: tuple[PDFSection, ...],
+    settings: ResearchQuestionSettings,
+    initial_warnings: list[ResearchQuestionWarning],
+) -> ResearchQuestionResult:
+    def _unavailable(code: ResearchQuestionWarningCode) -> ResearchQuestionResult:
+        warnings = list(initial_warnings)
+        warnings.append(ResearchQuestionWarning(code))
+        return ResearchQuestionResult(
+            policy_version=settings.policy_version,
+            question_text=None,
+            kind=ResearchQuestionKind.UNAVAILABLE,
+            sections_used=(),
+            evidence=(),
+            warnings=_canonicalize_warnings(warnings),
+        )
+
+    question_text = response.answer_text.strip()
+    if not question_text or len(question_text) > _MAX_QUESTION_TEXT_CHARACTERS:
+        return _unavailable(ResearchQuestionWarningCode.MALFORMED_STRUCTURED_RESPONSE)
+
+    sections_by_kind = {section.kind.value: section for section in usable_sections}
+    cited_sections: list[PDFSection] = []
+    for citation in response.citations:
+        section = sections_by_kind.get(citation.passage_id)
+        if section is None:
+            # Citation identifiers are already validated against supplied
+            # evidence upstream, so this means the evidence/section mapping
+            # itself disagrees — refuse rather than guess a section.
+            return _unavailable(ResearchQuestionWarningCode.UNGROUNDED_EVIDENCE)
+        if section not in cited_sections:
+            cited_sections.append(section)
+
+    if not cited_sections:
+        return _unavailable(ResearchQuestionWarningCode.UNGROUNDED_EVIDENCE)
+
+    evidence: list[ResearchQuestionEvidence] = []
+    for section in cited_sections:
+        item = _derive_section_evidence(section)
+        if item is None:
+            return _unavailable(ResearchQuestionWarningCode.UNGROUNDED_EVIDENCE)
+        evidence.append(item)
+
+    sections_used = tuple(
+        kind
+        for kind in (PDFSectionKind.ABSTRACT, PDFSectionKind.INTRODUCTION)
+        if any(section.kind is kind for section in cited_sections)
+    )
+
+    return ResearchQuestionResult(
+        policy_version=settings.policy_version,
+        question_text=question_text,
+        kind=_derive_question_kind(cited_sections),
+        sections_used=sections_used,
+        evidence=tuple(evidence),
+        warnings=_canonicalize_warnings(initial_warnings),
+    )
+
+
+def _derive_section_evidence(
+    section: PDFSection,
+) -> ResearchQuestionEvidence | None:
+    """Build exactly-grounded evidence from a section's own first span.
+
+    The excerpt is sliced out of the section text the span already accounts
+    for, so `len(excerpt_text) == end - start` holds by construction rather
+    than depending on a model reporting offsets correctly.
+    """
+    if not section.spans:
+        return None
+    span = section.spans[0]
+    length = span.end_character_offset - span.start_character_offset
+    excerpt = section.text[:length]
+    if not excerpt.strip():
+        return None
+    return ResearchQuestionEvidence(
+        section_kind=section.kind,
+        excerpt_text=excerpt,
+        page_number=span.page_number,
+        start_character_offset=span.start_character_offset,
+        end_character_offset=span.start_character_offset + len(excerpt),
+    )
+
+
+def _derive_question_kind(
+    cited_sections: list[PDFSection],
+) -> ResearchQuestionKind:
+    """Classify deterministically from the source text, not from the model.
+
+    A paper that poses its question outright contains an interrogative
+    sentence in the cited section; otherwise the question was inferred from
+    surrounding prose. Asking the model to self-report this invites it to
+    claim "explicit" for text it actually paraphrased.
+    """
+    for section in cited_sections:
+        if "?" in section.text:
+            return ResearchQuestionKind.EXPLICIT
+    return ResearchQuestionKind.INFERRED

@@ -1335,6 +1335,20 @@ class SQLiteStorage(StorageBackend):
             sec_policy = generic_parameters.get(
                 "section_policy_version", "pdf-section-detection-v1"
             )
+            # The stored fingerprint, not a live recomputation, is trusted
+            # here: passage_id is itself derived from settings_fingerprint
+            # at write time (compute_conversion_passage_id), so the two are
+            # permanently coupled for a given row. Recomputing the
+            # fingerprint from reconstructed settings under today's formula
+            # would satisfy this record's own internal fingerprint check
+            # while breaking its passage_id check instead — a row written
+            # before a fingerprint-formula change (e.g. section_policy_version
+            # being folded in) cannot satisfy both under a formula that
+            # postdates it. Such a row is genuinely stale under the current
+            # policy and is meant to be rejected and replaced by reanalysis,
+            # not silently rewritten in place; see list_early_section_records()
+            # for why one such row must not abort loading the rest of the
+            # library.
             return EarlySectionLibraryRecord(
                 paper=paper,
                 source_provenance=source_provenance,
@@ -1360,7 +1374,21 @@ class SQLiteStorage(StorageBackend):
             ) from error
 
     def list_early_section_records(self) -> tuple[EarlySectionLibraryRecord, ...]:
-        """Return early-section records ordered by paper_id."""
+        """Return early-section records ordered by paper_id.
+
+        A row that fails strict reconstruction (e.g. a record genuinely
+        stale under a since-changed conversion/section policy fingerprint
+        formula) is skipped rather than aborting the entire call, *as long
+        as at least one other row reconstructs successfully*: one paper
+        needing reanalysis must not make every other already-valid paper
+        unreachable through bulk reads like ``load_corpus()``/chat. If
+        every row present fails, that is reported as a failure rather than
+        silently degrading to "no records" — an entirely corrupt library
+        must not be indistinguishable from a genuinely empty one. A raw
+        storage/connection failure (a ``sqlite3.Error`` not wrapped by
+        ``get_early_section_record`` itself) still propagates, since that
+        indicates a broken connection rather than one bad row.
+        """
         conn = self._ensure_initialized()
         try:
             rows = conn.execute(
@@ -1370,12 +1398,20 @@ class SQLiteStorage(StorageBackend):
             raise StorageValidationError(
                 f"Failed to list early-section records: {error}."
             ) from error
-        records = tuple(self.get_early_section_record(row["paper_id"]) for row in rows)
-        if any(record is None for record in records):
-            raise StorageValidationError(
-                "An early-section record disappeared during list reconstruction."
-            )
-        return tuple(record for record in records if record is not None)
+        records: list[EarlySectionLibraryRecord] = []
+        first_failure: StorageValidationError | None = None
+        for row in rows:
+            try:
+                record = self.get_early_section_record(row["paper_id"])
+            except StorageValidationError as error:
+                if first_failure is None:
+                    first_failure = error
+                continue
+            if record is not None:
+                records.append(record)
+        if rows and not records and first_failure is not None:
+            raise first_failure
+        return tuple(records)
 
     def save_analysis_and_early_section(
         self,
