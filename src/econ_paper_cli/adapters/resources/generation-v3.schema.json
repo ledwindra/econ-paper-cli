@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "claims",
+    "abstained",
+    "abstention_reason",
+    "finding_kinds"
+  ],
+  "properties": {
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "text",
+          "citation_ids"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "citation_ids": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^e[1-9][0-9]*$"
+            }
+          }
+        }
+      }
+    },
+    "abstained": {
+      "type": "boolean"
+    },
+    "abstention_reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "insufficient_evidence",
+        null
+      ]
+    },
+    "finding_kinds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "descriptive",
+          "causal"
+        ]
+      },
+      "uniqueItems": true
+    }
+  },
+  "oneOf": [
+    {
+      "title": "answering",
+      "properties": {
+        "abstained": {
+          "const": false
+        },
+        "abstention_reason": {
+          "type": "null"
+        },
+        "claims": {
+          "minItems": 1
+        }
+      },
+      "required": [
+        "abstained",
+        "abstention_reason",
+        "claims"
+      ]
+    },
+    {
+      "title": "abstaining",
+      "properties": {
+        "abstained": {
+          "const": true
+        },
+        "abstention_reason": {
+          "const": "insufficient_evidence"
+        },
+        "claims": {
+          "maxItems": 0
+        },
+        "finding_kinds": {
+          "maxItems": 0
+        }
+      },
+      "required": [
+        "abstained",
+        "abstention_reason",
+        "claims",
+        "finding_kinds"
+      ]
+    }
+  ]
+}

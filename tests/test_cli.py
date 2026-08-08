@@ -5,8 +5,13 @@ from pathlib import Path
 import pytest
 
 from econ_paper_cli.cli import build_parser, main
+from econ_paper_cli.domain.model_manifest import MANAGED_MODEL_CATALOG
 from econ_paper_cli.services import commands
 from econ_paper_cli.services.interactive_shell import ShellExitCode
+from econ_paper_cli.services.setup_command import (
+    SetupCommandOptions,
+    SetupOptionsError,
+)
 
 
 def test_update_placeholder_succeeds(capsys: pytest.CaptureFixture[str]) -> None:
@@ -85,6 +90,7 @@ def test_chat_help_lists_all_options(capsys: pytest.CaptureFixture[str]) -> None
         "--timeout",
         "--db-path",
         "--top-k",
+        "--show-evidence",
     ):
         assert flag in output
 
@@ -157,6 +163,15 @@ def test_chat_parser_accepts_question_and_configuration() -> None:
 
     assert arguments.question == "What is the research question?"
     assert arguments.top_k == 3
+    assert arguments.show_evidence is False
+
+
+def test_chat_parser_show_evidence_flag() -> None:
+    arguments = build_parser().parse_args(
+        ["chat", "What is the research question?", "--show-evidence"]
+    )
+
+    assert arguments.show_evidence is True
 
 
 def test_chat_command_dispatches_to_handler(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -248,15 +263,35 @@ def test_chat_parser_accepts_no_runtime_model_arguments() -> None:
     assert arguments.model_checksum is None
 
 
-def test_setup_parser_requires_all_runtime_model_arguments(
+def test_bare_setup_parses_and_leaves_every_identity_flag_unset() -> None:
+    """A fresh user runs `econpapers setup` with no flags at all: argparse must
+    accept it and leave both runtime and model identity unset, so the command
+    layer can auto-provision each. Requiring any flag here would restore the
+    manual-GGUF onboarding wall this replaced."""
+    arguments = build_parser().parse_args(["setup"])
+
+    assert arguments.llama_cpp_path is None
+    assert arguments.model_path is None
+    assert arguments.model_id is None
+    assert arguments.model_bytes is None
+    assert arguments.model_checksum is None
+    assert arguments.managed_model_id is None
+
+
+def test_setup_model_choice_is_restricted_to_the_pinned_catalog(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """--model names a pinned artifact, so an unknown id must fail at parse
+    time rather than reaching the network."""
+    default_id = MANAGED_MODEL_CATALOG.default_model_id
+    accepted = build_parser().parse_args(["setup", "--model", default_id])
+    assert accepted.managed_model_id == default_id
+
     with pytest.raises(SystemExit) as exit_info:
-        build_parser().parse_args(["setup"])
+        build_parser().parse_args(["setup", "--model", "not-a-real-model"])
 
     assert exit_info.value.code == 2
-    err = capsys.readouterr().err
-    assert "the following arguments are required" in err
+    assert "invalid choice" in capsys.readouterr().err
 
 
 def test_setup_help_lists_all_options(capsys: pytest.CaptureFixture[str]) -> None:
@@ -355,20 +390,31 @@ def test_setup_parser_allows_omitting_llama_cpp_path() -> None:
     assert arguments.llama_cpp_path is None
 
 
-def test_setup_parser_still_requires_model_flags_when_path_omitted(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    with pytest.raises(SystemExit) as exit_info:
-        build_parser().parse_args(["setup", "--model-path", "model.gguf"])
+def test_partial_model_identity_is_rejected_by_the_options_contract() -> None:
+    """The four model-identity flags describe one artifact. A subset is now
+    accepted by argparse (so that omitting all four can mean "provision one"),
+    which moves the all-or-nothing rule to the options layer -- it must still
+    be enforced there, or a user could verify a downloaded model against a
+    checksum meant for a different file."""
+    arguments = build_parser().parse_args(["setup", "--model-path", "model.gguf"])
+    assert arguments.model_path == Path("model.gguf")
 
-    assert exit_info.value.code == 2
-    err = capsys.readouterr().err
-    required_line = next(
-        line
-        for line in err.splitlines()
-        if "the following arguments are required" in line
-    )
-    assert "--llama-cpp-path" not in required_line
+    with pytest.raises(SetupOptionsError, match="together"):
+        SetupCommandOptions(executable_path=None, model_path=Path("model.gguf"))
+
+
+def test_explicit_model_path_cannot_be_combined_with_a_catalog_choice() -> None:
+    """--model selects what to provision; an explicit path means nothing will
+    be provisioned. Accepting both would silently ignore one of them."""
+    with pytest.raises(SetupOptionsError, match="cannot be combined"):
+        SetupCommandOptions(
+            executable_path=None,
+            model_path=Path("model.gguf"),
+            model_id="local-model",
+            model_bytes=100,
+            model_checksum="a" * 64,
+            managed_model_id=MANAGED_MODEL_CATALOG.default_model_id,
+        )
 
 
 def test_setup_help_lists_offline_flag(capsys: pytest.CaptureFixture[str]) -> None:
@@ -497,6 +543,44 @@ def test_unknown_command_is_rejected(capsys: pytest.CaptureFixture[str]) -> None
 
     assert exit_info.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
+
+
+def test_chat_command_maps_show_evidence_flag_into_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from econ_paper_cli.services.chat_command import ChatCommandOptions
+
+    captured: dict[str, object] = {}
+
+    def fake_run_chat_command(options: ChatCommandOptions, **_kwargs: object) -> int:
+        captured["options"] = options
+        return 0
+
+    monkeypatch.setattr(commands, "run_chat_command", fake_run_chat_command)
+    assert main(["chat", "a question", "--show-evidence"]) == 0
+
+    options = captured["options"]
+    assert isinstance(options, ChatCommandOptions)
+    assert options.show_evidence is True
+
+
+def test_chat_command_defaults_show_evidence_to_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from econ_paper_cli.services.chat_command import ChatCommandOptions
+
+    captured: dict[str, object] = {}
+
+    def fake_run_chat_command(options: ChatCommandOptions, **_kwargs: object) -> int:
+        captured["options"] = options
+        return 0
+
+    monkeypatch.setattr(commands, "run_chat_command", fake_run_chat_command)
+    assert main(["chat", "a question"]) == 0
+
+    options = captured["options"]
+    assert isinstance(options, ChatCommandOptions)
+    assert options.show_evidence is False
 
 
 def test_distribution_exposes_econpapers_entry_point() -> None:

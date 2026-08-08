@@ -423,7 +423,7 @@ def run_pdf_acceptance_harness(
 
         # 3. Conversion & Ingestion
         conversion_settings = PDFConversionSettings(
-            section_policy_version="pdf-section-detection-v2"
+            section_policy_version="pdf-section-detection-v3"
         )
         conversion = convert_pdf_early_sections(
             extraction,

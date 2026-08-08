@@ -26,6 +26,11 @@ from econ_paper_cli.adapters.llama_cpp import (
 )
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
 from econ_paper_cli.domain import Corpus
+from econ_paper_cli.domain.conversation import (
+    ConversationHistory,
+    ConversationTurn,
+    needs_context_resolution,
+)
 from econ_paper_cli.domain.corpora import CorpusValidationError
 from econ_paper_cli.domain.early_section_library import EarlySectionLibraryRecord
 from econ_paper_cli.domain.errors import CitationValidationError
@@ -41,6 +46,7 @@ from econ_paper_cli.protocols import (
     StorageConnectionError,
     StorageError,
     StorageValidationError,
+    check_response_grounding,
     validate_generation_response,
 )
 from econ_paper_cli.protocols.config import ConfigBackend, ConfigError
@@ -49,9 +55,13 @@ from econ_paper_cli.protocols.retrieval import validate_retrieval_results
 from econ_paper_cli.services.chat_command import (
     CHAT_EVIDENCE_SCOPE,
     ChatCitationDetail,
+    ChatClaimDetail,
+    WithheldClaimDetail,
     _build_llama_cpp_generator,
     _render_citation_lines,
+    _render_withheld_lines,
     _resolve_citations,
+    format_evidence_detail,
 )
 from econ_paper_cli.services.config_resolution import (
     ConfigResolutionError,
@@ -62,6 +72,15 @@ from econ_paper_cli.services.config_resolution import (
 )
 
 SHELL_PROMPT = "econpapers> "
+# Importing `readline` is what gives the builtin `input()` line editing and
+# history on a real terminal: arrow keys, Ctrl-A/E, and Up/Down recall. Without
+# it a terminal sends raw escape sequences that appear as literal "^[[D" in the
+# typed question. Absent on some Windows Pythons, where the shell simply falls
+# back to unedited input rather than failing to start.
+try:  # pragma: no cover - availability is platform-dependent
+    import readline as _readline
+except ImportError:  # pragma: no cover
+    _readline = None
 DEFAULT_SHELL_TOP_K = 10
 SESSION_NAME = "econpapers interactive shell"
 
@@ -86,6 +105,9 @@ class ShellTurnOutcome(str, Enum):
     ANSWERED = "answered"
     NO_MATCHES = "no_matches"
     ABSTAINED = "abstained"
+    # Distinct from ABSTAINED: the generator answered, but every claim
+    # misattributed content across papers and was suppressed.
+    WITHHELD = "withheld"
     TYPED_FAILURE = "typed_failure"
     INTERNAL_FAILURE = "internal_failure"
 
@@ -149,6 +171,12 @@ class ShellTurnResult:
     generation_method: str | None = None
     finding_kinds: tuple[FindingKind, ...] = ()
     citations: tuple[ChatCitationDetail, ...] = ()
+    claims: tuple[ChatClaimDetail, ...] = ()
+    withheld_claims: tuple[WithheldClaimDetail, ...] = ()
+    # Populated only when the question was rewritten against earlier turns.
+    # Shown to the user so a resolution they disagree with is visible rather
+    # than silently answered.
+    resolved_question: str | None = None
     no_answer_reason: str | None = None
     error_message: str | None = None
     generator_action: str | None = None  # "constructed" | "reused" | None
@@ -190,17 +218,87 @@ class InteractiveShellSession:
         self._generator_provider = generator_provider
         self._top_k = top_k
         self._cached_generator: Generator | None = None
+        self._history = ConversationHistory()
+        self._last_citations: tuple[ChatCitationDetail, ...] = ()
 
     @property
     def generator_ready(self) -> bool:
         """Whether a generator has already been constructed this session."""
         return self._cached_generator is not None
 
+    @property
+    def history(self) -> ConversationHistory:
+        """The bounded record of answered turns available to follow-ups."""
+        return self._history
+
+    @property
+    def last_turn_citations(self) -> tuple[ChatCitationDetail, ...]:
+        """Citations available to ``/show`` for the most recent turn.
+
+        Populated only by an ``answered`` turn and replaced (not merged) by
+        every later turn, whatever its outcome — so a citation ID from a
+        turn that is no longer the latest one is never accepted. A turn that
+        did not answer (``withheld``/``abstained``/``no_matches``/failures)
+        clears this rather than leaving the previous turn's evidence visible,
+        since that evidence no longer corresponds to the question just asked.
+        """
+        return self._last_citations
+
+    def reset_history(self) -> None:
+        """Forget prior turns and the last turn's evidence.
+
+        Both are "context from earlier in the session" from the user's point
+        of view, so ``/reset`` clears them together rather than leaving
+        ``/show`` pointing at evidence for a conversation that was just
+        forgotten.
+        """
+        self._history = self._history.cleared()
+        self._last_citations = ()
+
     def close(self) -> None:
         """Close the session-owned storage connection deterministically."""
         self._storage.close()
 
+    def _resolve_follow_up(self, question: str) -> str | None:
+        """Return a standalone rewrite of a context-dependent question.
+
+        Returns None when the question is already self-contained, when there is
+        no history, or when resolution fails. Resolution is best-effort by
+        design: losing the turn to a rewrite failure would be a worse outcome
+        than answering the question as typed.
+        """
+        if not needs_context_resolution(question, self._history):
+            return None
+        generator = self._cached_generator
+        resolver = getattr(generator, "resolve_follow_up", None)
+        if resolver is None:
+            return None
+        prior = [turn.resolved_question for turn in self._history.turns]
+        try:
+            candidate = resolver(question, prior)
+        except (LlamaCppOutputError, LlamaCppProcessError, ValueError):
+            return None
+        if not isinstance(candidate, str):
+            return None
+        candidate = candidate.strip()
+        if not candidate or candidate == question.strip():
+            return None
+        return candidate
+
     def ask(self, question: str) -> ShellTurnResult:
+        """Answer one independent question and update ``/show`` evidence state.
+
+        This is the single choke point that updates ``last_turn_citations``,
+        so every one of ``_ask_impl``'s several return paths stays correct by
+        construction rather than each having to remember to set it.
+        """
+        result = self._ask_impl(question)
+        self._last_citations = (
+            result.citations if result.outcome is ShellTurnOutcome.ANSWERED else ()
+        )
+        return result
+
+    def _ask_impl(self, question: str) -> ShellTurnResult:
         """Answer one independent question against the fixed session snapshot."""
         normalized = question.strip()
         generator_action: str | None = None
@@ -212,7 +310,15 @@ class InteractiveShellSession:
                     no_answer_reason="No stored passages are available.",
                 )
 
-            retrieval_request = RetrievalRequest(query=normalized, top_k=self._top_k)
+            # A follow-up is resolved before retrieval, because both retrieval
+            # and generation need the referent: "what about wages?" retrieves
+            # nothing useful and gives the generator no subject. Resolution
+            # never constructs a generator, since history only gains entries on
+            # answered turns, which already required one.
+            resolved_question = self._resolve_follow_up(normalized)
+            query = resolved_question or normalized
+
+            retrieval_request = RetrievalRequest(query=query, top_k=self._top_k)
             evidence = validate_retrieval_results(
                 retrieval_request, self._retriever.retrieve(retrieval_request)
             )
@@ -221,6 +327,7 @@ class InteractiveShellSession:
                     question=normalized,
                     outcome=ShellTurnOutcome.NO_MATCHES,
                     no_answer_reason="BM25 returned no evidence for the question.",
+                    resolved_question=resolved_question,
                 )
 
             if self._cached_generator is not None:
@@ -233,7 +340,7 @@ class InteractiveShellSession:
                 self._cached_generator = generator
                 generator_action = "constructed"
 
-            request = GenerationRequest(question=normalized, evidence=evidence)
+            request = GenerationRequest(question=query, evidence=evidence)
             response = validate_generation_response(
                 request, generator.generate(request)
             )
@@ -244,6 +351,7 @@ class InteractiveShellSession:
                     no_answer_reason="Generator abstained: insufficient evidence.",
                     generation_method=response.generation_method,
                     generator_action=generator_action,
+                    resolved_question=resolved_question,
                 )
 
             if self.snapshot.corpus is None:
@@ -254,14 +362,92 @@ class InteractiveShellSession:
                 evidence,
                 response,
             )
+
+            # The shell runs the same withholding rule as one-shot chat: a
+            # claim using another paper's distinctive wording is misattributed
+            # and never reaches the user, whichever entry point asked.
+            verdicts = check_response_grounding(request, response)
+            grounded_claims = tuple(
+                claim
+                for claim, verdict in zip(response.claims, verdicts, strict=True)
+                if verdict.grounded
+            )
+            withheld = tuple(
+                WithheldClaimDetail(
+                    text=claim.text,
+                    citation_ids=claim.citation_ids,
+                    leaked_terms=verdict.leaked_terms,
+                )
+                for claim, verdict in zip(response.claims, verdicts, strict=True)
+                if not verdict.grounded
+            )
+
+            if verdicts and not grounded_claims:
+                return ShellTurnResult(
+                    question=normalized,
+                    outcome=ShellTurnOutcome.WITHHELD,
+                    no_answer_reason=(
+                        "Every generated claim attributed content to a paper "
+                        "that does not contain it; nothing could be shown."
+                    ),
+                    generation_method=response.generation_method,
+                    withheld_claims=withheld,
+                    generator_action=generator_action,
+                    resolved_question=resolved_question,
+                )
+
+            title_by_citation = {item.citation_id: item.paper_title for item in cited}
+            claim_details = tuple(
+                ChatClaimDetail(
+                    text=claim.text,
+                    citation_ids=claim.citation_ids,
+                    paper_titles=tuple(
+                        dict.fromkeys(
+                            title_by_citation[citation_id]
+                            for citation_id in claim.citation_ids
+                        )
+                    ),
+                )
+                for claim in grounded_claims
+            )
+            if grounded_claims:
+                answer_text = " ".join(claim.text for claim in grounded_claims)
+                surviving_ids = {
+                    citation_id
+                    for claim in grounded_claims
+                    for citation_id in claim.citation_ids
+                }
+                cited = tuple(
+                    item for item in cited if item.citation_id in surviving_ids
+                )
+            else:
+                answer_text = response.answer_text
+
+            # Only an answered turn enters history: an abstention or a
+            # withheld answer carries no established referent, so treating it
+            # as context would resolve the next follow-up against something the
+            # user was never actually told.
+            self._history = self._history.appended(
+                ConversationTurn(
+                    question=normalized,
+                    resolved_question=query,
+                    answer_text=answer_text,
+                    cited_paper_titles=tuple(
+                        dict.fromkeys(item.paper_title for item in cited)
+                    ),
+                )
+            )
             return ShellTurnResult(
                 question=normalized,
                 outcome=ShellTurnOutcome.ANSWERED,
-                answer_text=response.answer_text,
+                answer_text=answer_text,
                 generation_method=response.generation_method,
                 finding_kinds=response.finding_kinds,
                 citations=cited,
+                claims=claim_details,
+                withheld_claims=withheld,
                 generator_action=generator_action,
+                resolved_question=resolved_question,
             )
         except (
             ValueError,
@@ -418,9 +604,48 @@ def format_shell_banner(snapshot: SessionSnapshot) -> str:
             f"Paper Count: {snapshot.paper_count}",
             f"Passage Count: {snapshot.passage_count}",
             CHAT_EVIDENCE_SCOPE,
-            "Commands: /help, /status, /exit, /quit",
+            "Commands: /help, /status, /show, /reset, /exit, /quit",
         )
     )
+
+
+def _line_editing_available(injected_stdin: TextIO | None, stream: TextIO) -> bool:
+    """Whether this session can use ``readline`` line editing.
+
+    Requires the library, an un-injected stream, and a real terminal. Injected
+    streams are excluded even when they happen to be a TTY: tests drive the
+    loop through in-memory streams, and routing those through ``input()`` would
+    read the process's real stdin instead.
+    """
+    if _readline is None or injected_stdin is not None:
+        return False
+    try:
+        return bool(stream.isatty())
+    except (AttributeError, ValueError):
+        # A closed or non-file-like stream reports nothing useful; unedited
+        # input still works, so this must never prevent the shell starting.
+        return False
+
+
+def _read_input_line(stream: TextIO, out: TextIO, *, line_editing: bool) -> str | None:
+    """Read one line without its newline, or None at end of input.
+
+    None distinguishes EOF from an empty line, which ``input()`` returns
+    identically as ``""``.
+    """
+    if line_editing:
+        try:
+            # `input()` writes the prompt itself; readline needs to own it to
+            # redraw the line correctly during editing.
+            return input(SHELL_PROMPT)
+        except EOFError:
+            return None
+    out.write(SHELL_PROMPT)
+    out.flush()
+    line = stream.readline()
+    if line == "":
+        return None
+    return line.rstrip("\n")
 
 
 def format_shell_help() -> str:
@@ -431,6 +656,9 @@ def format_shell_help() -> str:
             "Type a question to search the stored local library.",
             "/help    Show this help.",
             "/status  Show database path, paper/passage counts, and generator state.",
+            "/show    List citation IDs available for the last answered turn.",
+            "/show ID Print the full stored passage text for that citation.",
+            "/reset   Forget earlier turns; the next question is taken literally.",
             "/exit    Exit the session.",
             "/quit    Exit the session.",
         )
@@ -457,12 +685,55 @@ def format_shell_status(session: InteractiveShellSession) -> str:
     )
 
 
+def format_shell_show(session: InteractiveShellSession, citation_id: str | None) -> str:
+    """Render the ``/show`` command: list available IDs, or one full passage.
+
+    Reads only ``session.last_turn_citations`` — the immutable evidence
+    already resolved for the latest turn — never a live storage read, so a
+    concurrent ``analyze``/``update`` cannot change what ``/show`` renders.
+    """
+    citations = session.last_turn_citations
+    if not citations:
+        return (
+            "No evidence is available yet. Ask a question that gets "
+            "answered, then run /show."
+        )
+    if citation_id is None:
+        available = ", ".join(item.citation_id for item in citations)
+        return (
+            f"Available citations: {available}\n"
+            f"Run /show ID to view one, e.g. /show {citations[0].citation_id}."
+        )
+    if citation_id not in {item.citation_id for item in citations}:
+        available = ", ".join(item.citation_id for item in citations)
+        return f"Unknown citation ID '{citation_id}'. Available: {available}"
+    return format_evidence_detail(citations, citation_id=citation_id)
+
+
 def format_shell_turn_output(result: ShellTurnResult) -> str:
     """Render one question's result with the same fields as one-shot chat."""
-    lines = [f"Question: {result.question}", f"Outcome: {result.outcome.value}"]
+    lines = [f"Question: {result.question}"]
+    if result.resolved_question is not None:
+        # Always visible: a rewrite the user disagrees with must be
+        # correctable, not silently answered as if they had asked it.
+        lines.append(f"Interpreted as: {result.resolved_question}")
+    lines.append(f"Outcome: {result.outcome.value}")
 
     if result.outcome is ShellTurnOutcome.ANSWERED:
         lines.append(f"Answer: {result.answer_text}")
+        if result.claims:
+            lines.append("\n--- Answer by Source ---")
+            for position, claim in enumerate(result.claims, start=1):
+                lines.append(f"{position}. {claim.text}")
+                sources = ", ".join(claim.paper_titles)
+                identifiers = ", ".join(claim.citation_ids)
+                lines.append(f"   Source: {sources} [{identifiers}]")
+        if result.withheld_claims:
+            total = len(result.claims) + len(result.withheld_claims)
+            lines.append(
+                f"\nWithheld: {len(result.withheld_claims)} of {total} generated "
+                "claims attributed content to a paper that does not contain it."
+            )
         if result.generation_method is not None:
             lines.append(f"Generation Method: {result.generation_method}")
         if result.finding_kinds:
@@ -474,6 +745,12 @@ def format_shell_turn_output(result: ShellTurnResult) -> str:
             lines.append("Finding Kinds: N/A")
         lines.append("\n--- Citations ---")
         lines.extend(_render_citation_lines(result.citations))
+        lines.append(f"\n{CHAT_EVIDENCE_SCOPE}")
+    elif result.outcome is ShellTurnOutcome.WITHHELD:
+        lines.append(f"Reason: {result.no_answer_reason}")
+        lines.extend(_render_withheld_lines(result.withheld_claims))
+        if result.generation_method is not None:
+            lines.append(f"Generation Method: {result.generation_method}")
         lines.append(f"\n{CHAT_EVIDENCE_SCOPE}")
     elif result.outcome in (ShellTurnOutcome.NO_MATCHES, ShellTurnOutcome.ABSTAINED):
         lines.append(f"Reason: {result.no_answer_reason}")
@@ -501,11 +778,13 @@ def run_interactive_shell(
 ) -> int:
     """Run the bare interactive shell's read-eval-print loop.
 
-    Reads lines from ``stdin`` (falling back to ``sys.stdin``/``stdout``/
-    ``stderr`` when not injected) rather than the builtin ``input()``, so the
-    loop has no direct dependency on terminal globals and is fully testable
-    with in-memory streams. EOF (an empty ``readline()`` result) and
-    ``/exit``/``/quit`` exit successfully; ``KeyboardInterrupt`` while
+    On a real terminal, input is read through the builtin ``input()`` so the
+    ``readline`` library provides line editing and history; without it, arrow
+    keys reach the question as raw escape sequences like ``^[[D``. Injected or
+    non-TTY streams are read with ``stdin.readline()`` instead, keeping the
+    loop free of terminal globals and fully testable with in-memory streams.
+
+    EOF and ``/exit``/``/quit`` exit successfully; ``KeyboardInterrupt`` while
     waiting for input exits with ``ShellExitCode.INTERRUPTED`` and no
     traceback. A per-question failure is rendered and the loop continues.
     """
@@ -517,6 +796,8 @@ def run_interactive_shell(
         in_ = stdin if stdin is not None else sys.stdin
         out = stdout if stdout is not None else sys.stdout
         err = stderr if stderr is not None else sys.stderr
+
+    line_editing = _line_editing_available(stdin, in_)
 
     session = open_shell_session(
         options,
@@ -533,15 +814,13 @@ def run_interactive_shell(
 
     try:
         while True:
-            out.write(SHELL_PROMPT)
-            out.flush()
             try:
-                line = in_.readline()
+                line = _read_input_line(in_, out, line_editing=line_editing)
             except KeyboardInterrupt:
                 out.write("\n")
                 return ShellExitCode.INTERRUPTED
 
-            if line == "":
+            if line is None:
                 out.write("\n")
                 return ShellExitCode.SUCCESS
 
@@ -555,6 +834,22 @@ def run_interactive_shell(
                 continue
             if stripped == "/status":
                 out.write(format_shell_status(session) + "\n")
+                continue
+            # split(None, ...) splits on any whitespace run (space, tab, ...)
+            # and collapses it, so "/show\te1" and "/show   e1" both parse
+            # the same way a literal space does.
+            command_token = stripped.split(None, 1)[0]
+            if command_token == "/show":
+                remainder = stripped.split(None, 1)[1:]
+                citation_id = remainder[0].strip() if remainder else None
+                out.write(format_shell_show(session, citation_id or None) + "\n")
+                continue
+            if stripped == "/reset":
+                session.reset_history()
+                out.write(
+                    "Conversation context cleared. The next question is taken "
+                    "literally.\n"
+                )
                 continue
 
             result = session.ask(stripped)

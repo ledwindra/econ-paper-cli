@@ -51,7 +51,14 @@ to a tuple. `to_mapping()` emits a JSON-native list.
 - `abstained`: an explicit boolean state;
 - `abstention_reason`: `insufficient_evidence` or `null`; and
 - `finding_kinds`: a duplicate-free tuple containing zero or more of
-  `descriptive` and `causal`.
+  `descriptive` and `causal`; and
+- `claims`: an immutable tuple of `GeneratedClaim`, each a single
+  self-contained sentence with the `citation_ids` supporting that sentence
+  alone. Empty for backends that emit only flat prose.
+
+Every identifier a claim cites must also appear in `citations`, so the
+per-claim attribution and the response citation list can never disagree about
+which passages back the answer.
 
 `FindingKind` is backend-declared answer-level metadata. Structural validation
 can verify only that the values are well formed. It cannot prove that prose is
@@ -157,19 +164,41 @@ Errors identify the malformed field, evidence position, citation ID, expected
 paper or passage identity, rank-order violation, or inconsistent abstention
 state.
 
-## Concrete Issue 12 adapter
+## Claim grounding
+
+`check_response_grounding()` returns one `ClaimGroundingResult` per claim, in
+claim order. A claim is *ungrounded* when it uses a term distinctive to a paper
+it does not cite — see `domain/claim_grounding.py` for the scoping rules
+(paper-level, not passage-level; terms shared across several papers are field
+vocabulary and are ignored; question wording is exempt).
+
+The check is structural, never semantic: it does not ask whether a claim is
+true, only whether the words it uses could have come from the paper it points
+at. Responses without claims yield no verdicts, and an empty result must never
+be read as "verified".
+
+`chat` and the interactive shell both withhold ungrounded claims from the
+answer. When every claim is withheld the outcome is `withheld`, which is
+deliberately distinct from `abstained`: the generator did produce an answer,
+and reporting an abstention would tell the user the library had nothing to say.
+
+## Concrete adapter
 
 `LlamaCppGenerator` preserves this contract exactly. Its model-facing schema
-contains only `answer_text`, `citation_ids`, `abstained`,
-`abstention_reason`, and answer-level `finding_kinds`. The adapter resolves
-rank-derived citation IDs to existing authoritative `Citation` objects,
-supplies `generation_method`, creates `GenerationResponse`, and invokes
+(`generation-v3`) contains only `claims`, `abstained`, `abstention_reason`, and
+answer-level `finding_kinds`. The model emits no separate citation list: the
+adapter derives `citations` from what the claims cite, in ascending evidence
+rank, so a claim/citation disagreement is unrepresentable rather than merely
+invalid. It resolves rank-derived citation IDs to existing authoritative
+`Citation` objects, joins the claim texts into `answer_text`, supplies
+`generation_method`, creates `GenerationResponse`, and invokes
 `validate_generation_response()`.
 
-This does not create claim-level citation associations. Human semantic review
-may judge whether each substantive claim is supported by at least one returned
-response-level citation, but the contract does not mechanically associate
-citations with sentences.
+v2 carried a single flat `answer_text` and a separate bag of citation IDs. That
+shape could not express which sentence came from which paper, and a small local
+model routinely welded two studies into one fluent description that passed
+every structural check. Claim-level binding is what makes that misattribution
+both representable and detectable.
 
 The adapter uses explicit local executable and model paths and performs no
 downloads. Runtime, prompt, schema, privacy, failure, benchmark, artifact, and

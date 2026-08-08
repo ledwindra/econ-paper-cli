@@ -47,10 +47,15 @@ The adapter:
 - constructs `GenerationResponse`; and
 - calls `validate_generation_response()` before returning.
 
-The model-facing JSON contains only `answer_text`, `citation_ids`, `abstained`,
-`abstention_reason`, and answer-level `finding_kinds`. It does not contain
-claim-level citations. Structural citation validation cannot prove that a
-particular sentence is supported by a particular citation.
+The model-facing JSON (`generation-v3`) contains only `claims`, `abstained`,
+`abstention_reason`, and answer-level `finding_kinds`. Each claim is one
+sentence carrying the citation IDs supporting it alone, and `citations` is
+derived from those claims rather than emitted separately.
+
+Structural validation still cannot prove that a sentence is *true*. It can now
+detect one specific falsehood: `check_response_grounding()` flags a claim using
+a term distinctive to a paper it does not cite, which is the signature of two
+studies being merged into one description.
 
 Operational problems such as missing files, checksum mismatches, incompatible
 artifacts, process failures, timeouts, cancellation, invalid UTF-8, and invalid

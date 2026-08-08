@@ -16,6 +16,7 @@ from econ_paper_cli.protocols.generation import (
     GenerationResponse,
     GenerationResponseValidationError,
     Generator,
+    check_response_grounding,
     validate_generation_response,
 )
 from econ_paper_cli.protocols.pdf_extraction import (
@@ -112,6 +113,7 @@ __all__ = [
     "UnsafeArchiveMemberError",
     "UnsupportedArchiveFormatError",
     "UntrustedRedirectHostError",
+    "check_response_grounding",
     "validate_generation_response",
     "validate_retrieval_results",
 ]

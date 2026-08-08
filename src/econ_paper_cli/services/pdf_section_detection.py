@@ -56,6 +56,14 @@ _JEL_KEYWORDS_RE = re.compile(
     r"^\s*\(?\s*(?:JEL\s+Classification|JEL\s+codes?|JEL\b|Keywords?|Key\s+words?)\s*[\:\.]?\s*",
     re.IGNORECASE,
 )
+# AEA sets the JEL codes inline at the end of the abstract's final sentence
+# ("...received inflows of skilled labor. (JEL J24, J31, R23)") rather than on
+# a line of their own, so the line-anchored `_JEL_KEYWORDS_RE` never sees them.
+# Kept separate from that pattern deliberately: `_JEL_KEYWORDS_RE` also drives
+# the stateful front-matter exclusion machine, and widening it there would
+# change what text is stripped from papers that already convert correctly.
+# Used only to anchor the end of an unheaded abstract.
+_INLINE_JEL_TERMINATOR_RE = re.compile(r"\(\s*JEL\b[^)]*\)\s*$", re.IGNORECASE)
 _ARTICLE_HISTORY_RE = re.compile(
     r"^\s*(?:ARTICLE\s+INFO|ARTICLE\s+HISTORY|Received\s+\d|Accepted\s+\d|Available\s+online|doi\.org|\bDOI\:)\b",
     re.IGNORECASE,
@@ -206,6 +214,15 @@ def detect_pdf_sections(
     abstract_candidates = _find_heading_candidates(
         all_lines, _ABSTRACT_HEADING_RE, PDFSectionKind.ABSTRACT, running_headers
     )
+    # An "Abstract" line appearing after the body has already started is not
+    # front matter — it is a word in a table, appendix, or reference list.
+    # Observed on a real 45-page AEA paper whose only candidate sat on page 19,
+    # which both hid the real unheaded abstract on page 1 and dead-ended
+    # detection entirely. Demoting rather than dropping keeps the match in
+    # `candidates` for provenance; score 0 is already "never selected".
+    abstract_candidates = _demote_candidates_after_body_start(
+        abstract_candidates, all_lines, running_headers
+    )
     intro_candidates = _find_heading_candidates(
         all_lines,
         _INTRODUCTION_HEADING_RE,
@@ -215,6 +232,7 @@ def detect_pdf_sections(
 
     warnings_list: list[PDFSectionWarning] = []
     sections_list: list[PDFSection] = []
+    unheaded_abstract_resolved = False
 
     selected_abstract = _select_candidate(
         abstract_candidates,
@@ -282,12 +300,51 @@ def detect_pdf_sections(
                     )
                 )
         else:
-            warnings_list.append(
-                PDFSectionWarning(
-                    PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY,
-                    (all_lines[selected_abstract.line_index].page_number,),
+            # No Introduction heading was printed — common at AEA and Oxford UP,
+            # where the introduction simply begins after the front matter. The
+            # abstract's end is still resolvable from a front-matter terminator
+            # (JEL codes / keywords) ahead of the first body heading. Emitting
+            # UNRESOLVED_ABSTRACT_BOUNDARY unconditionally here used to strand
+            # the paper twice over: no Abstract was built, and the warning also
+            # blocked implicit-Introduction inference below, so detection
+            # returned nothing at all.
+            abstract_end_idx = _resolve_unheaded_abstract_end(
+                all_lines,
+                abstract_heading_index=selected_abstract.line_index,
+                running_headers=running_headers,
+            )
+            abstract_section = (
+                None
+                if abstract_end_idx is None
+                else _build_section(
+                    kind=PDFSectionKind.ABSTRACT,
+                    heading_line=all_lines[selected_abstract.line_index],
+                    start_line_index=selected_abstract.line_index + 1,
+                    end_line_index=abstract_end_idx,
+                    all_lines=all_lines,
+                    extraction=extraction,
+                    running_headers=running_headers,
                 )
             )
+            if abstract_section is not None:
+                sections_list.append(abstract_section)
+                # Deliberately do not also infer an Introduction here. Where a
+                # paper prints an Abstract heading but no Introduction heading,
+                # the text between the abstract's terminator and the first body
+                # heading is usually author footnotes and acknowledgments, not
+                # introduction prose — inferring it produced citations quoting
+                # affiliation blocks. An Abstract alone already makes the paper
+                # searchable, so Abstract-only is the honest, useful outcome.
+                unheaded_abstract_resolved = True
+            else:
+                # Genuinely unresolvable: report it rather than guessing a
+                # boundary and mislabelling introduction prose as the abstract.
+                warnings_list.append(
+                    PDFSectionWarning(
+                        PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY,
+                        (all_lines[selected_abstract.line_index].page_number,),
+                    )
+                )
     elif not abstract_ambiguous:
         # Implicit Abstract inference (Cases C & F)
         end_search_idx = (
@@ -304,10 +361,20 @@ def detect_pdf_sections(
                 end_search_idx = first_sec_cand.line_index
 
         jel_idx = None
+        # An inline "(JEL ...)" sits at the end of the abstract's own final
+        # sentence, so that line is abstract prose and belongs *inside* the
+        # section; a line-anchored "JEL codes:" line is pure metadata and stays
+        # outside. Getting this wrong either truncates the abstract's last
+        # sentence or leaks a JEL fragment into the following introduction.
+        jel_line_is_prose = False
         ack_idx = None
         for idx in range(start_line_idx, end_search_idx):
-            if jel_idx is None and _JEL_KEYWORDS_RE.match(all_lines[idx].trimmed):
+            if jel_idx is None and (
+                _JEL_KEYWORDS_RE.match(all_lines[idx].trimmed)
+                or _INLINE_JEL_TERMINATOR_RE.search(all_lines[idx].trimmed)
+            ):
                 jel_idx = idx
+                jel_line_is_prose = not _JEL_KEYWORDS_RE.match(all_lines[idx].trimmed)
             if ack_idx is None and _ACKNOWLEDGMENTS_RE.match(all_lines[idx].trimmed):
                 ack_idx = idx
 
@@ -329,7 +396,7 @@ def detect_pdf_sections(
             implicit_abs = _build_implicit_section(
                 kind=PDFSectionKind.ABSTRACT,
                 start_line_index=start_line_idx + 1,
-                end_line_index=jel_idx,
+                end_line_index=jel_idx + 1 if jel_line_is_prose else jel_idx,
                 all_lines=all_lines,
                 extraction=extraction,
                 boundary_evidence=(title_ev, jel_ev),
@@ -426,6 +493,7 @@ def detect_pdf_sections(
     elif (
         selected_intro is None
         and not intro_ambiguous
+        and not unheaded_abstract_resolved
         and not any(
             w.code is PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY
             for w in warnings_list
@@ -624,6 +692,63 @@ def _find_heading_candidates(
                     score += 1
             candidates.append(_CandidateMatch(kind, idx, line, score))
     return candidates
+
+
+def _resolve_unheaded_abstract_end(
+    lines: list[_LineInfo],
+    *,
+    abstract_heading_index: int,
+    running_headers: set[str],
+) -> int | None:
+    """Locate where an abstract ends when no Introduction heading follows it.
+
+    Searches only between the abstract heading and the first body heading, and
+    only for the same front-matter terminators the implicit-abstract path
+    already trusts (JEL/keywords, then acknowledgments). Returns None when no
+    terminator exists: without one there is no evidence for where the abstract
+    stops and the unheaded introduction starts, and guessing would file
+    introduction prose under the Abstract heading.
+    """
+    body_start = _find_next_section_candidate(
+        lines,
+        start_index=abstract_heading_index + 1,
+        running_headers=running_headers,
+        is_implicit_intro=True,
+    )
+    end_search_idx = len(lines) if body_start is None else body_start.line_index
+    for idx in range(abstract_heading_index + 1, end_search_idx):
+        if _JEL_KEYWORDS_RE.match(lines[idx].trimmed) or _ACKNOWLEDGMENTS_RE.match(
+            lines[idx].trimmed
+        ):
+            return idx if idx > abstract_heading_index + 1 else None
+    return None
+
+
+def _demote_candidates_after_body_start(
+    candidates: list[_CandidateMatch],
+    lines: list[_LineInfo],
+    running_headers: set[str],
+) -> list[_CandidateMatch]:
+    """Score to zero any candidate positioned after the first body heading.
+
+    Front matter precedes the body by definition. The body start is located
+    with the same `_find_next_section_candidate` machinery and plausibility
+    gate used elsewhere, rather than an arbitrary page cutoff, which would
+    misfire on papers carrying a multi-page cover sheet.
+    """
+    if not candidates:
+        return candidates
+    body_start = _find_next_section_candidate(
+        lines, start_index=0, running_headers=running_headers, is_implicit_intro=True
+    )
+    if body_start is None:
+        return candidates
+    return [
+        candidate
+        if candidate.line_index < body_start.line_index
+        else _CandidateMatch(candidate.kind, candidate.line_index, candidate.line, 0)
+        for candidate in candidates
+    ]
 
 
 def _find_next_section_candidate(

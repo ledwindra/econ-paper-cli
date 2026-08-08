@@ -31,7 +31,7 @@ class PDFConversionSettings:
 
     policy_version: str = _POLICY_VERSION
     max_passage_characters: int = 1200
-    section_policy_version: str = "pdf-section-detection-v2"
+    section_policy_version: str = "pdf-section-detection-v3"
 
     def __post_init__(self) -> None:
         if self.policy_version != _POLICY_VERSION:

@@ -43,24 +43,45 @@ from econ_paper_cli.protocols import (
 # invalid JSON". finding_kinds is now enumerated to its legal unique
 # combinations, and citation_ids is length-capped so no runaway is
 # representable.
-PROMPT_VERSION = "generation-v2"
+#
+# v3 replaces the single flat `answer_text` with a list of claims, each
+# carrying the citation identifiers that support that claim alone. The flat
+# field could not express which sentence came from which paper, so a fluent
+# small model routinely welded two studies into one description: every
+# citation identifier was real, `validate_generation_response` passed, and the
+# user was told one paper used another paper's design and reported its
+# outcomes. Per-claim binding makes that misattribution both representable and
+# checkable — see `domain.claim_grounding`, which flags a claim using terms
+# distinctive to a paper it does not cite. Measured on a real 248-paper
+# library, the same 1.5B model stopped conflating under v3 with no change of
+# model, so this is a format fix rather than a capacity one.
+PROMPT_VERSION = "generation-v3"
 OUTPUT_GRAMMAR_SHA256 = (
-    "6a136e0081a86f96345c34b97649d7ba5f70eb35697a688b4314dc3bd46f84ec"
+    "fb8ad6c38775587e7a695ad9caf47f0f30cbcece2285f6000793ff361856eacf"
 )
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 _MODEL_ID_PATTERN = re.compile(r"[a-z0-9]+(?:[._-][a-z0-9]+)*")
 _MODEL_OUTPUT_FIELDS = frozenset(
     {
-        "answer_text",
-        "citation_ids",
+        "claims",
         "abstained",
         "abstention_reason",
         "finding_kinds",
     }
 )
+FOLLOW_UP_PROMPT_VERSION = "followup-v1"
+FOLLOW_UP_GRAMMAR_SHA256 = (
+    "e126e95ed59f0480ca37b863420a15d35261f567e247ac47d7b4c3e5b593875d"
+)
 _RESOURCE_DIRECTORY = Path(__file__).with_name("resources")
 _PROMPT_TEMPLATE_PATH = _RESOURCE_DIRECTORY / f"{PROMPT_VERSION}.txt"
 _OUTPUT_GRAMMAR_PATH = _RESOURCE_DIRECTORY / f"{PROMPT_VERSION}.gbnf"
+_FOLLOW_UP_PROMPT_PATH = _RESOURCE_DIRECTORY / f"{FOLLOW_UP_PROMPT_VERSION}.txt"
+_FOLLOW_UP_GRAMMAR_PATH = _RESOURCE_DIRECTORY / f"{FOLLOW_UP_PROMPT_VERSION}.gbnf"
+# A resolved question is one sentence, so the budget is far below the answer
+# budget. Capping it also bounds the damage from a model that starts
+# elaborating instead of rewriting.
+_FOLLOW_UP_MAX_OUTPUT_TOKENS = 128
 _COMPLETION_FOOTER = "\n> EOF by user"
 # llama.cpp tags severity inline, e.g.
 #   "0.00.545.833 E llama_completion: prompt is too long (4859 tokens, max 4092)"
@@ -453,8 +474,78 @@ class LlamaCppGenerator:
                 "Local model output violated the generation response contract."
             ) from error
 
+    def resolve_follow_up(self, question: str, prior_questions: Sequence[str]) -> str:
+        """Rewrite a context-dependent question into a standalone one.
+
+        Returns ``question`` unchanged when there is no prior context. The
+        caller is responsible for deciding that a question *needs* resolution;
+        this method performs the rewrite it is asked for.
+        """
+        if not isinstance(question, str) or not question.strip():
+            raise LlamaCppConfigurationError("question must be a non-empty string.")
+        if not prior_questions:
+            return question.strip()
+        if not self._ready:
+            self.check_readiness()
+
+        payload = json.dumps(
+            {
+                "earlier_questions": list(prior_questions),
+                "follow_up_question": question.strip(),
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        template = _load_resource_text(_FOLLOW_UP_PROMPT_PATH, "follow-up prompt")
+        prompt = template.replace("{{CONTEXT_JSON}}", payload)
+        grammar = _load_resource_text(_FOLLOW_UP_GRAMMAR_PATH, "follow-up grammar")
+        if (
+            hashlib.sha256(grammar.encode("utf-8")).hexdigest()
+            != FOLLOW_UP_GRAMMAR_SHA256
+        ):
+            raise LlamaCppConfigurationError(
+                "Packaged follow-up grammar does not match its expected fingerprint."
+            )
+
+        with tempfile.TemporaryDirectory(prefix="econpapers-followup-") as directory:
+            temporary_directory = Path(directory)
+            prompt_path = temporary_directory / "prompt.txt"
+            grammar_path = temporary_directory / "grammar.gbnf"
+            _write_private_text_file(prompt_path, prompt)
+            _write_private_text_file(grammar_path, grammar)
+            command = self._generation_command(
+                prompt_path=prompt_path,
+                grammar_path=grammar_path,
+                max_output_tokens=_FOLLOW_UP_MAX_OUTPUT_TOKENS,
+            )
+            result = self._run_process(command)
+
+        if result.returncode != 0:
+            detail = _runtime_error_detail(result.stderr)
+            raise LlamaCppProcessError(
+                f"Follow-up resolution runtime exited with status {result.returncode}."
+                + (f" {detail}" if detail else "")
+            )
+
+        data = _parse_single_json_object(_strip_completion_footer(result.stdout))
+        if set(data) != {"resolved_question"}:
+            raise LlamaCppOutputError(
+                "Follow-up resolution output did not contain the exact required fields."
+            )
+        resolved = data["resolved_question"]
+        if not isinstance(resolved, str) or not resolved.strip():
+            raise LlamaCppOutputError(
+                "Follow-up resolution returned an empty question."
+            )
+        return resolved.strip()
+
     def _generation_command(
-        self, *, prompt_path: Path, grammar_path: Path
+        self,
+        *,
+        prompt_path: Path,
+        grammar_path: Path,
+        max_output_tokens: int | None = None,
     ) -> tuple[str, ...]:
         command = [
             str(self._config.executable_path),
@@ -478,7 +569,11 @@ class LlamaCppGenerator:
             "--ctx-size",
             str(self._config.context_size),
             "--predict",
-            str(self._config.max_output_tokens),
+            str(
+                self._config.max_output_tokens
+                if max_output_tokens is None
+                else max_output_tokens
+            ),
             "--seed",
             str(self._config.seed),
             "--temp",
@@ -518,24 +613,33 @@ class LlamaCppGenerator:
                 "Local model output did not contain the exact required fields."
             )
 
-        raw_citation_ids = data["citation_ids"]
-        if not isinstance(raw_citation_ids, list) or any(
-            not isinstance(item, str) for item in raw_citation_ids
-        ):
-            raise LlamaCppOutputError(
-                "Local model citation_ids must be a JSON array of strings."
-            )
-        citation_ids = cast(list[str], raw_citation_ids)
+        raw_claims = data["claims"]
+        if not isinstance(raw_claims, list):
+            raise LlamaCppOutputError("Local model claims must be a JSON array.")
+        claims = [_parse_model_claim(item) for item in raw_claims]
+
         evidence_by_id = {
             f"e{evidence.rank}": evidence for evidence in request.evidence
         }
+        # The model no longer emits a separate citation list, so the response's
+        # citations are derived from what the claims actually cite. That makes
+        # a claim/citation disagreement unrepresentable rather than merely
+        # invalid, and it is what supplies the rank ordering the response
+        # contract requires.
+        cited_ids: list[str] = []
+        for claim in claims:
+            for citation_id in claim["citation_ids"]:
+                if citation_id not in evidence_by_id:
+                    raise LlamaCppOutputError(
+                        "Local model returned an unknown evidence citation identifier."
+                    )
+                if citation_id not in cited_ids:
+                    cited_ids.append(citation_id)
+        cited_ids.sort(key=lambda citation_id: evidence_by_id[citation_id].rank)
+
         citations: list[dict[str, str]] = []
-        for citation_id in citation_ids:
-            evidence = evidence_by_id.get(citation_id)
-            if evidence is None:
-                raise LlamaCppOutputError(
-                    "Local model returned an unknown evidence citation identifier."
-                )
+        for citation_id in cited_ids:
+            evidence = evidence_by_id[citation_id]
             citation = Citation(
                 citation_id=citation_id,
                 paper_id=evidence.passage.paper_id,
@@ -543,21 +647,58 @@ class LlamaCppGenerator:
             )
             citations.append(cast(dict[str, str], citation.to_mapping()))
 
+        # `answer_text` stays populated for every consumer that renders a
+        # single block of prose; the claims carry the attribution alongside it.
+        answer_text = " ".join(claim["text"].strip() for claim in claims).strip()
+        if not answer_text:
+            answer_text = "No supported claim was produced from the evidence."
+
         try:
             return GenerationResponse.from_mapping(
                 {
-                    "answer_text": data["answer_text"],
+                    "answer_text": answer_text,
                     "citations": citations,
                     "generation_method": self.generation_method,
                     "abstained": data["abstained"],
                     "abstention_reason": data["abstention_reason"],
                     "finding_kinds": data["finding_kinds"],
+                    "claims": claims,
                 }
             )
         except GenerationResponseValidationError as error:
             raise LlamaCppOutputError(
                 "Local model output violated the generation response schema."
             ) from error
+
+
+def _parse_model_claim(item: object) -> dict[str, object]:
+    """Validate one raw model claim before it reaches the response contract."""
+    if not isinstance(item, dict):
+        raise LlamaCppOutputError("Local model claims must be JSON objects.")
+    if set(item) != {"text", "citation_ids"}:
+        raise LlamaCppOutputError(
+            "Local model claim did not contain the exact required fields."
+        )
+    text = item["text"]
+    if not isinstance(text, str) or not text.strip():
+        raise LlamaCppOutputError("Local model claim text must be a non-empty string.")
+    raw_ids = item["citation_ids"]
+    if (
+        not isinstance(raw_ids, list)
+        or not raw_ids
+        or any(not isinstance(entry, str) for entry in raw_ids)
+    ):
+        raise LlamaCppOutputError(
+            "Local model claim citation_ids must be a non-empty array of strings."
+        )
+    # The grammar cannot express uniqueness within a list, so a repeated
+    # identifier is possible output and is normalized here rather than
+    # rejected: it costs the user their answer for a harmless duplication.
+    unique_ids: list[str] = []
+    for entry in cast(list[str], raw_ids):
+        if entry not in unique_ids:
+            unique_ids.append(entry)
+    return {"text": text, "citation_ids": unique_ids}
 
 
 def render_generation_prompt(request: GenerationRequest) -> str:

@@ -12,6 +12,10 @@ from econ_paper_cli.domain.runtime_manifest import (
     SupportedPlatform,
 )
 from econ_paper_cli.domain.runtime_receipt import InstallReceipt
+from econ_paper_cli.services.model_provisioning import (
+    ManagedModelInstall,
+    OfflineModelProvisioningError,
+)
 from econ_paper_cli.services.runtime_provisioning import (
     ManagedRuntimeInstall,
     OfflineProvisioningError,
@@ -505,3 +509,175 @@ def test_real_provisioning_checksum_mismatch_is_typed_failure_and_preserves_conf
     assert exit_code == CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
     assert config_path.read_bytes() == original_bytes
     assert "Managed runtime provisioning failed" in err.getvalue()
+
+
+# --- Managed model provisioning ---------------------------------------------
+
+
+def _model_install(tmp_path: Path, *, downloaded: bool = True) -> ManagedModelInstall:
+    return ManagedModelInstall(
+        model_path=tmp_path / "provisioned.gguf",
+        model_id="provisioned-model",
+        size_bytes=4096,
+        sha256="d" * 64,
+        display_name="Provisioned Model",
+        downloaded=downloaded,
+    )
+
+
+def test_setup_without_model_flags_provisions_and_persists_that_identity(
+    tmp_path: Path,
+) -> None:
+    """A fresh user supplies no model flags at all. The provisioned artifact's
+    path, id, size, and checksum must become the durable configuration, or
+    later commands would have nothing to verify the model against."""
+    backend = JSONConfigStorage(tmp_path / "config.json")
+    calls: list[tuple[str | None, bool]] = []
+
+    def provisioner(model_id: str | None, allow_download: bool):
+        calls.append((model_id, allow_download))
+        return _model_install(tmp_path)
+
+    exit_code = run_setup_command(
+        _options(model_path=None, model_id=None, model_bytes=None, model_checksum=None),
+        config_backend=backend,
+        readiness_checker=_ok_checker,
+        model_provisioner=provisioner,
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert exit_code == 0
+    assert calls == [(None, True)]
+    stored = backend.load()
+    assert stored.model_path == (tmp_path / "provisioned.gguf").resolve()
+    assert stored.model_id == "provisioned-model"
+    assert stored.model_bytes == 4096
+    assert stored.model_checksum == "d" * 64
+
+
+def test_explicit_model_path_never_triggers_model_provisioning(
+    tmp_path: Path,
+) -> None:
+    """Supplying the model identity must bypass provisioning entirely, exactly
+    as an explicit executable path bypasses runtime provisioning -- a user who
+    named their own GGUF must never see a download."""
+    backend = JSONConfigStorage(tmp_path / "config.json")
+
+    def exploding(model_id: str | None, allow_download: bool):
+        raise AssertionError("Model provisioning must not run.")
+
+    exit_code = run_setup_command(
+        _options(),
+        config_backend=backend,
+        readiness_checker=_ok_checker,
+        model_provisioner=exploding,
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert exit_code == 0
+    assert backend.load().model_id == "qwen2.5-1.5b-instruct-q4-k-m"
+
+
+def test_offline_setup_forwards_the_download_refusal_to_model_provisioning(
+    tmp_path: Path,
+) -> None:
+    """--offline must suppress the model download too, not only the runtime."""
+    calls: list[tuple[str | None, bool]] = []
+
+    def provisioner(model_id: str | None, allow_download: bool):
+        calls.append((model_id, allow_download))
+        return _model_install(tmp_path, downloaded=False)
+
+    run_setup_command(
+        _options(
+            model_path=None,
+            model_id=None,
+            model_bytes=None,
+            model_checksum=None,
+            offline=True,
+        ),
+        config_backend=JSONConfigStorage(tmp_path / "config.json"),
+        readiness_checker=_ok_checker,
+        model_provisioner=provisioner,
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert calls == [(None, False)]
+
+
+def test_a_requested_catalog_model_is_forwarded_to_provisioning(
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str | None, bool]] = []
+
+    def provisioner(model_id: str | None, allow_download: bool):
+        calls.append((model_id, allow_download))
+        return _model_install(tmp_path)
+
+    run_setup_command(
+        _options(
+            model_path=None,
+            model_id=None,
+            model_bytes=None,
+            model_checksum=None,
+            managed_model_id="qwen2.5-7b-instruct-q4-k-m",
+        ),
+        config_backend=JSONConfigStorage(tmp_path / "config.json"),
+        readiness_checker=_ok_checker,
+        model_provisioner=provisioner,
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert calls == [("qwen2.5-7b-instruct-q4-k-m", True)]
+
+
+def test_failed_model_provisioning_writes_nothing_and_exits_typed(
+    tmp_path: Path,
+) -> None:
+    """Provisioning failure must leave prior durable configuration untouched,
+    matching the runtime-provisioning failure contract."""
+    config_path = tmp_path / "config.json"
+    backend = JSONConfigStorage(config_path)
+    err = io.StringIO()
+
+    def failing(model_id: str | None, allow_download: bool):
+        raise OfflineModelProvisioningError("no model and downloads disabled")
+
+    exit_code = run_setup_command(
+        _options(model_path=None, model_id=None, model_bytes=None, model_checksum=None),
+        config_backend=backend,
+        readiness_checker=_ok_checker,
+        model_provisioner=failing,
+        stdout=io.StringIO(),
+        stderr=err,
+    )
+
+    assert exit_code == 2
+    assert "Managed model provisioning failed" in err.getvalue()
+    assert not config_path.exists()
+
+
+def test_provisioned_setup_reports_the_model_name_and_whether_it_downloaded(
+    tmp_path: Path,
+) -> None:
+    """A first run downloads gigabytes; the user must be told what was fetched
+    and, on later runs, that nothing was re-downloaded."""
+    out = io.StringIO()
+    run_setup_command(
+        _options(model_path=None, model_id=None, model_bytes=None, model_checksum=None),
+        config_backend=JSONConfigStorage(tmp_path / "config.json"),
+        readiness_checker=_ok_checker,
+        model_provisioner=lambda _id, _allow: _model_install(
+            tmp_path, downloaded=False
+        ),
+        stdout=out,
+        stderr=io.StringIO(),
+    )
+
+    rendered = out.getvalue()
+    assert "Model Name: Provisioned Model" in rendered
+    assert "Model Source: reused existing install" in rendered

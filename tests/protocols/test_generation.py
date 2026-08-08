@@ -18,6 +18,10 @@ from econ_paper_cli.protocols import (
     Generator,
     validate_generation_response,
 )
+from econ_paper_cli.protocols.generation import (
+    GeneratedClaim,
+    check_response_grounding,
+)
 
 
 def make_evidence(
@@ -389,3 +393,123 @@ def test_generation_contract_error_catches_request_and_response_failures() -> No
         GenerationRequest(question="", evidence=())
     with pytest.raises(GenerationContractError):
         make_answered_response()
+
+
+def test_claim_may_not_cite_an_identifier_the_response_does_not_cite() -> None:
+    """Per-claim attribution and the response citation list are two views of
+    the same binding, so they must never be able to disagree about which
+    passages back the answer."""
+    request = make_request(make_evidence(1))
+    response = GenerationResponse(
+        answer_text="A synthetic finding.",
+        citations=(
+            Citation(
+                citation_id="e1",
+                paper_id="paper-1",
+                passage_id="paper-1:passage-1",
+            ),
+        ),
+        generation_method="scripted-generator-v1",
+        abstained=False,
+        abstention_reason=None,
+        finding_kinds=(FindingKind.DESCRIPTIVE,),
+        claims=(GeneratedClaim(text="A synthetic finding.", citation_ids=("e2",)),),
+    )
+
+    with pytest.raises(
+        GenerationResponseValidationError, match="absent from the response citations"
+    ):
+        validate_generation_response(request, response)
+
+
+def test_claim_rejects_empty_or_duplicated_citation_ids() -> None:
+    """A claim with no citation carries no attribution, and a repeated
+    identifier misrepresents how much evidence supports it."""
+    with pytest.raises(GenerationResponseValidationError, match="must not be empty"):
+        GeneratedClaim(text="A finding.", citation_ids=())
+    with pytest.raises(GenerationResponseValidationError, match="repeats citation_id"):
+        GeneratedClaim(text="A finding.", citation_ids=("e1", "e1"))
+
+
+def test_response_round_trips_claims_through_its_mapping() -> None:
+    """Claims must survive the JSON boundary, or a stored or transported
+    response would silently lose its per-claim attribution."""
+    original = GenerationResponse(
+        answer_text="A synthetic finding.",
+        citations=(
+            Citation(
+                citation_id="e1",
+                paper_id="paper-1",
+                passage_id="paper-1:passage-1",
+            ),
+        ),
+        generation_method="scripted-generator-v1",
+        abstained=False,
+        abstention_reason=None,
+        finding_kinds=(FindingKind.DESCRIPTIVE,),
+        claims=(GeneratedClaim(text="A synthetic finding.", citation_ids=("e1",)),),
+    )
+
+    restored = GenerationResponse.from_mapping(
+        json.loads(json.dumps(original.to_mapping()))
+    )
+
+    assert restored == original
+
+
+def test_grounding_reports_a_verdict_per_claim_in_claim_order() -> None:
+    """Verdicts are zipped against claims by position downstream, so the
+    ordering and arity of this result are part of the contract."""
+    first = make_evidence(1, paper_id="paper-1", passage_id="paper-1:passage-1")
+    second = RetrievalEvidence(
+        passage=Passage(
+            passage_id="paper-2:passage-1",
+            paper_id="paper-2",
+            text="Distinctive nutrition and grocery outcomes.",
+            section_heading="Results",
+            page_start=2,
+            page_end=None,
+            ordinal_position=0,
+        ),
+        score=1.0,
+        rank=2,
+        retrieval_method="scripted-retrieval-v1",
+    )
+    request = make_request(first, second)
+    response = GenerationResponse(
+        answer_text="Two findings.",
+        citations=(
+            Citation(
+                citation_id="e1",
+                paper_id="paper-1",
+                passage_id="paper-1:passage-1",
+            ),
+        ),
+        generation_method="scripted-generator-v1",
+        abstained=False,
+        abstention_reason=None,
+        finding_kinds=(FindingKind.DESCRIPTIVE,),
+        claims=(
+            GeneratedClaim(text="Synthetic evidence passage 1.", citation_ids=("e1",)),
+            GeneratedClaim(text="Nutrition outcomes worsened.", citation_ids=("e1",)),
+        ),
+    )
+
+    verdicts = check_response_grounding(request, response)
+
+    assert [verdict.claim_index for verdict in verdicts] == [0, 1]
+    assert verdicts[0].grounded is True
+    assert verdicts[1].grounded is False
+    assert "nutrition" in verdicts[1].leaked_terms
+
+
+def test_grounding_returns_no_verdicts_for_claimless_or_abstaining_responses() -> None:
+    """A flat answer_text has no claim-to-evidence binding, so the check must
+    report nothing rather than implying the answer was verified."""
+    request = make_request(make_evidence(1))
+    flat = make_answered_response(
+        Citation(citation_id="e1", paper_id="paper-1", passage_id="paper-1:passage-1")
+    )
+
+    assert check_response_grounding(request, flat) == ()
+    assert check_response_grounding(request, make_abstaining_response()) == ()

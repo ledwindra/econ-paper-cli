@@ -31,12 +31,16 @@ from econ_paper_cli.protocols import (
     GenerationResponse,
     Generator,
 )
+from econ_paper_cli.protocols.generation import GeneratedClaim
 from econ_paper_cli.services.chat_command import (
+    ChatCitationDetail,
     ChatCommandOptions,
     ChatTerminalOutcome,
     _build_llama_cpp_generator,
+    _render_citation_lines,
     execute_chat_command,
     format_chat_command_output,
+    format_evidence_detail,
 )
 from econ_paper_cli.services.config_resolution import (
     LazyConfigLoader,
@@ -143,7 +147,9 @@ def _record(
     )
 
 
-def _options(tmp_path: Path, question: str = "trade policy") -> ChatCommandOptions:
+def _options(
+    tmp_path: Path, question: str = "trade policy", *, top_k: int = 2
+) -> ChatCommandOptions:
     return ChatCommandOptions(
         question=question,
         executable_path=tmp_path / "llama-cli",
@@ -152,7 +158,7 @@ def _options(tmp_path: Path, question: str = "trade policy") -> ChatCommandOptio
         model_bytes=11,
         model_checksum="b" * 64,
         db_path=tmp_path / "chat.db",
-        top_k=2,
+        top_k=top_k,
     )
 
 
@@ -225,6 +231,7 @@ def test_answered_chat_renders_citations_from_durable_storage(
     assert "Evidence scope: stored Abstract and Introduction passages only." in output
 
     first = result.citations[0]
+    second = result.citations[1]
     expected = (
         "=== One-Shot Chat Result ===\n"
         f"Question: {result.question}\n"
@@ -235,24 +242,24 @@ def test_answered_chat_renders_citations_from_durable_storage(
         "Generation Method: fake-generator\n"
         "Finding Kinds: descriptive\n"
         "\n--- Citations ---\n"
-        f"[{first.citation_id}]\n"
-        f"  Paper Title: {first.paper_title}\n"
-        f"  Section Heading: {first.section_heading}\n"
-        f"  Page Range: {first.page_start}\n"
+        # Both passages belong to one paper, so the paper-level facts appear
+        # exactly once and the two passages are nested beneath them.
+        f"[{first.citation_id}, {second.citation_id}] {first.paper_title}\n"
         f"  Paper ID: {first.paper_id}\n"
-        f"  Passage ID: {first.passage_id}\n"
-        f"  Retrieval Rank: {first.retrieval_rank}\n"
-        f"  Retrieval Score: {format(first.retrieval_score, '.12g')}\n"
         f"  Source Path: {first.source_path}\n"
-        f"[{result.citations[1].citation_id}]\n"
-        f"  Paper Title: {result.citations[1].paper_title}\n"
-        f"  Section Heading: {result.citations[1].section_heading}\n"
-        f"  Page Range: {result.citations[1].page_start}\n"
-        f"  Paper ID: {result.citations[1].paper_id}\n"
-        f"  Passage ID: {result.citations[1].passage_id}\n"
-        f"  Retrieval Rank: {result.citations[1].retrieval_rank}\n"
-        f"  Retrieval Score: {format(result.citations[1].retrieval_score, '.12g')}\n"
-        f"  Source Path: {result.citations[1].source_path}\n"
+        "  Passages: 2\n"
+        f"    [{first.citation_id}]\n"
+        f"      Section Heading: {first.section_heading}\n"
+        f"      Page Range: {first.page_start}\n"
+        f"      Passage ID: {first.passage_id}\n"
+        f"      Retrieval Rank: {first.retrieval_rank}\n"
+        f"      Retrieval Score: {format(first.retrieval_score, '.12g')}\n"
+        f"    [{second.citation_id}]\n"
+        f"      Section Heading: {second.section_heading}\n"
+        f"      Page Range: {second.page_start}\n"
+        f"      Passage ID: {second.passage_id}\n"
+        f"      Retrieval Rank: {second.retrieval_rank}\n"
+        f"      Retrieval Score: {format(second.retrieval_score, '.12g')}\n"
         "\nEvidence scope: stored Abstract and Introduction passages only."
     )
     assert output == expected
@@ -1150,3 +1157,563 @@ def test_build_generator_no_config_loaded_retains_documented_defaults(
 
     assert generator._config.threads is None
     assert generator._config.timeout_seconds == 300.0
+
+
+def _two_paper_storage(tmp_path: Path) -> SQLiteStorage:
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(
+        _record(
+            tmp_path,
+            title="Transit Paper",
+            source_filename="transit.pdf",
+            checksum="a" * 64,
+            abstract_text="Abstract trade policy evidence about transit corridors.",
+            introduction_text="Introduction trade policy evidence about transit.",
+        )
+    )
+    storage.save_early_section_record(
+        _record(
+            tmp_path,
+            title="Nutrition Paper",
+            source_filename="nutrition.pdf",
+            checksum="b" * 64,
+            abstract_text="Abstract trade policy evidence about grocery nutrition.",
+            introduction_text="Introduction trade policy evidence about groceries.",
+        )
+    )
+    return storage
+
+
+class _ClaimGenerator(Generator):
+    """Emit scripted claims all citing the passage containing `cite_marker`.
+
+    Binding by content rather than by rank keeps the fixture independent of
+    BM25 ordering: which paper lands at rank 1 is not part of this contract,
+    but which paper a claim is attributed to is exactly what is under test.
+    """
+
+    def __init__(self, texts: tuple[str, ...], *, cite_marker: str) -> None:
+        self.texts = texts
+        self.cite_marker = cite_marker
+
+    def generate(self, request: GenerationRequest) -> GenerationResponse:
+        chosen = next(
+            item for item in request.evidence if self.cite_marker in item.passage.text
+        )
+        citation_id = f"e{chosen.rank}"
+        return GenerationResponse(
+            answer_text=" ".join(self.texts),
+            citations=(
+                Citation(
+                    citation_id=citation_id,
+                    paper_id=chosen.passage.paper_id,
+                    passage_id=chosen.passage.passage_id,
+                ),
+            ),
+            generation_method="fake-generator",
+            abstained=False,
+            abstention_reason=None,
+            finding_kinds=(FindingKind.DESCRIPTIVE,),
+            claims=tuple(
+                GeneratedClaim(text=text, citation_ids=(citation_id,))
+                for text in self.texts
+            ),
+        )
+
+
+def test_claim_misattributing_another_papers_wording_is_withheld_from_the_answer(
+    tmp_path: Path,
+) -> None:
+    """A claim whose wording belongs to a paper it does not cite never reaches
+    the user, and the surviving claims still answer the question."""
+    storage = _two_paper_storage(tmp_path)
+    generator = _ClaimGenerator(
+        (
+            "Transit corridors are described.",
+            "Grocery nutrition outcomes are described.",
+        ),
+        cite_marker="transit corridors",
+    )
+
+    result = execute_chat_command(
+        _options(tmp_path, top_k=4),
+        storage=storage,
+        generator_provider=lambda _: generator,
+    )
+
+    assert result.outcome is ChatTerminalOutcome.ANSWERED
+    assert [claim.text for claim in result.claims] == [
+        "Transit corridors are described."
+    ]
+    assert len(result.withheld_claims) == 1
+    assert "grocery" in result.withheld_claims[0].leaked_terms
+    assert result.answer_text == "Transit corridors are described."
+    assert "Grocery nutrition" not in (result.answer_text or "")
+
+
+def test_a_response_whose_every_claim_is_withheld_is_not_reported_as_abstention(
+    tmp_path: Path,
+) -> None:
+    """The generator did produce an answer, so collapsing this into ABSTAINED
+    would tell the user the library had nothing to say, which is false."""
+    storage = _two_paper_storage(tmp_path)
+    generator = _ClaimGenerator(
+        ("Grocery nutrition outcomes are described.",),
+        cite_marker="transit corridors",
+    )
+
+    result = execute_chat_command(
+        _options(tmp_path, top_k=4),
+        storage=storage,
+        generator_provider=lambda _: generator,
+    )
+
+    assert result.outcome is ChatTerminalOutcome.WITHHELD
+    assert result.outcome is not ChatTerminalOutcome.ABSTAINED
+    assert result.exit_code == 1
+    assert result.claims == ()
+    assert len(result.withheld_claims) == 1
+    # The generation method survives the withholding path: a user reporting a
+    # suppressed answer needs to say which runtime produced it.
+    assert result.generation_method == "fake-generator"
+
+    output = format_chat_command_output(result)
+    assert "Outcome: withheld" in output
+    assert "Withheld Claims (1)" in output
+    assert "grocery" in output
+
+
+def test_withholding_drops_citations_no_surviving_claim_relies_on(
+    tmp_path: Path,
+) -> None:
+    """Citations are the user's audit trail, so one left behind by a withheld
+    claim would point at a paper nothing in the answer came from."""
+    storage = _two_paper_storage(tmp_path)
+
+    class _SplitGenerator(Generator):
+        def generate(self, request: GenerationRequest) -> GenerationResponse:
+            first = next(
+                item
+                for item in request.evidence
+                if "transit corridors" in item.passage.text
+            )
+            second = next(
+                item
+                for item in request.evidence
+                if "grocery nutrition" in item.passage.text
+            )
+            return GenerationResponse(
+                answer_text="Two claims.",
+                citations=tuple(
+                    Citation(
+                        citation_id=f"e{item.rank}",
+                        paper_id=item.passage.paper_id,
+                        passage_id=item.passage.passage_id,
+                    )
+                    for item in sorted((first, second), key=lambda e: e.rank)
+                ),
+                generation_method="fake-generator",
+                abstained=False,
+                abstention_reason=None,
+                finding_kinds=(FindingKind.DESCRIPTIVE,),
+                claims=(
+                    GeneratedClaim(
+                        text="Transit corridors are described.",
+                        citation_ids=(f"e{first.rank}",),
+                    ),
+                    GeneratedClaim(
+                        text="Grocery nutrition outcomes are described.",
+                        citation_ids=(f"e{first.rank}",),
+                    ),
+                ),
+            )
+
+    result = execute_chat_command(
+        _options(tmp_path, top_k=4),
+        storage=storage,
+        generator_provider=lambda _: _SplitGenerator(),
+    )
+
+    assert len(result.withheld_claims) == 1
+    assert len(result.claims) == 1
+    surviving = {
+        citation_id for claim in result.claims for citation_id in claim.citation_ids
+    }
+    assert {item.citation_id for item in result.citations} == surviving
+    # The response cited two passages; only the one a surviving claim relies on
+    # is still shown.
+    assert len(result.citations) == 1
+
+
+def test_a_generator_without_claims_is_unaffected_by_grounding(
+    tmp_path: Path,
+) -> None:
+    """A flat answer_text carries no claim-to-evidence binding, so grounding
+    must leave v1/v2-style responses exactly as they were rather than
+    withholding an answer it cannot actually check."""
+    storage = _two_paper_storage(tmp_path)
+
+    result = execute_chat_command(
+        _options(tmp_path, top_k=4),
+        storage=storage,
+        generator_provider=lambda _: AnsweringGenerator(),
+    )
+
+    assert result.outcome is ChatTerminalOutcome.ANSWERED
+    assert result.claims == ()
+    assert result.withheld_claims == ()
+    assert result.answer_text == "Trade policy evidence supports a descriptive answer."
+    assert len(result.citations) > 0
+
+
+def _citation(
+    citation_id: str,
+    *,
+    paper_id: str,
+    rank: int,
+    title: str = "A Paper",
+    passage_id: str | None = None,
+    page_start: int = 1,
+    page_end: int | None = None,
+    passage_text: str = "Passage text.",
+) -> ChatCitationDetail:
+    return ChatCitationDetail(
+        citation_id=citation_id,
+        paper_title=title,
+        section_heading="Introduction",
+        page_start=page_start,
+        page_end=page_end,
+        paper_id=paper_id,
+        passage_id=passage_id or f"passage-{citation_id}",
+        retrieval_rank=rank,
+        retrieval_score=10.0 - rank,
+        source_path=f"/papers/{paper_id}.pdf",
+        passage_text=passage_text,
+    )
+
+
+def test_several_passages_of_one_paper_render_as_a_single_paper_block() -> None:
+    """Retrieval routinely returns several passages of one paper. Repeating the
+    title, paper id, and source path for each reads as the same paper listed
+    twice, which undermines trust in the citation list exactly when a paper is
+    the strongest match."""
+    citations = (
+        _citation("e1", paper_id="paper-a", rank=1, title="Transit Paper"),
+        _citation(
+            "e4",
+            paper_id="paper-a",
+            rank=4,
+            title="Transit Paper",
+            page_start=2,
+            page_end=3,
+        ),
+    )
+
+    rendered = "\n".join(_render_citation_lines(citations))
+
+    assert rendered.count("Transit Paper") == 1
+    assert rendered.count("Paper ID: paper-a") == 1
+    assert rendered.count("Source Path:") == 1
+    # Both passages remain individually identifiable and auditable.
+    assert "[e1, e4] Transit Paper" in rendered
+    assert "Passages: 2" in rendered
+    assert "      Passage ID: passage-e1" in rendered
+    assert "      Passage ID: passage-e4" in rendered
+    assert "      Page Range: 2-3" in rendered
+
+
+def test_distinct_papers_still_render_as_separate_blocks() -> None:
+    citations = (
+        _citation("e1", paper_id="paper-a", rank=1, title="First Paper"),
+        _citation("e2", paper_id="paper-b", rank=2, title="Second Paper"),
+    )
+
+    rendered = "\n".join(_render_citation_lines(citations))
+
+    assert "[e1] First Paper" in rendered
+    assert "[e2] Second Paper" in rendered
+    assert rendered.count("Paper ID:") == 2
+
+
+def test_papers_and_their_passages_keep_best_rank_ordering() -> None:
+    """The strongest evidence must still read first, both across papers and
+    within a paper, whatever order citations arrive in."""
+    citations = (
+        _citation("e5", paper_id="paper-b", rank=5, title="Weaker Paper"),
+        _citation("e3", paper_id="paper-a", rank=3, title="Stronger Paper"),
+        _citation("e1", paper_id="paper-a", rank=1, title="Stronger Paper"),
+    )
+
+    rendered = "\n".join(_render_citation_lines(citations))
+
+    assert rendered.index("Weaker Paper") > rendered.index("Stronger Paper")
+    assert "[e1, e3] Stronger Paper" in rendered
+    assert rendered.index("Passage ID: passage-e1") < rendered.index(
+        "Passage ID: passage-e3"
+    )
+
+
+def test_passage_text_resolved_from_citation_matches_stored_passage(
+    tmp_path: Path,
+) -> None:
+    """`_resolve_citations` already validates the retrieved passage against the
+    durable record; `passage_text` must come from that same validated
+    passage, not from a second, unvalidated lookup."""
+    record = _record(
+        tmp_path,
+        abstract_text="Abstract trade policy sentence about tariffs.",
+        introduction_text="Introduction trade policy sentence about tariffs.",
+    )
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(record)
+
+    result = execute_chat_command(
+        _options(tmp_path),
+        storage=storage,
+        generator_provider=lambda _: AnsweringGenerator(),
+    )
+
+    assert result.outcome is ChatTerminalOutcome.ANSWERED
+    stored_passages = {passage.passage_id: passage.text for passage in record.passages}
+    assert result.citations
+    for citation in result.citations:
+        assert citation.passage_text == stored_passages[citation.passage_id]
+
+
+def test_show_evidence_flag_appends_full_passage_text(tmp_path: Path) -> None:
+    record = _record(tmp_path)
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(record)
+    options = ChatCommandOptions(
+        question="trade policy",
+        executable_path=tmp_path / "llama-cli",
+        model_path=tmp_path / "model.gguf",
+        model_id="test-model",
+        model_bytes=11,
+        model_checksum="b" * 64,
+        db_path=tmp_path / "chat.db",
+        show_evidence=True,
+    )
+
+    result = execute_chat_command(
+        options, storage=storage, generator_provider=lambda _: AnsweringGenerator()
+    )
+    without_flag = format_chat_command_output(result, show_evidence=False)
+    with_flag = format_chat_command_output(result, show_evidence=True)
+
+    assert "--- Evidence ---" not in without_flag
+    assert "--- Evidence ---" in with_flag
+    for citation in result.citations:
+        assert citation.passage_text in with_flag
+
+
+def test_default_chat_output_is_unchanged_without_show_evidence(
+    tmp_path: Path,
+) -> None:
+    """Pinned against the exact pre-M1 golden output (the same shape asserted
+    by ``test_answered_chat_renders_citations_from_durable_storage``), not
+    merely against another call to the same formatter -- a formatter that
+    always ignored ``show_evidence`` would otherwise still pass."""
+    storage = SQLiteStorage(tmp_path / "chat.db")
+    storage.save_early_section_record(_record(tmp_path))
+
+    result = execute_chat_command(
+        _options(tmp_path),
+        storage=storage,
+        generator_provider=lambda _: AnsweringGenerator(),
+    )
+
+    first = result.citations[0]
+    second = result.citations[1]
+    expected = (
+        "=== One-Shot Chat Result ===\n"
+        f"Question: {result.question}\n"
+        f"Database Path: {result.db_path}\n"
+        "Top K: 2\n"
+        "Outcome: answered\n"
+        "Answer: Trade policy evidence supports a descriptive answer.\n"
+        "Generation Method: fake-generator\n"
+        "Finding Kinds: descriptive\n"
+        "\n--- Citations ---\n"
+        f"[{first.citation_id}, {second.citation_id}] {first.paper_title}\n"
+        f"  Paper ID: {first.paper_id}\n"
+        f"  Source Path: {first.source_path}\n"
+        "  Passages: 2\n"
+        f"    [{first.citation_id}]\n"
+        f"      Section Heading: {first.section_heading}\n"
+        f"      Page Range: {first.page_start}\n"
+        f"      Passage ID: {first.passage_id}\n"
+        f"      Retrieval Rank: {first.retrieval_rank}\n"
+        f"      Retrieval Score: {format(first.retrieval_score, '.12g')}\n"
+        f"    [{second.citation_id}]\n"
+        f"      Section Heading: {second.section_heading}\n"
+        f"      Page Range: {second.page_start}\n"
+        f"      Passage ID: {second.passage_id}\n"
+        f"      Retrieval Rank: {second.retrieval_rank}\n"
+        f"      Retrieval Score: {format(second.retrieval_score, '.12g')}\n"
+        "\nEvidence scope: stored Abstract and Introduction passages only."
+    )
+
+    default_rendered = format_chat_command_output(result)
+    explicit_false_rendered = format_chat_command_output(result, show_evidence=False)
+    assert default_rendered == expected
+    assert explicit_false_rendered == expected
+    assert "--- Evidence ---" not in default_rendered
+
+
+def test_format_evidence_detail_renders_all_citations_by_default() -> None:
+    citations = (
+        _citation("e1", paper_id="paper-a", rank=1, passage_text="First passage."),
+        _citation("e2", paper_id="paper-b", rank=2, passage_text="Second passage."),
+    )
+
+    rendered = format_evidence_detail(citations)
+
+    assert "First passage." in rendered
+    assert "Second passage." in rendered
+    assert "[e1]" in rendered and "[e2]" in rendered
+
+
+def test_format_evidence_detail_filters_to_one_citation_id() -> None:
+    citations = (
+        _citation("e1", paper_id="paper-a", rank=1, passage_text="First passage."),
+        _citation("e2", paper_id="paper-b", rank=2, passage_text="Second passage."),
+    )
+
+    rendered = format_evidence_detail(citations, citation_id="e1")
+
+    assert "First passage." in rendered
+    assert "Second passage." not in rendered
+
+
+def test_format_evidence_detail_returns_empty_string_for_unknown_id() -> None:
+    citations = (_citation("e1", paper_id="paper-a", rank=1),)
+
+    assert format_evidence_detail(citations, citation_id="e99") == ""
+
+
+def test_format_evidence_detail_preserves_blank_line_paragraph_breaks() -> None:
+    citations = (
+        _citation(
+            "e1",
+            paper_id="paper-a",
+            rank=1,
+            passage_text="First paragraph.\n\nSecond paragraph.",
+        ),
+    )
+
+    rendered = format_evidence_detail(citations)
+
+    assert "First paragraph.\n\nSecond paragraph." in rendered
+
+
+def test_format_evidence_detail_wraps_long_lines_without_truncating_text() -> None:
+    words = [f"word{i}" for i in range(200)]
+    long_word_sentence = " ".join(words)
+    citations = (
+        _citation("e1", paper_id="paper-a", rank=1, passage_text=long_word_sentence),
+    )
+
+    rendered = format_evidence_detail(citations)
+
+    # A full round trip, not just the first and last words: every word from
+    # the original passage survives wrapping, in order, with nothing dropped
+    # from the middle.
+    body = rendered.rsplit("\n\n", 1)[1]
+    assert body.split() == words
+    body_lines = body.splitlines()
+    assert all(len(line) <= 88 for line in body_lines)
+
+
+def test_format_evidence_detail_replaces_control_characters() -> None:
+    """A raw escape sequence embedded in extracted PDF text must not reach the
+    terminal verbatim, where it could move the cursor or clear the screen."""
+    citations = (
+        _citation(
+            "e1",
+            paper_id="paper-a",
+            rank=1,
+            passage_text="Before\x1b[2Jafter",
+        ),
+    )
+
+    rendered = format_evidence_detail(citations)
+
+    assert "\x1b" not in rendered
+    assert "Before" in rendered and "after" in rendered
+
+
+def test_format_evidence_detail_replaces_c1_control_characters() -> None:
+    """C1 controls (0x80-0x9F) are as terminal-dangerous as C0 ones in a
+    UTF-8 or Latin-1-derived terminal and must be replaced the same way."""
+    citations = (
+        _citation(
+            "e1",
+            paper_id="paper-a",
+            rank=1,
+            passage_text="Before\x9bafter",
+        ),
+    )
+
+    rendered = format_evidence_detail(citations)
+
+    assert "\x9b" not in rendered
+    assert "Before" in rendered and "after" in rendered
+
+
+def test_format_evidence_detail_normalizes_crlf_and_lone_cr_line_endings() -> None:
+    """CRLF and lone-CR line endings must become the same paragraph break as
+    a bare LF, not a visible replacement-character artifact."""
+    citations = (
+        _citation(
+            "e1",
+            paper_id="paper-a",
+            rank=1,
+            passage_text="Windows line.\r\nMac line.\rUnix line.",
+        ),
+    )
+
+    rendered = format_evidence_detail(citations)
+
+    assert "\r" not in rendered
+    assert "�" not in rendered
+    body = rendered.rsplit("\n\n", 1)[1]
+    assert body == "Windows line.\nMac line.\nUnix line."
+
+
+def test_format_evidence_detail_preserves_unicode_in_passage_text() -> None:
+    citations = (
+        _citation(
+            "e1",
+            paper_id="paper-a",
+            rank=1,
+            passage_text="Café results are 5% higher (β = 0.05).",
+        ),
+    )
+
+    rendered = format_evidence_detail(citations)
+
+    body = rendered.rsplit("\n\n", 1)[1]
+    assert body == "Café results are 5% higher (β = 0.05)."
+
+
+def test_format_evidence_detail_sanitizes_control_characters_in_metadata_fields() -> (
+    None
+):
+    """A single-line metadata field (title, section heading, source path) must
+    not let an embedded newline inject a fake extra line into the rendered
+    block, the same protection already given to the passage body."""
+    citations = (
+        _citation(
+            "e1",
+            paper_id="paper-a",
+            rank=1,
+            title="Injected\n  Fake Field: gotcha",
+            passage_text="Normal passage text.",
+        ),
+    )
+
+    rendered = format_evidence_detail(citations)
+
+    assert "\n  Fake Field:" not in rendered
+    assert "Injected" in rendered

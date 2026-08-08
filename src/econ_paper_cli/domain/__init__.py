@@ -7,6 +7,15 @@ from econ_paper_cli.domain.artifacts import (
     RedistributionStatus,
 )
 from econ_paper_cli.domain.citations import Citation
+from econ_paper_cli.domain.claim_grounding import (
+    CLAIM_GROUNDING_METHOD,
+    DEFAULT_MAX_SOURCE_PAPERS,
+    ClaimGroundingError,
+    ClaimGroundingResult,
+    GroundingEvidence,
+    check_claim_grounding,
+    tokenize_for_grounding,
+)
 from econ_paper_cli.domain.corpora import Corpus, CorpusValidationError
 from econ_paper_cli.domain.early_section_library import (
     EarlySectionLibraryRecord,
@@ -159,6 +168,13 @@ __all__ = [
     "Corpus",
     "CorpusValidationError",
     "DomainError",
+    "CLAIM_GROUNDING_METHOD",
+    "DEFAULT_MAX_SOURCE_PAPERS",
+    "ClaimGroundingError",
+    "ClaimGroundingResult",
+    "GroundingEvidence",
+    "check_claim_grounding",
+    "tokenize_for_grounding",
     "EarlySectionLibraryRecord",
     "EarlySectionLibraryValidationError",
     "EvidenceValidationError",

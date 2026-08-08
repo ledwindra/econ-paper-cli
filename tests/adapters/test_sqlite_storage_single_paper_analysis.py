@@ -10,6 +10,7 @@ from econ_paper_cli.adapters.sqlite_storage import (
     SQLiteStorage,
 )
 from econ_paper_cli.domain import (
+    DEFAULT_PDF_SECTION_SETTINGS,
     DEFAULT_SINGLE_PAPER_ANALYSIS_SETTINGS,
     PDFQualityStatus,
     PDFQualityWarning,
@@ -481,7 +482,7 @@ def test_implicit_section_roundtrip_and_restart(tmp_path: Path) -> None:
     )
 
     section_res = PDFSectionDetectionResult(
-        policy_version="pdf-section-detection-v2",
+        policy_version="pdf-section-detection-v3",
         sections=(implicit_section,),
         candidates=(),
         warnings=(PDFSectionWarning(PDFSectionWarningCode.MISSING_INTRODUCTION),),
@@ -592,10 +593,14 @@ def test_stale_v1_single_paper_analysis_record_cache_invalidation(
         retrieved.settings.section_settings.policy_version == "pdf-section-detection-v1"
     )
 
-    # Current default settings use v2 policy_version -> cache invalidation
+    # The stored record is v1; the current default is whatever ships today.
+    # Asserting against the live default keeps this test about *invalidation*
+    # rather than about one frozen version string, so a later policy bump does
+    # not silently turn it into a no-op.
     current_settings = SinglePaperAnalysisSettings()
     assert (
-        current_settings.section_settings.policy_version == "pdf-section-detection-v2"
+        current_settings.section_settings.policy_version
+        == DEFAULT_PDF_SECTION_SETTINGS.policy_version
     )
     assert (
         retrieved.settings.section_settings.policy_version

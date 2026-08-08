@@ -11,6 +11,12 @@ from econ_paper_cli.domain import (
     DomainError,
     RetrievalEvidence,
 )
+from econ_paper_cli.domain.claim_grounding import (
+    DEFAULT_MAX_SOURCE_PAPERS,
+    ClaimGroundingResult,
+    GroundingEvidence,
+    check_claim_grounding,
+)
 from econ_paper_cli.protocols.retrieval import (
     RetrievalRequest,
     RetrievalResultValidationError,
@@ -54,6 +60,67 @@ _RESPONSE_FIELDS = frozenset(
         "finding_kinds",
     }
 )
+# `claims` is accepted but not required: v1/v2 backends emit a flat
+# `answer_text` with no per-claim attribution, and those responses stay valid.
+# Only a backend that supplies claims can be checked for cross-paper leakage.
+_OPTIONAL_RESPONSE_FIELDS = frozenset({"claims"})
+
+
+@dataclass(frozen=True, slots=True)
+class GeneratedClaim:
+    """One self-contained assertion bound to the evidence supporting it alone."""
+
+    text: str
+    citation_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        """Validate claim text and its non-empty, duplicate-free citation ids."""
+        _validate_nonempty_text(
+            "claim text", self.text, GenerationResponseValidationError
+        )
+        object.__setattr__(self, "text", self.text.strip())
+        if not isinstance(self.citation_ids, tuple):
+            raise GenerationResponseValidationError(
+                "claim citation_ids must be a tuple."
+            )
+        if not self.citation_ids:
+            raise GenerationResponseValidationError(
+                "claim citation_ids must not be empty."
+            )
+        seen: set[str] = set()
+        for citation_id in self.citation_ids:
+            if not isinstance(citation_id, str) or not citation_id.strip():
+                raise GenerationResponseValidationError(
+                    "claim citation_ids must contain only non-empty strings."
+                )
+            if citation_id in seen:
+                raise GenerationResponseValidationError(
+                    f"claim repeats citation_id '{citation_id}'."
+                )
+            seen.add(citation_id)
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, object]) -> "GeneratedClaim":
+        """Parse a JSON-compatible claim mapping into an immutable claim."""
+        _validate_mapping_shape(
+            "GeneratedClaim",
+            data,
+            frozenset({"text", "citation_ids"}),
+            GenerationResponseValidationError,
+        )
+        raw_ids = data["citation_ids"]
+        if not isinstance(raw_ids, (list, tuple)):
+            raise GenerationResponseValidationError(
+                "claim citation_ids must be a JSON array (list or tuple)."
+            )
+        return cls(
+            text=cast(str, data["text"]),
+            citation_ids=tuple(cast(Sequence[str], raw_ids)),
+        )
+
+    def to_mapping(self) -> dict[str, object]:
+        """Return the canonical JSON-compatible claim mapping."""
+        return {"text": self.text, "citation_ids": list(self.citation_ids)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +197,7 @@ class GenerationResponse:
     abstained: bool
     abstention_reason: AbstentionReason | None
     finding_kinds: tuple[FindingKind, ...]
+    claims: tuple[GeneratedClaim, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate direct construction and local response invariants."""
@@ -151,6 +219,7 @@ class GenerationResponse:
                 "abstention_reason must be an AbstentionReason or None."
             )
         _validate_finding_kinds(self.finding_kinds)
+        _validate_claims(self.claims)
         _validate_abstention_state(self)
 
     @classmethod
@@ -161,6 +230,7 @@ class GenerationResponse:
             data,
             _RESPONSE_FIELDS,
             GenerationResponseValidationError,
+            _OPTIONAL_RESPONSE_FIELDS,
         )
 
         raw_citations = data["citations"]
@@ -202,6 +272,25 @@ class GenerationResponse:
             for item in cast(Sequence[object], raw_finding_kinds)
         )
 
+        raw_claims = data.get("claims", ())
+        if not isinstance(raw_claims, (list, tuple)):
+            raise GenerationResponseValidationError(
+                "claims must be a JSON array (list or tuple)."
+            )
+        claims: list[GeneratedClaim] = []
+        for position, item in enumerate(cast(Sequence[object], raw_claims)):
+            if isinstance(item, GeneratedClaim):
+                claims.append(item)
+                continue
+            if isinstance(item, Mapping):
+                claims.append(
+                    GeneratedClaim.from_mapping(cast(Mapping[str, object], item))
+                )
+                continue
+            raise GenerationResponseValidationError(
+                f"claim at position {position} must be a GeneratedClaim or mapping."
+            )
+
         raw_reason = data["abstention_reason"]
         abstention_reason = (
             None
@@ -221,6 +310,7 @@ class GenerationResponse:
             abstained=cast(bool, data["abstained"]),
             abstention_reason=cast(AbstentionReason | None, abstention_reason),
             finding_kinds=cast(tuple[FindingKind, ...], finding_kinds),
+            claims=tuple(claims),
         )
 
     def to_mapping(self) -> dict[str, object]:
@@ -234,6 +324,7 @@ class GenerationResponse:
                 None if self.abstention_reason is None else self.abstention_reason.value
             ),
             "finding_kinds": [kind.value for kind in self.finding_kinds],
+            "claims": [claim.to_mapping() for claim in self.claims],
         }
 
 
@@ -315,7 +406,72 @@ def validate_generation_response(
         previous_rank = evidence.rank
         previous_id = citation.citation_id
 
+    # A claim may only point at evidence the response actually cited, so the
+    # per-claim attribution and the citation list can never disagree about
+    # which passages back the answer.
+    for index, claim in enumerate(response.claims):
+        unknown_ids = sorted(set(claim.citation_ids) - seen_ids)
+        if unknown_ids:
+            raise GenerationResponseValidationError(
+                f"Claim at index {index} cites identifiers absent from the "
+                f"response citations: {', '.join(unknown_ids)}."
+            )
+
     return response
+
+
+def check_response_grounding(
+    request: GenerationRequest,
+    response: GenerationResponse,
+    *,
+    max_source_papers: int = DEFAULT_MAX_SOURCE_PAPERS,
+) -> tuple[ClaimGroundingResult, ...]:
+    """Return one cross-paper leakage verdict per claim, in claim order.
+
+    Returns an empty tuple when the response abstained or carries no claims:
+    a flat `answer_text` has no claim-to-evidence binding to check, so there is
+    nothing this function can honestly assert about it. Callers must not read
+    an empty result as "verified".
+    """
+    if not isinstance(request, GenerationRequest):
+        raise GenerationRequestValidationError(
+            "request must be a GenerationRequest instance."
+        )
+    if not isinstance(response, GenerationResponse):
+        raise GenerationResponseValidationError(
+            "response must be a GenerationResponse instance."
+        )
+    if response.abstained or not response.claims:
+        return ()
+
+    evidence = tuple(
+        GroundingEvidence(
+            citation_id=f"e{item.rank}",
+            paper_id=item.passage.paper_id,
+            text=item.passage.text,
+        )
+        for item in request.evidence
+    )
+    return tuple(
+        check_claim_grounding(
+            claim_index=index,
+            claim_text=claim.text,
+            cited_ids=claim.citation_ids,
+            evidence=evidence,
+            question=request.question,
+            max_source_papers=max_source_papers,
+        )
+        for index, claim in enumerate(response.claims)
+    )
+
+
+def _validate_claims(claims: object) -> None:
+    if not isinstance(claims, tuple):
+        raise GenerationResponseValidationError("claims must be a tuple.")
+    if any(not isinstance(item, GeneratedClaim) for item in claims):
+        raise GenerationResponseValidationError(
+            "claims must contain only GeneratedClaim instances."
+        )
 
 
 def _validate_evidence(question: str, evidence: object) -> None:
@@ -395,6 +551,7 @@ def _validate_mapping_shape(
     data: object,
     required_fields: frozenset[str],
     error_type: type[GenerationContractError],
+    optional_fields: frozenset[str] = frozenset(),
 ) -> None:
     if not isinstance(data, Mapping):
         raise error_type(f"{label} metadata must be a mapping.")
@@ -406,7 +563,7 @@ def _validate_mapping_shape(
         raise error_type(
             f"{label} mapping is missing required fields: {', '.join(missing)}."
         )
-    unknown = sorted(provided - required_fields)
+    unknown = sorted(provided - required_fields - optional_fields)
     if unknown:
         raise error_type(
             f"{label} mapping contains unknown fields: {', '.join(unknown)}."

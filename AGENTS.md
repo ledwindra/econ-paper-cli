@@ -158,6 +158,16 @@ If a command cannot run, state exactly why.
 
 Tests must not download models, papers, or indexes unless explicitly marked as integration or release tests.
 
+## Pre-PR contract self-review
+
+Before opening or updating a pull request, reread the issue's exact scope and behavioral requirements sentence by sentence against the diff. Green CI is necessary, not sufficient — reviews on this repository have repeatedly found contract-level gaps that still pass every test:
+
+- Verify every "once", "fixed", "snapshot", "read-only", or "immutable" claim is literally true: find every later read of that data and confirm none of them re-hit a live source (open connection, filesystem, config backend) instead of the captured state.
+- Verify every "even when X" / "regardless of Y" clause has a regression covering exactly that combination, not just the common case.
+- Do not collapse distinct outcomes the issue lists (for example, typed vs. internal failure) into one generic result, and do not let exception-handling branches silently drop fields that should still be populated on a failure path.
+- Isolate tests from the real machine: inject storage/config backends, or set `ECONPAPERS_CONFIG_DIR`/`ECONPAPERS_LIBRARY_DIR`, rather than relying on defaults that resolve to the developer's actual home directory.
+- Do not assert that a literal path string survives unchanged; `Path.resolve()` and other canonicalization can change it, especially on Windows, where a POSIX-style literal is not a real absolute path.
+
 ## Git discipline
 
 - Use small, descriptive commits.

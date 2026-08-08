@@ -15,13 +15,25 @@ from econ_paper_cli.adapters.llama_cpp import (
     LlamaCppGenerator,
     LlamaCppReadinessError,
 )
-from econ_paper_cli.adapters.runtime_downloader import UrllibDownloader
+from econ_paper_cli.adapters.runtime_downloader import (
+    DEFAULT_TRUSTED_REDIRECT_HOST_SUFFIXES,
+    UrllibDownloader,
+)
 from econ_paper_cli.adapters.runtime_extractor import SafeArchiveExtractor
-from econ_paper_cli.adapters.storage_paths import get_default_runtime_dir
+from econ_paper_cli.adapters.storage_paths import (
+    get_default_model_dir,
+    get_default_runtime_dir,
+)
 from econ_paper_cli.domain.errors import LocalConfigValidationError
 from econ_paper_cli.domain.local_config import LocalRuntimeModelConfig
+from econ_paper_cli.domain.model_manifest import ManagedModelManifestError
 from econ_paper_cli.protocols.config import ConfigBackend, ConfigPersistenceError
 from econ_paper_cli.protocols.runtime_provisioning import DownloadError, ExtractionError
+from econ_paper_cli.services.model_provisioning import (
+    ManagedModelInstall,
+    ModelProvisioningError,
+    ensure_managed_model,
+)
 from econ_paper_cli.services.runtime_provisioning import (
     ManagedRuntimeInstall,
     RuntimeProvisioningError,
@@ -31,6 +43,11 @@ from econ_paper_cli.services.single_paper_analysis_cli import CLIExitCode
 
 ReadinessChecker = Callable[[LlamaCppConfig], None]
 RuntimeProvisioner = Callable[[bool], ManagedRuntimeInstall]
+ModelProvisioner = Callable[[str | None, bool], ManagedModelInstall]
+
+
+class SetupOptionsError(ValueError):
+    """Raised when setup options are internally inconsistent."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,14 +63,44 @@ class SetupCommandOptions:
     """
 
     executable_path: Path | None
-    model_path: Path
-    model_id: str
-    model_bytes: int
-    model_checksum: str
+    model_path: Path | None = None
+    model_id: str | None = None
+    model_bytes: int | None = None
+    model_checksum: str | None = None
     threads: int | None = None
     timeout: float | None = None
     db_path: Path | None = None
     offline: bool = False
+    # Selects which pinned catalog model to provision when the four explicit
+    # model-identity fields are omitted. Ignored when they are supplied.
+    managed_model_id: str | None = None
+
+    def __post_init__(self) -> None:
+        """Reject a partially specified model identity.
+
+        The four fields describe one artifact, so accepting a subset would
+        either silently ignore what the user typed or verify a downloaded
+        model against a checksum they meant for a different file. Supply all
+        four, or none and let provisioning pin them.
+        """
+        supplied = [
+            self.model_path,
+            self.model_id,
+            self.model_bytes,
+            self.model_checksum,
+        ]
+        provided = [item is not None for item in supplied]
+        if any(provided) and not all(provided):
+            raise SetupOptionsError(
+                "Supply all of --model-path, --model-id, --model-bytes, and "
+                "--model-checksum together, or none of them to provision a "
+                "managed model."
+            )
+        if all(provided) and self.managed_model_id is not None:
+            raise SetupOptionsError(
+                "--model cannot be combined with an explicit --model-path; "
+                "the explicit path already identifies which model to use."
+            )
 
 
 def _default_readiness_checker(config: LlamaCppConfig) -> None:
@@ -69,12 +116,29 @@ def _default_runtime_provisioner(allow_download: bool) -> ManagedRuntimeInstall:
     )
 
 
+def _default_model_provisioner(
+    model_id: str | None, allow_download: bool
+) -> ManagedModelInstall:
+    return ensure_managed_model(
+        model_dir=get_default_model_dir(),
+        # Models come from Hugging Face, whose LFS objects redirect to a
+        # regional CDN under hf.co. The runtime's GitHub-only exact-host
+        # allowlist would refuse every one of those redirects.
+        downloader=UrllibDownloader(
+            trusted_redirect_host_suffixes=DEFAULT_TRUSTED_REDIRECT_HOST_SUFFIXES,
+        ),
+        model_id=model_id,
+        allow_download=allow_download,
+    )
+
+
 def run_setup_command(
     options: SetupCommandOptions,
     *,
     config_backend: ConfigBackend | None = None,
     readiness_checker: ReadinessChecker | None = None,
     runtime_provisioner: RuntimeProvisioner | None = None,
+    model_provisioner: ModelProvisioner | None = None,
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
 ) -> int:
@@ -105,16 +169,43 @@ def run_setup_command(
         runtime_id = install.runtime_id
         runtime_version_marker = install.version_marker
 
+    model_install: ManagedModelInstall | None = None
+    if options.model_path is not None:
+        # Explicit model identity bypasses managed provisioning entirely, and
+        # never triggers a download, exactly as an explicit executable path
+        # does for the runtime.
+        resolved_model_path = Path(options.model_path).resolve()
+        resolved_model_id = options.model_id
+        resolved_model_bytes = options.model_bytes
+        resolved_model_checksum = options.model_checksum
+    else:
+        model_provider = model_provisioner or _default_model_provisioner
+        try:
+            model_install = model_provider(
+                options.managed_model_id, not options.offline
+            )
+        except (
+            ModelProvisioningError,
+            ManagedModelManifestError,
+            DownloadError,
+        ) as error:
+            err.write(f"Managed model provisioning failed: {error}\n")
+            return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+        resolved_model_path = model_install.model_path
+        resolved_model_id = model_install.model_id
+        resolved_model_bytes = model_install.size_bytes
+        resolved_model_checksum = model_install.sha256
+
     try:
         config = LocalRuntimeModelConfig(
             # Canonicalize to absolute paths before they become durable: a
             # relative path validated in this invocation's cwd must resolve
             # the same way from any later working directory.
             executable_path=resolved_executable_path,
-            model_path=Path(options.model_path).resolve(),
-            model_id=options.model_id,
-            model_bytes=options.model_bytes,
-            model_checksum=options.model_checksum,
+            model_path=resolved_model_path,
+            model_id=resolved_model_id,
+            model_bytes=resolved_model_bytes,
+            model_checksum=resolved_model_checksum,
             threads=options.threads,
             timeout_seconds=options.timeout,
             db_path=(
@@ -172,6 +263,12 @@ def run_setup_command(
         result_lines.append(f"Runtime ID: {config.runtime_id}")
     result_lines.append(f"Model Path: {config.model_path}")
     result_lines.append(f"Model ID: {config.model_id}")
+    if model_install is not None:
+        result_lines.append(f"Model Name: {model_install.display_name}")
+        result_lines.append(
+            "Model Source: "
+            + ("downloaded" if model_install.downloaded else "reused existing install")
+        )
     out.write("\n".join(result_lines) + "\n")
     return CLIExitCode.SUCCESS
 

@@ -32,6 +32,10 @@ def _optional_path(value: object) -> Path | None:
     return Path(value) if value is not None else None
 
 
+def _optional_str(value: object) -> str | None:
+    return str(value) if value is not None else None
+
+
 def _optional_int(value: object) -> int | None:
     return int(value) if value is not None else None
 
@@ -45,14 +49,15 @@ def run_setup(args: Namespace | None = None) -> int:
     try:
         options = SetupCommandOptions(
             executable_path=_optional_path(args.llama_cpp_path),
-            model_path=Path(args.model_path),
-            model_id=str(args.model_id),
-            model_bytes=int(args.model_bytes),
-            model_checksum=str(args.model_checksum),
+            model_path=_optional_path(getattr(args, "model_path", None)),
+            model_id=_optional_str(getattr(args, "model_id", None)),
+            model_bytes=_optional_int(getattr(args, "model_bytes", None)),
+            model_checksum=_optional_str(getattr(args, "model_checksum", None)),
             threads=_optional_int(getattr(args, "threads", None)),
             timeout=_optional_float(getattr(args, "timeout", None)),
             db_path=_optional_path(getattr(args, "db_path", None)),
             offline=bool(getattr(args, "offline", False)),
+            managed_model_id=_optional_str(getattr(args, "managed_model_id", None)),
         )
     except (AttributeError, ValueError, TypeError) as err:
         sys.stderr.write(f"Invalid CLI argument values: {err}\n")
@@ -92,6 +97,7 @@ def run_chat(args: Namespace | None = None) -> int:
         db_path = _optional_path(args.db_path)
         config_path = _optional_path(getattr(args, "config_path", None))
         top_k = int(args.top_k) if args.top_k is not None else 10
+        show_evidence = bool(getattr(args, "show_evidence", False))
         options = ChatCommandOptions(
             question=question,
             executable_path=executable_path,
@@ -104,6 +110,7 @@ def run_chat(args: Namespace | None = None) -> int:
             db_path=db_path,
             config_path=config_path,
             top_k=top_k,
+            show_evidence=show_evidence,
         )
     except (AttributeError, ValueError, TypeError) as err:
         sys.stderr.write(f"Invalid CLI argument values: {err}\n")

@@ -3,6 +3,7 @@ from argparse import ArgumentParser
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from econ_paper_cli.domain.model_manifest import MANAGED_MODEL_CATALOG
 from econ_paper_cli.services import commands
 
 CommandHandler = Callable[..., int | str]
@@ -34,9 +35,20 @@ def build_parser() -> ArgumentParser:
     )
     _add_runtime_model_arguments(
         setup_parser,
-        required=True,
+        required=False,
         require_executable_path=False,
         supports_auto_provisioning=True,
+        supports_model_auto_provisioning=True,
+    )
+    setup_parser.add_argument(
+        "--model",
+        dest="managed_model_id",
+        default=None,
+        choices=[item.model_id for item in MANAGED_MODEL_CATALOG.artifacts],
+        help=(
+            "Which pinned model to auto-provision when the explicit model "
+            f"flags are omitted (default: {MANAGED_MODEL_CATALOG.default_model_id})."
+        ),
     )
     setup_parser.add_argument(
         "--db-path",
@@ -169,6 +181,11 @@ def build_parser() -> ArgumentParser:
         default=10,
         help="Maximum number of evidence passages to retrieve (default: 10).",
     )
+    chat_parser.add_argument(
+        "--show-evidence",
+        action="store_true",
+        help="Print the full stored passage text for each citation.",
+    )
     chat_parser.set_defaults(handler=commands.run_chat)
 
     return parser
@@ -180,6 +197,7 @@ def _add_runtime_model_arguments(
     required: bool,
     require_executable_path: bool | None = None,
     supports_auto_provisioning: bool = False,
+    supports_model_auto_provisioning: bool = False,
 ) -> None:
     """Add the shared runtime/model identity and option flags to a subparser.
 
@@ -204,9 +222,16 @@ def _add_runtime_model_arguments(
     executable_required = (
         required if require_executable_path is None else require_executable_path
     )
-    identity_help_suffix = (
-        "" if required else " (falls back to durable `econpapers setup` configuration)"
-    )
+    if supports_model_auto_provisioning:
+        identity_help_suffix = (
+            " (omit all four to auto-provision a managed model; see --model)"
+        )
+    elif required:
+        identity_help_suffix = ""
+    else:
+        identity_help_suffix = (
+            " (falls back to durable `econpapers setup` configuration)"
+        )
     executable_help_suffix = (
         " (omit to auto-provision a managed llama.cpp runtime)"
         if supports_auto_provisioning

@@ -9,7 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from econ_paper_cli.adapters.runtime_downloader import UrllibDownloader
+from econ_paper_cli.adapters.runtime_downloader import (
+    DEFAULT_TRUSTED_REDIRECT_HOST_SUFFIXES,
+    DEFAULT_TRUSTED_REDIRECT_HOSTS,
+    UrllibDownloader,
+    _is_trusted_redirect_host,
+)
 from econ_paper_cli.protocols.runtime_provisioning import (
     DownloadNetworkError,
     DownloadSizeExceededError,
@@ -238,3 +243,51 @@ def test_default_downloader_rejects_redirect_to_untrusted_host() -> None:
         handler.redirect_request(
             None, None, 302, "Found", {}, "https://not-github.example.com/evil"
         )
+
+
+@pytest.mark.parametrize(
+    ("host", "trusted"),
+    (
+        ("us.aws.cdn.hf.co", True),
+        ("cdn-lfs.huggingface.co", True),
+        ("hf.co", True),
+        ("huggingface.co", True),
+        # Label-boundary anchoring: these must never be treated as trusted.
+        ("evil-hf.co", False),
+        ("nothuggingface.co", False),
+        ("hf.co.attacker.test", False),
+        ("attacker.test", False),
+    ),
+)
+def test_model_redirect_trust_is_anchored_to_a_label_boundary(
+    host: str, trusted: bool
+) -> None:
+    """Model downloads trust a registrable domain rather than exact hosts,
+    because Hugging Face's LFS CDN hostname varies by region. Suffix matching
+    must not let 'evil-hf.co' through."""
+    assert (
+        _is_trusted_redirect_host(
+            host, frozenset(), DEFAULT_TRUSTED_REDIRECT_HOST_SUFFIXES
+        )
+        is trusted
+    )
+
+
+def test_runtime_downloads_do_not_trust_hugging_face_by_default() -> None:
+    """The suffix allowlist is opt-in per download: the runtime still accepts
+    only its exact GitHub hosts, so widening model trust cannot widen runtime
+    trust as a side effect."""
+    assert (
+        _is_trusted_redirect_host(
+            "us.aws.cdn.hf.co", DEFAULT_TRUSTED_REDIRECT_HOSTS, frozenset()
+        )
+        is False
+    )
+    assert (
+        _is_trusted_redirect_host(
+            "objects.githubusercontent.com",
+            DEFAULT_TRUSTED_REDIRECT_HOSTS,
+            frozenset(),
+        )
+        is True
+    )

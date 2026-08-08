@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["resolved_question"],
+  "properties": {
+    "resolved_question": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

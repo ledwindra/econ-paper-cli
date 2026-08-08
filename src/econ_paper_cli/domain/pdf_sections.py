@@ -126,6 +126,12 @@ _WARNING_ORDER = {code: position for position, code in enumerate(PDFSectionWarni
 _CANONICAL_SECTION_SETTINGS: dict[str, dict[str, object]] = {
     "pdf-section-detection-v1": {},
     "pdf-section-detection-v2": {},
+    # v3 recovers papers whose Introduction is unheaded: an "Abstract" line
+    # appearing after the body starts is no longer selectable, an abstract
+    # terminated by an inline "(JEL ...)" is recognized, and an explicit
+    # Abstract with no following Introduction heading now yields an
+    # Abstract-only section instead of nothing at all.
+    "pdf-section-detection-v3": {},
 }
 
 
@@ -133,7 +139,7 @@ _CANONICAL_SECTION_SETTINGS: dict[str, dict[str, object]] = {
 class PDFSectionSettings:
     """Versioned and validated configuration for section detection."""
 
-    policy_version: str = "pdf-section-detection-v2"
+    policy_version: str = "pdf-section-detection-v3"
 
     def __post_init__(self) -> None:
         _validate_nonempty_text("policy_version", self.policy_version)

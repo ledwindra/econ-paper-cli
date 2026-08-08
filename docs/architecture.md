@@ -476,19 +476,60 @@ construction attempt leaves the cache untouched so the next matched question
 retries from scratch, and empty-library/no-match questions never reach
 construction at all.
 
-`run_interactive_shell` is the read-eval-print loop: it reads lines via
-`stdin.readline()` rather than the builtin `input()`, so it has no direct
-dependency on terminal globals and is fully driven by injectable
-`stdin`/`stdout`/`stderr` streams in tests. An empty `readline()` result
-(EOF) and `/exit`/`/quit` exit with code 0; `KeyboardInterrupt` while
-blocked on `readline()` exits with code 130 and no traceback; a per-question
-failure is rendered to `stderr` and the loop continues. `econ_paper_cli.cli`
-dispatches bare `econpapers` (no subcommand) to this shell — `arguments.command
-is None` is the only signal used, so `econpapers --help` and every other
-subcommand are unaffected. The session never writes to configuration or the
+`run_interactive_shell` is the read-eval-print loop. On a real terminal
+(`isatty()`, and only when streams were not injected) it reads through the
+builtin `input()` so the imported `readline` module supplies line editing —
+Left/Right cursor movement, Up/Down history recall, and the usual
+Ctrl-A/Ctrl-E/Ctrl-K bindings. Without that import a terminal delivers arrow
+keys as raw escape sequences, which reach the question as literal `^[[D`. The
+exact binding set depends on the backend: CPython links GNU readline on most
+Linux builds and libedit on macOS, so editing and history are guaranteed while
+word-level shortcuts (Alt/Option + arrows) are not. Injected or non-TTY streams
+are read directly via `stdin.readline()` for stream isolation, and are excluded
+even when they report `isatty()` — routing them through `input()` would read
+the process's real stdin instead of the injected one. `_read_input_line`
+returns `None` for end-of-input rather than `""`, because `input()` cannot
+otherwise distinguish EOF from a blank line. EOF and `/exit`/`/quit` exit with
+code 0;
+`KeyboardInterrupt` while blocked waiting for input exits with code 130 and no
+traceback; a per-question failure is rendered to `stderr` and the loop
+continues. `econ_paper_cli.cli` dispatches bare `econpapers` (no subcommand) to
+this shell — `arguments.command is None` is the only signal used, so `econpapers
+--help` and every other subcommand are unaffected. The session never writes to
+configuration or the
 database, never reopens or reanalyzes a PDF, and never persists questions,
 answers, or citations; the library snapshot is fixed for the life of the
 process.
+
+Evidence inspection (`/show` in the shell, `--show-evidence` on one-shot
+`chat`) renders the exact stored passage text behind a citation, not just its
+metadata. `ChatCitationDetail` carries a `passage_text` field populated
+directly from the `stored_passage` that `_resolve_citations` already
+validates against the retrieved passage — no second, unvalidated lookup, and
+no new `StorageBackend` method. `chat_command.format_evidence_detail(
+citations, *, citation_id=None)` is the single renderer shared by both
+surfaces (chat with the flag set, and the shell's `/show`), so their output
+is byte-for-byte identical. It normalizes CRLF/CR line endings to LF,
+replaces C0 controls, C1 controls, and DEL with a placeholder glyph (raw
+terminal-control bytes embedded in extracted PDF text must never reach the
+terminal verbatim), and word-wraps the passage body without truncating any
+content, however long. Single-line metadata fields (title, section heading,
+source path) go through the same control-character policy but disallow
+newline/tab entirely, since an embedded newline there could otherwise inject
+a fake extra output line.
+
+`InteractiveShellSession.last_turn_citations` is the shell's evidence state:
+`ask()` sets it from the just-completed turn's citations on an `ANSWERED`
+outcome, and clears it on every other outcome (`NO_MATCHES`, `ABSTAINED`,
+`WITHHELD`, `TYPED_FAILURE`, `INTERNAL_FAILURE`) — a turn that did not answer
+carries no evidence relevant to `/show`, and the previous turn's evidence no
+longer corresponds to the question just asked. `/reset` clears it alongside
+conversation history, since both are "context from earlier in the session"
+from the user's point of view. `/show` (bare) lists the available citation
+IDs; `/show ID` renders that one passage; an unknown ID or no evidence yet
+each print a plain message rather than failing the turn. `/show` reads only
+this in-memory state, never storage, preserving the same fixed-snapshot
+invariant as citation resolution itself.
 
 Issue 58 adds managed `llama.cpp` runtime provisioning to `econpapers setup`
 so a fresh user no longer has to build `llama.cpp`, edit `PATH`, or locate an

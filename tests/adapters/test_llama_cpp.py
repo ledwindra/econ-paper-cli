@@ -66,10 +66,15 @@ def make_request(
 
 
 def successful_output(*, citation_ids: list[str] | None = None) -> str:
+    ids = ["e1"] if citation_ids is None else citation_ids
     return json.dumps(
         {
-            "answer_text": "The synthetic estimate was 4 units.",
-            "citation_ids": ["e1"] if citation_ids is None else citation_ids,
+            "claims": [
+                {
+                    "text": "The synthetic estimate was 4 units.",
+                    "citation_ids": ids,
+                }
+            ],
             "abstained": False,
             "abstention_reason": None,
             "finding_kinds": ["descriptive"],
@@ -382,8 +387,7 @@ def test_nonzero_runtime_exit_does_not_include_captured_private_output(
         (
             json.dumps(
                 {
-                    "answer_text": "Answer.",
-                    "citation_ids": ["e1"],
+                    "claims": [{"text": "Answer.", "citation_ids": ["e1"]}],
                     "abstained": False,
                     "abstention_reason": None,
                     "finding_kinds": ["descriptive"],
@@ -421,8 +425,7 @@ def test_unknown_citation_id_is_rejected(tmp_path: Path) -> None:
 def test_invalid_abstention_contract_is_rejected(tmp_path: Path) -> None:
     output = json.dumps(
         {
-            "answer_text": "I cannot answer.",
-            "citation_ids": ["e1"],
+            "claims": [{"text": "I cannot answer.", "citation_ids": ["e1"]}],
             "abstained": True,
             "abstention_reason": "insufficient_evidence",
             "finding_kinds": [],
@@ -436,9 +439,62 @@ def test_invalid_abstention_contract_is_rejected(tmp_path: Path) -> None:
         generator.generate(make_request())
 
 
-def test_out_of_order_citations_fail_existing_response_validator(
+def test_claims_citing_out_of_rank_order_are_normalized_not_rejected(
     tmp_path: Path,
 ) -> None:
+    """Under v3 the response's citation list is derived from the claims, so a
+    model naming a later-ranked passage first must yield rank-ascending
+    citations rather than losing the whole answer to a contract violation.
+    The per-claim attribution keeps the model's own ordering."""
+    request = _two_evidence_request()
+    output = json.dumps(
+        {
+            "claims": [
+                {"text": "A second finding.", "citation_ids": ["e2"]},
+                {"text": "The synthetic estimate was 4 units.", "citation_ids": ["e1"]},
+            ],
+            "abstained": False,
+            "abstention_reason": None,
+            "finding_kinds": ["descriptive"],
+        }
+    )
+    generator = LlamaCppGenerator(
+        make_config(tmp_path), process_runner=RecordingRunner(output)
+    )
+
+    response = generator.generate(request)
+
+    assert [item.citation_id for item in response.citations] == ["e1", "e2"]
+    assert [claim.citation_ids for claim in response.claims] == [("e2",), ("e1",)]
+
+
+def test_a_single_claim_may_not_cite_an_identifier_outside_the_evidence(
+    tmp_path: Path,
+) -> None:
+    """A claim citing an unknown identifier is rejected even when the response's
+    other claims cite only real evidence, so one bad claim cannot smuggle an
+    unresolvable citation past the derived citation list."""
+    request = _two_evidence_request()
+    output = json.dumps(
+        {
+            "claims": [
+                {"text": "A grounded finding.", "citation_ids": ["e1"]},
+                {"text": "An invented finding.", "citation_ids": ["e99"]},
+            ],
+            "abstained": False,
+            "abstention_reason": None,
+            "finding_kinds": ["descriptive"],
+        }
+    )
+    generator = LlamaCppGenerator(
+        make_config(tmp_path), process_runner=RecordingRunner(output)
+    )
+
+    with pytest.raises(LlamaCppOutputError, match="unknown evidence citation"):
+        generator.generate(request)
+
+
+def _two_evidence_request() -> GenerationRequest:
     first = make_request().evidence[0]
     second_passage = Passage.from_mapping(
         {
@@ -451,7 +507,7 @@ def test_out_of_order_citations_fail_existing_response_validator(
             "ordinal_position": 0,
         }
     )
-    request = GenerationRequest(
+    return GenerationRequest(
         question="What are the findings?",
         evidence=(
             first,
@@ -463,20 +519,12 @@ def test_out_of_order_citations_fail_existing_response_validator(
             ),
         ),
     )
-    generator = LlamaCppGenerator(
-        make_config(tmp_path),
-        process_runner=RecordingRunner(successful_output(citation_ids=["e2", "e1"])),
-    )
-
-    with pytest.raises(LlamaCppOutputError, match="response contract"):
-        generator.generate(request)
 
 
 def test_empty_evidence_can_produce_contract_valid_abstention(tmp_path: Path) -> None:
     output = json.dumps(
         {
-            "answer_text": "The supplied evidence is insufficient.",
-            "citation_ids": [],
+            "claims": [],
             "abstained": True,
             "abstention_reason": "insufficient_evidence",
             "finding_kinds": [],
@@ -692,14 +740,14 @@ def test_grammar_binds_abstention_state_to_its_dependent_fields() -> None:
     abstaining = next(
         line for line in grammar.splitlines() if line.startswith("abstaining-root ::=")
     )
-    # Answering: abstained false, reason null, at least one citation.
+    # Answering: abstained false, reason null, at least one claim.
     assert '"false"' in answering and '"null"' in answering
-    assert "citation-ids-nonempty" in answering
-    # Abstaining: abstained true, the one legal reason, and no citations
+    assert "claims-nonempty" in answering
+    # Abstaining: abstained true, the one legal reason, and no claims
     # or finding kinds.
     assert '"true"' in abstaining
     assert "insufficient_evidence" in abstaining
-    assert "citation-ids-empty" in abstaining
+    assert "claims-empty" in abstaining
     assert "finding-kinds-empty" in abstaining
 
 
@@ -721,14 +769,14 @@ def test_grammar_cannot_express_duplicate_or_runaway_finding_kinds() -> None:
         assert alternative.count('\\"causal\\"') <= 1
 
 
-def test_grammar_bounds_citation_id_list_length() -> None:
-    """Citation ids are unbounded in principle, so the list is length-capped
-    rather than left open — an unbounded repeat is a runaway-loop hazard."""
+@pytest.mark.parametrize("rule_name", ("citation-ids", "claims-nonempty"))
+def test_grammar_bounds_repeated_list_rules(rule_name: str) -> None:
+    """Citation ids and claims are unbounded in principle, so both lists are
+    length-capped rather than left open — an unbounded repeat is a
+    runaway-loop hazard that truncates output mid-object."""
     grammar = _packaged_grammar_text()
     rule = next(
-        line
-        for line in grammar.splitlines()
-        if line.startswith("citation-ids-nonempty ::=")
+        line for line in grammar.splitlines() if line.startswith(f"{rule_name} ::=")
     )
 
     assert "*" not in rule

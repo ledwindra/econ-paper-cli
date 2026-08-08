@@ -11,7 +11,7 @@ Database Path: ...
 Paper Count: 12
 Passage Count: 34
 Evidence scope: stored Abstract and Introduction passages only.
-Commands: /help, /status, /exit, /quit
+Commands: /help, /status, /show, /reset, /exit, /quit
 econpapers> Has anyone studied the effect of direct regional elections on infrastructure investment?
 Question: Has anyone studied the effect of direct regional elections on infrastructure investment?
 Outcome: answered
@@ -22,10 +22,24 @@ Answer: ...
   Paper Title: ...
   ...
 
+econpapers> /show e1
+[e1] ...
+  Paper ID: ...
+  Source Path: ...
+  Section Heading: ...
+  Page Range: ...
+  Passage ID: ...
+  Retrieval Rank: ...
+  Retrieval Score: ...
+
+  <the full stored passage text>
+
 econpapers> /exit
 ```
 
-Each question is answered independently against the stored Abstract/Introduction corpus — there is no conversation memory or follow-up rewriting yet (see [Interactive shell](#interactive-shell-issue-56-implemented) below).
+Each question is answered independently against the stored Abstract/Introduction corpus. The shell does resolve **follow-up questions**: a question that refers back to an earlier turn ("what about its effect on housing?") is rewritten into a standalone question first, and the rewrite is always printed as `Interpreted as:` so you can see — and correct — how it was read. Detection is conservative, so a self-contained question is never rewritten. `/reset` forgets earlier turns; only answered turns become context.
+
+`/show ID` prints the exact stored passage text behind one citation from the most recent answered turn — so a claim can be checked against the source, not just the citation metadata. Bare `/show` lists the citation IDs currently available. Evidence is scoped to the latest turn only: a turn that does not answer (`no_matches`, `abstained`, `withheld`, or a failure) clears it, and `/reset` clears it along with conversation history. One-shot `econpapers chat QUESTION --show-evidence` prints the same evidence inline under each citation, for scripting or a single lookup without opening the shell.
 
 ## Product principles
 
@@ -71,9 +85,9 @@ The package currently exposes these commands:
 
 ```bash
 econpapers                                                                    # interactive shell
-econpapers setup --model-path MODEL_PATH --model-id MODEL_ID --model-bytes BYTES --model-checksum SHA256 [--llama-cpp-path EXECUTABLE_PATH] [--offline] [--threads N] [--timeout SECONDS] [--db-path DB_PATH]
+econpapers setup [--model MODEL_ID] [--llama-cpp-path EXECUTABLE_PATH] [--model-path MODEL_PATH --model-id MODEL_ID --model-bytes BYTES --model-checksum SHA256] [--offline] [--threads N] [--timeout SECONDS] [--db-path DB_PATH]
 econpapers status
-econpapers chat QUESTION
+econpapers chat QUESTION [--show-evidence]
 econpapers update
 econpapers analyze TARGET_PATH [--max-passage-characters 1200]
 ```
@@ -82,6 +96,57 @@ econpapers analyze TARGET_PATH [--max-passage-characters 1200]
 
 Bare `econpapers` (no command) opens the interactive shell described above;
 `econpapers --help` still prints normal CLI help and exits.
+
+### Choosing a model
+
+`econpapers setup` provisions a model for you: with no model flags at all it
+downloads, checksum-verifies, and installs a pinned GGUF, exactly as it already
+does for the `llama.cpp` runtime. A model already installed and matching its
+pinned checksum is reused, so re-running `setup` costs seconds, not another
+download.
+
+Two sizes are pinned. Both were measured against this tool's prompt on a real
+248-paper library:
+
+| Model | Size | Behavior |
+| --- | --- | --- |
+| Qwen2.5 **1.5B** Instruct Q4_K_M | ~1.0 GB | Runs anywhere. Answers are thin and sometimes repetitive, and it will occasionally reach past the best-matching paper for a weaker one. |
+| Qwen2.5 **7B** Instruct Q4_K_M | ~4.4 GB | Noticeably better answers: picks the right paper, states specific findings, and produced no withheld claims on the same questions. Wants roughly 8 GB of free RAM. |
+
+The 1.5B is the default deliberately: it is the smaller download and needs no
+special hardware, which is what "CPU-capable, no GPU required" has to mean for
+a first run. Move to the 7B when you want answers you would actually quote and
+have the disk and memory to spare. Nothing else changes: same command, same
+library, same citation and grounding checks.
+
+```bash
+econpapers setup                                       # default 1.5B
+econpapers setup --model qwen2.5-7b-instruct-q4-k-m    # opt in to the 7B
+```
+
+Run `econpapers status` afterwards to confirm which model is active.
+
+To use a GGUF you supplied yourself, pass all four model-identity flags
+together — that bypasses provisioning entirely and never downloads anything:
+
+```bash
+econpapers setup \
+  --model-path /path/to/your-model.gguf \
+  --model-id your-model \
+  --model-bytes "$(stat -f%z /path/to/your-model.gguf)" \
+  --model-checksum "$(shasum -a 256 /path/to/your-model.gguf | cut -d' ' -f1)"
+```
+
+Supplying only some of the four is a typed error rather than a partial
+configuration. You can also try a model for a single question without changing
+your durable configuration by passing the same five flags to `chat` or
+`analyze`. `--offline` refuses every download, for the model as well as the
+runtime.
+
+Whichever model you pick, an answer that attributes one paper's findings to
+another is withheld rather than shown — see
+[`docs/generation-contract.md`](docs/generation-contract.md). A smaller model
+therefore fails by saying less, not by saying something false.
 
 `econpapers setup` validates a proposed local `llama.cpp` runtime and GGUF
 model (path, expected size, expected SHA-256 checksum, and optional thread
@@ -148,7 +213,9 @@ help. It resolves configuration and the database path the same way as
 `analyze`/`chat` (Issue #54 boundaries), opens the configured SQLite library
 read-only exactly once, and builds one session snapshot (strict early-section
 records, one validated `Corpus`, one in-memory `BM25Retriever`). The prompt
-is `econpapers> `.
+is `econpapers> `, with standard line-editing, command history (Up/Down
+arrows), and word navigation shortcuts (Option/Alt + Left/Right arrows)
+enabled in interactive terminals.
 
 Each non-empty, non-command line is one independent cited question — exactly
 as `econpapers chat` — normalized, retrieved, and (only if evidence exists)
@@ -159,17 +226,45 @@ construct it, and a typed generator failure is rendered for that question
 without corrupting the session, so the next question can retry.
 
 Built-in commands: `/help` (session help), `/status` (database path,
-paper/passage counts, and generator readiness, read-only), and `/exit`/
-`/quit` (terminate successfully). A blank line just redisplays the prompt.
+paper/passage counts, and generator readiness, read-only), `/show` (list the
+citation IDs from the most recent answered turn, or `/show ID` to print that
+citation's full stored passage text and provenance — see "Evidence
+inspection" below), and `/exit`/`/quit` (terminate successfully). A blank
+line just redisplays the prompt.
 EOF exits successfully; `Ctrl-C` while waiting for input exits immediately
 with code 130 and no traceback. The session is strictly read-only: no
 database writes or migrations, no PDF reopening or reanalysis, no
 configuration mutation, and no persistence of questions, answers, or
 citations. The library is a fixed snapshot for the life of the process —
 papers analyzed after the shell opens become visible only after restarting
-`econpapers`. There is no conversation history, follow-up-question rewriting,
-or pronoun resolution in this issue; every question is independent, exactly
-like one-shot `econpapers chat`.
+`econpapers`. Conversation context is deliberately narrow: the shell keeps
+the last two *answered* turns in memory only, and uses them solely to rewrite a
+follow-up question into a standalone one before retrieval. Nothing is persisted,
+an abstained or withheld turn never becomes context, and the rewrite is always
+shown as `Interpreted as:`. One-shot `econpapers chat` has no context at all and
+answers exactly what it is given.
+
+### Evidence inspection
+
+A citation identifies a paper and passage, but not what the passage actually
+says — `/show` in the shell and `--show-evidence` on one-shot `chat` render
+the exact stored passage text so a claim can be checked against its source
+directly, without opening the database.
+
+`/show` reads only the citations already resolved for the *most recent*
+answered turn — it never re-reads storage, so a concurrent `analyze` cannot
+change what it shows mid-session. A turn that does not answer
+(`no_matches`, `abstained`, `withheld`, or a failure) clears that evidence
+rather than leaving the previous turn's passages visible for a question they
+no longer correspond to; `/reset` clears it too, together with conversation
+history. `econpapers chat --show-evidence` has no such state: it always
+prints the evidence for the one question just asked.
+
+```bash
+econpapers chat "What is the effect of transit expansion on wages?" --show-evidence
+```
+
+Both surfaces call the same renderer, so the output is identical either way.
 
 ### Intended future workflow
 

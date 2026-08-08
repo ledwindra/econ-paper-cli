@@ -910,3 +910,123 @@ def test_interleaved_author_footnote_inside_body_prose_is_excluded() -> None:
     assert "We thank the" not in retained
     assert "@example.edu" not in retained
     assert "There exists a continuum" not in retained
+
+
+# --- v3: papers whose Introduction is unheaded --------------------------------
+
+
+def test_explicit_abstract_without_introduction_heading_yields_abstract_only() -> None:
+    """Oxford UP and Restud print an Abstract heading but no Introduction
+    heading. Detection used to emit UNRESOLVED_ABSTRACT_BOUNDARY and return
+    *nothing*, dropping the paper from the searchable library entirely. One
+    section is enough to make a paper searchable, so the abstract must survive.
+    """
+    page = (
+        "Industrial clusters in the long run\n"
+        "Abstract\n"
+        "We study the impact of large manufacturing plants on local producers.\n"
+        "JEL codes: R11, R53\n"
+        "\n"
+        "2 Historical background\n"
+        "The plants were built during a brief alliance.\n"
+    )
+    result = detect_pdf_sections(
+        _extraction(page), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+
+    kinds = [section.kind for section in result.sections]
+    assert PDFSectionKind.ABSTRACT in kinds
+    abstract = result.sections[0]
+    assert abstract.detection_method is PDFSectionDetectionMethod.EXPLICIT_HEADING
+    assert "large manufacturing plants" in abstract.text
+    # The abstract stops at its terminator rather than swallowing body text.
+    assert "Historical background" not in abstract.text
+    assert PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY not in {
+        warning.code for warning in result.warnings
+    }
+
+
+def test_abstract_without_a_resolvable_terminator_is_still_reported_unresolved() -> (
+    None
+):
+    """Without a front-matter terminator there is no evidence for where the
+    abstract stops, so guessing would file introduction prose under the Abstract
+    heading. Reporting the warning and returning nothing stays correct."""
+    page = (
+        "A Paper Title\n"
+        "Abstract\n"
+        "We study something interesting about cities and their growth.\n"
+        "\n"
+        "2 Data\n"
+        "We collect panel data.\n"
+    )
+    result = detect_pdf_sections(
+        _extraction(page), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+
+    codes = {warning.code for warning in result.warnings}
+    assert PDFSectionWarningCode.UNRESOLVED_ABSTRACT_BOUNDARY in codes
+    assert not any(
+        section.kind is PDFSectionKind.ABSTRACT for section in result.sections
+    )
+
+
+def test_abstract_heading_appearing_after_the_body_is_never_selected() -> None:
+    """Regression: on a real 45-page AEA paper the only 'Abstract' line sat on
+    page 19, inside the body. Selecting it hid the genuine unheaded abstract on
+    page 1 and dead-ended detection. Front matter precedes the body."""
+    p1 = (
+        "The Growth of Low-Skill Service Jobs\n"
+        "By Ada Economist\n"
+        "We offer a unified analysis of employment polarization. (JEL J24, J31)\n"
+        "A vast literature documents rising wage inequality across nations.\n"
+        "\n"
+        "2 The Model\n"
+        "We build a spatial equilibrium model.\n"
+    )
+    p2 = "Abstract\nThis line is a stray match deep inside the body text.\n"
+
+    result = detect_pdf_sections(
+        _extraction(p1, p2), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+
+    # The stray match is retained for provenance but was not selected.
+    assert any(
+        candidate.kind is PDFSectionKind.ABSTRACT and candidate.page_number == 2
+        for candidate in result.candidates
+    )
+    assert any(
+        section.kind is PDFSectionKind.ABSTRACT
+        and section.detection_method is PDFSectionDetectionMethod.IMPLICIT_FRONT_MATTER
+        for section in result.sections
+    )
+
+
+def test_inline_jel_parenthetical_terminates_an_unheaded_abstract() -> None:
+    """AEA sets JEL codes inline at the end of the abstract's last sentence
+    rather than on their own line, so the line-anchored keyword pattern never
+    sees them and the abstract had no terminator."""
+    page = (
+        "A Paper Title\n"
+        "By Ada Economist\n"
+        "We study the polarization of employment and wages. (JEL J24, J31, R23)\n"
+        "A vast literature documents rising inequality in many countries.\n"
+        "\n"
+        "2 The Model\n"
+        "We build a model.\n"
+    )
+    result = detect_pdf_sections(
+        _extraction(page), settings=DEFAULT_PDF_SECTION_SETTINGS
+    )
+
+    abstract = next(
+        (s for s in result.sections if s.kind is PDFSectionKind.ABSTRACT), None
+    )
+    assert abstract is not None
+    assert PDFSectionBoundaryEvidenceType.JEL_CLASSIFICATION_TERMINATOR in {
+        evidence.evidence_type for evidence in abstract.boundary_evidence
+    }
+
+
+def test_v3_is_a_recognized_policy_version() -> None:
+    assert DEFAULT_PDF_SECTION_SETTINGS.policy_version == "pdf-section-detection-v3"

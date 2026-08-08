@@ -1,0 +1,4 @@
+char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+space ::= | " " | "\n"{1,2} [ \t]{0,20}
+question ::= "\"" char+ "\""
+root ::= "{" space "\"resolved_question\"" space ":" space question space "}"

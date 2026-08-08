@@ -136,6 +136,28 @@ def get_default_runtime_dir(
     )
 
 
+def get_default_model_dir(
+    app_name: str = DEFAULT_APP_NAME,
+    env: Mapping[str, str] | None = None,
+    system: str | None = None,
+) -> Path:
+    """Resolve the canonical cross-platform managed-model install directory.
+
+    Sibling of the managed-runtime directory and under the same per-user data
+    area: a downloaded GGUF is bulk data, not configuration.
+
+    Resolution order:
+    1. ECONPAPERS_MODEL_DIR environment variable (if non-empty)
+    2. get_default_storage_dir(...) / "models"
+    """
+    env_map = os.environ if env is None else env
+    custom_model_dir = env_map.get("ECONPAPERS_MODEL_DIR", "").strip()
+    if custom_model_dir:
+        return Path(custom_model_dir)
+
+    return get_default_storage_dir(app_name=app_name, env=env, system=system) / "models"
+
+
 def get_default_config_path(
     config_filename: str = "config.json",
     app_name: str = DEFAULT_APP_NAME,

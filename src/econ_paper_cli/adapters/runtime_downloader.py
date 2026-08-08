@@ -40,6 +40,32 @@ DEFAULT_TRUSTED_REDIRECT_HOSTS = frozenset(
     }
 )
 
+# Hugging Face (the source pinned *models* are downloaded from) redirects LFS
+# objects to a regional CDN whose exact hostname varies by the caller's
+# location — ``us.aws.cdn.hf.co``, ``cdn-lfs.huggingface.co``, and others. An
+# exact-host allowlist cannot enumerate those without breaking downloads
+# outside whichever region it was written in, so model downloads trust a
+# closed set of *registrable domains* instead, matched on a label boundary.
+DEFAULT_TRUSTED_REDIRECT_HOST_SUFFIXES = frozenset({"hf.co", "huggingface.co"})
+
+
+def _is_trusted_redirect_host(
+    host: str,
+    trusted_hosts: frozenset[str],
+    trusted_host_suffixes: frozenset[str],
+) -> bool:
+    """Report whether ``host`` is exactly trusted or under a trusted domain.
+
+    Suffix matching is anchored to a label boundary, so ``evil-hf.co`` and
+    ``hf.co.attacker.test`` are refused while ``us.aws.cdn.hf.co`` is allowed.
+    """
+    if host in trusted_hosts:
+        return True
+    return any(
+        host == suffix or host.endswith(f".{suffix}")
+        for suffix in trusted_host_suffixes
+    )
+
 
 class _StreamResponse(Protocol):
     """The minimal surface this adapter needs from an HTTP response."""
@@ -63,9 +89,15 @@ class _BoundedHTTPSRedirectHandler(urllib.request.HTTPRedirectHandler):
     bookkeeping so ``TooManyRedirectsError`` is raised deterministically.
     """
 
-    def __init__(self, max_redirects: int, trusted_hosts: frozenset[str]) -> None:
+    def __init__(
+        self,
+        max_redirects: int,
+        trusted_hosts: frozenset[str],
+        trusted_host_suffixes: frozenset[str] = frozenset(),
+    ) -> None:
         self._max_redirects = max_redirects
         self._trusted_hosts = trusted_hosts
+        self._trusted_host_suffixes = trusted_host_suffixes
         self._redirect_count = 0
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
@@ -74,7 +106,9 @@ class _BoundedHTTPSRedirectHandler(urllib.request.HTTPRedirectHandler):
                 f"Refusing to follow redirect to a non-HTTPS URL: '{newurl}'."
             )
         host = (urllib.parse.urlsplit(newurl).hostname or "").lower()
-        if host not in self._trusted_hosts:
+        if not _is_trusted_redirect_host(
+            host, self._trusted_hosts, self._trusted_host_suffixes
+        ):
             raise UntrustedRedirectHostError(
                 f"Refusing to follow redirect to untrusted host '{host}': '{newurl}'."
             )
@@ -90,9 +124,12 @@ class _BoundedHTTPSRedirectHandler(urllib.request.HTTPRedirectHandler):
 def _default_opener_factory(
     max_redirects: int,
     trusted_hosts: frozenset[str] = DEFAULT_TRUSTED_REDIRECT_HOSTS,
+    trusted_host_suffixes: frozenset[str] = frozenset(),
 ) -> _Opener:
     return urllib.request.build_opener(
-        _BoundedHTTPSRedirectHandler(max_redirects, trusted_hosts)
+        _BoundedHTTPSRedirectHandler(
+            max_redirects, trusted_hosts, trusted_host_suffixes
+        )
     )
 
 
@@ -106,6 +143,7 @@ class UrllibDownloader:
         chunk_size: int = _DEFAULT_CHUNK_SIZE,
         max_redirects: int = _DEFAULT_MAX_REDIRECTS,
         trusted_redirect_hosts: frozenset[str] = DEFAULT_TRUSTED_REDIRECT_HOSTS,
+        trusted_redirect_host_suffixes: frozenset[str] = frozenset(),
         opener_factory: Callable[[int], _Opener] | None = None,
     ) -> None:
         self._timeout_seconds = timeout_seconds
@@ -113,7 +151,7 @@ class UrllibDownloader:
         self._max_redirects = max_redirects
         self._opener_factory = opener_factory or (
             lambda max_redirects: _default_opener_factory(
-                max_redirects, trusted_redirect_hosts
+                max_redirects, trusted_redirect_hosts, trusted_redirect_host_suffixes
             )
         )
 

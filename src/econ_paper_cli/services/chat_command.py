@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import textwrap
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
@@ -40,7 +41,10 @@ from econ_paper_cli.protocols import (
     validate_generation_response,
 )
 from econ_paper_cli.protocols.config import ConfigBackend, ConfigError
-from econ_paper_cli.protocols.generation import FindingKind
+from econ_paper_cli.protocols.generation import (
+    FindingKind,
+    check_response_grounding,
+)
 from econ_paper_cli.protocols.retrieval import validate_retrieval_results
 from econ_paper_cli.services.config_resolution import (
     ConfigResolutionError,
@@ -76,6 +80,11 @@ class ChatTerminalOutcome(str, Enum):
     EMPTY_LIBRARY = "empty_library"
     NO_MATCHES = "no_matches"
     ABSTAINED = "abstained"
+    # Distinct from ABSTAINED: the generator did produce an answer, but every
+    # claim in it misattributed content across papers and was withheld. The
+    # user needs to know an answer existed and was suppressed, not that the
+    # library had nothing to say.
+    WITHHELD = "withheld"
     FAILED = "failed"
 
 
@@ -94,6 +103,7 @@ class ChatCommandOptions:
     db_path: Path | None = None
     config_path: Path | None = None
     top_k: int = DEFAULT_CHAT_TOP_K
+    show_evidence: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.question, str) or not self.question.strip():
@@ -121,6 +131,25 @@ class ChatCitationDetail:
     retrieval_rank: int
     retrieval_score: float
     source_path: str
+    passage_text: str
+
+
+@dataclass(frozen=True, slots=True)
+class ChatClaimDetail:
+    """One verified claim with the papers it is attributed to."""
+
+    text: str
+    citation_ids: tuple[str, ...]
+    paper_titles: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class WithheldClaimDetail:
+    """One claim suppressed for attributing content to the wrong paper."""
+
+    text: str
+    citation_ids: tuple[str, ...]
+    leaked_terms: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +166,8 @@ class ChatCommandResult:
     generation_method: str | None = None
     finding_kinds: tuple[FindingKind, ...] = ()
     citations: tuple[ChatCitationDetail, ...] = ()
+    claims: tuple[ChatClaimDetail, ...] = ()
+    withheld_claims: tuple[WithheldClaimDetail, ...] = ()
     error_message: str | None = None
 
 
@@ -255,16 +286,80 @@ def execute_chat_command(
         cited = _resolve_citations(
             storage_backend.get_early_section_record, corpus, evidence, response
         )
+
+        # A claim that uses another paper's distinctive vocabulary is
+        # misattributed, so it never reaches the user even though its citation
+        # identifiers are valid. Responses without per-claim attribution
+        # (v1/v2 backends, injected test generators) yield no verdicts and pass
+        # through untouched.
+        verdicts = check_response_grounding(request, response)
+        grounded_claims = tuple(
+            claim
+            for claim, verdict in zip(response.claims, verdicts, strict=True)
+            if verdict.grounded
+        )
+        withheld = tuple(
+            WithheldClaimDetail(
+                text=claim.text,
+                citation_ids=claim.citation_ids,
+                leaked_terms=verdict.leaked_terms,
+            )
+            for claim, verdict in zip(response.claims, verdicts, strict=True)
+            if not verdict.grounded
+        )
+
+        if verdicts and not grounded_claims:
+            return ChatCommandResult(
+                outcome=ChatTerminalOutcome.WITHHELD,
+                exit_code=1,
+                question=question,
+                db_path=db_path,
+                top_k=options.top_k,
+                no_answer_reason=(
+                    "Every generated claim attributed content to a paper that "
+                    "does not contain it; nothing could be shown."
+                ),
+                generation_method=response.generation_method,
+                withheld_claims=withheld,
+            )
+
+        title_by_citation = {item.citation_id: item.paper_title for item in cited}
+        claim_details = tuple(
+            ChatClaimDetail(
+                text=claim.text,
+                citation_ids=claim.citation_ids,
+                paper_titles=tuple(
+                    dict.fromkeys(
+                        title_by_citation[citation_id]
+                        for citation_id in claim.citation_ids
+                    )
+                ),
+            )
+            for claim in grounded_claims
+        )
+        if grounded_claims:
+            answer_text = " ".join(claim.text for claim in grounded_claims)
+            surviving_ids = {
+                citation_id
+                for claim in grounded_claims
+                for citation_id in claim.citation_ids
+            }
+            cited = tuple(item for item in cited if item.citation_id in surviving_ids)
+        else:
+            answer_text = response.answer_text
+
         return ChatCommandResult(
             outcome=ChatTerminalOutcome.ANSWERED,
             exit_code=0,
             question=question,
             db_path=db_path,
             top_k=options.top_k,
-            answer_text=response.answer_text,
+            answer_text=answer_text,
             generation_method=response.generation_method,
             finding_kinds=response.finding_kinds,
             citations=cited,
+            claims=claim_details,
+            withheld_claims=withheld,
         )
     except (
         ValueError,
@@ -364,7 +459,7 @@ def run_chat_command(
         out = sys.stdout if out is None else out
         err = sys.stderr if err is None else err
 
-    rendered = format_chat_command_output(result)
+    rendered = format_chat_command_output(result, show_evidence=options.show_evidence)
     if result.outcome is ChatTerminalOutcome.FAILED:
         err.write(rendered + "\n")
     else:
@@ -372,7 +467,9 @@ def run_chat_command(
     return result.exit_code
 
 
-def format_chat_command_output(result: ChatCommandResult) -> str:
+def format_chat_command_output(
+    result: ChatCommandResult, *, show_evidence: bool = False
+) -> str:
     """Render deterministic, inspectable one-shot chat output."""
     lines = [
         "=== One-Shot Chat Result ===",
@@ -384,6 +481,26 @@ def format_chat_command_output(result: ChatCommandResult) -> str:
 
     if result.outcome is ChatTerminalOutcome.ANSWERED:
         lines.append(f"Answer: {result.answer_text}")
+        if result.claims:
+            # Each sentence is shown beside the paper it came from, so a reader
+            # who does not know the corpus can check any single statement
+            # without matching opaque identifiers by hand.
+            lines.append("\n--- Answer by Source ---")
+            for position, claim in enumerate(result.claims, start=1):
+                lines.append(f"{position}. {claim.text}")
+                sources = ", ".join(claim.paper_titles)
+                identifiers = ", ".join(claim.citation_ids)
+                lines.append(f"   Source: {sources} [{identifiers}]")
+        if result.withheld_claims:
+            # A count, not the full dossier: the answer above is the product,
+            # and burying it under per-claim diagnostics reads as failure to
+            # someone who just wants the finding. The withheld text stays on
+            # the result for callers that want to show it.
+            total = len(result.claims) + len(result.withheld_claims)
+            lines.append(
+                f"\nWithheld: {len(result.withheld_claims)} of {total} generated "
+                "claims attributed content to a paper that does not contain it."
+            )
         if result.generation_method is not None:
             lines.append(f"Generation Method: {result.generation_method}")
         if result.finding_kinds:
@@ -395,6 +512,15 @@ def format_chat_command_output(result: ChatCommandResult) -> str:
             lines.append("Finding Kinds: N/A")
         lines.append("\n--- Citations ---")
         lines.extend(_render_citation_lines(result.citations))
+        if show_evidence and result.citations:
+            lines.append("\n--- Evidence ---")
+            lines.append(format_evidence_detail(result.citations))
+    elif result.outcome is ChatTerminalOutcome.WITHHELD:
+        lines.append(f"Reason: {result.no_answer_reason}")
+        lines.extend(_render_withheld_lines(result.withheld_claims))
+        if result.generation_method is not None:
+            lines.append(f"Generation Method: {result.generation_method}")
+        lines.append(f"\n{CHAT_EVIDENCE_SCOPE}")
     elif result.outcome in (
         ChatTerminalOutcome.EMPTY_LIBRARY,
         ChatTerminalOutcome.NO_MATCHES,
@@ -415,27 +541,163 @@ def format_chat_command_output(result: ChatCommandResult) -> str:
     return "\n".join(lines)
 
 
-def _render_citation_lines(citations: tuple[ChatCitationDetail, ...]) -> list[str]:
-    """Render the shared per-citation detail block used by one-shot chat and
-    the interactive shell, so both stay byte-for-byte identical."""
-    lines: list[str] = []
-    for detail in citations:
-        lines.append(f"[{detail.citation_id}]")
-        lines.append(f"  Paper Title: {detail.paper_title}")
-        lines.append(f"  Section Heading: {detail.section_heading or 'N/A'}")
-        if detail.page_start is None:
-            page_range = "N/A"
-        elif detail.page_end is None or detail.page_end == detail.page_start:
-            page_range = str(detail.page_start)
-        else:
-            page_range = f"{detail.page_start}-{detail.page_end}"
-        lines.append(f"  Page Range: {page_range}")
-        lines.append(f"  Paper ID: {detail.paper_id}")
-        lines.append(f"  Passage ID: {detail.passage_id}")
-        lines.append(f"  Retrieval Rank: {detail.retrieval_rank}")
-        lines.append(f"  Retrieval Score: {format(detail.retrieval_score, '.12g')}")
-        lines.append(f"  Source Path: {detail.source_path}")
+def _render_withheld_lines(
+    withheld: tuple[WithheldClaimDetail, ...],
+) -> list[str]:
+    """Render suppressed claims so a withheld answer is visible, not silent."""
+    if not withheld:
+        return []
+    lines = [
+        "",
+        f"--- Withheld Claims ({len(withheld)}) ---",
+        "These claims used wording specific to a paper they did not cite, so "
+        "they were not included in the answer.",
+    ]
+    for position, claim in enumerate(withheld, start=1):
+        lines.append(f"{position}. {claim.text}")
+        lines.append(f"   Cited: {', '.join(claim.citation_ids)}")
+        lines.append(f"   Unsupported terms: {', '.join(claim.leaked_terms)}")
     return lines
+
+
+def _format_page_range(detail: ChatCitationDetail) -> str:
+    """Render one passage's page span, collapsing a single-page range."""
+    if detail.page_start is None:
+        return "N/A"
+    if detail.page_end is None or detail.page_end == detail.page_start:
+        return str(detail.page_start)
+    return f"{detail.page_start}-{detail.page_end}"
+
+
+def _render_citation_lines(citations: tuple[ChatCitationDetail, ...]) -> list[str]:
+    """Render citations grouped by paper, shared by chat and the shell.
+
+    Retrieval routinely returns several passages of one paper at different
+    ranks. Rendering each as its own block repeated the title, paper id, and
+    source path, which reads as the same paper listed twice — an impression
+    that undermines trust in the citation list precisely when a paper is the
+    strongest match. Paper-level facts are printed once; the passages that
+    paper contributed are listed beneath it, each keeping its own identifier,
+    section, pages, rank, and score.
+
+    Papers appear in order of their best-ranked passage, and passages within a
+    paper in their own rank order, so the strongest evidence still reads first.
+    """
+    grouped: dict[str, list[ChatCitationDetail]] = {}
+    for detail in citations:
+        grouped.setdefault(detail.paper_id, []).append(detail)
+
+    # Sorted explicitly rather than relying on insertion order: citations
+    # normally arrive rank-ascending, but ordering the output must not depend
+    # on that holding for every caller.
+    by_best_rank = sorted(
+        grouped.items(),
+        key=lambda entry: min(item.retrieval_rank for item in entry[1]),
+    )
+
+    lines: list[str] = []
+    for paper_id, details in by_best_rank:
+        ordered = sorted(details, key=lambda item: item.retrieval_rank)
+        identifiers = ", ".join(item.citation_id for item in ordered)
+        head = ordered[0]
+        lines.append(f"[{identifiers}] {head.paper_title}")
+        lines.append(f"  Paper ID: {paper_id}")
+        lines.append(f"  Source Path: {head.source_path}")
+        lines.append(
+            f"  Passages: {len(ordered)}" if len(ordered) > 1 else "  Passages: 1"
+        )
+        for detail in ordered:
+            lines.append(f"    [{detail.citation_id}]")
+            lines.append(f"      Section Heading: {detail.section_heading or 'N/A'}")
+            lines.append(f"      Page Range: {_format_page_range(detail)}")
+            lines.append(f"      Passage ID: {detail.passage_id}")
+            lines.append(f"      Retrieval Rank: {detail.retrieval_rank}")
+            lines.append(
+                "      Retrieval Score: " + format(detail.retrieval_score, ".12g")
+            )
+    return lines
+
+
+# C0 controls, C1 controls, and DEL are replaced rather than printed
+# verbatim: a raw escape sequence embedded in extracted PDF text could
+# otherwise move the cursor or clear the terminal when evidence is rendered.
+# Passage text additionally allows tab and newline, which shape its
+# paragraph structure; single-line metadata fields allow neither, since an
+# embedded newline there could inject a fake "Label: value" line into output
+# that otherwise looks like one of ours.
+_PASSAGE_CONTROL_REPLACEMENTS = {
+    code: "�"
+    for code in [*range(0x00, 0x20), 0x7F, *range(0x80, 0xA0)]
+    if code not in (0x09, 0x0A)
+}
+_METADATA_CONTROL_REPLACEMENTS = {
+    code: "�" for code in [*range(0x00, 0x20), 0x7F, *range(0x80, 0xA0)]
+}
+
+EVIDENCE_WRAP_WIDTH = 88
+
+
+def _sanitize_metadata_field(text: str) -> str:
+    """Replace control characters in a single-line rendered metadata field."""
+    return text.translate(_METADATA_CONTROL_REPLACEMENTS)
+
+
+def _wrap_passage_text(text: str, *, width: int = EVIDENCE_WRAP_WIDTH) -> list[str]:
+    """Wrap passage text to a readable width without truncating any content.
+
+    Blank lines in the source are preserved as paragraph breaks; every other
+    line is word-wrapped independently so a passage longer than the default
+    passage-size budget still renders in full. CRLF and lone-CR line endings
+    are normalized to LF first, so a CR is never mistaken for stray content
+    and replaced with a placeholder glyph.
+    """
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    sanitized = normalized.translate(_PASSAGE_CONTROL_REPLACEMENTS)
+    lines: list[str] = []
+    for paragraph in sanitized.split("\n"):
+        if not paragraph.strip():
+            lines.append("")
+            continue
+        lines.extend(textwrap.wrap(paragraph, width=width) or [""])
+    return lines
+
+
+def format_evidence_detail(
+    citations: tuple[ChatCitationDetail, ...],
+    *,
+    citation_id: str | None = None,
+) -> str:
+    """Render full passage text and provenance for one or all citations.
+
+    Shared by one-shot chat (``--show-evidence``) and the interactive shell
+    (``/show``) so both surfaces render byte-for-byte identical evidence for
+    the same citation details. Returns an empty string when ``citation_id``
+    does not match any of ``citations``; callers distinguish "no such
+    citation" from "no citations at all" themselves.
+    """
+    selected = citations
+    if citation_id is not None:
+        selected = tuple(item for item in citations if item.citation_id == citation_id)
+
+    blocks: list[str] = []
+    for detail in selected:
+        title = _sanitize_metadata_field(detail.paper_title)
+        section_heading = _sanitize_metadata_field(detail.section_heading or "N/A")
+        source_path = _sanitize_metadata_field(detail.source_path)
+        lines = [
+            f"[{detail.citation_id}] {title}",
+            f"  Paper ID: {detail.paper_id}",
+            f"  Source Path: {source_path}",
+            f"  Section Heading: {section_heading}",
+            f"  Page Range: {_format_page_range(detail)}",
+            f"  Passage ID: {detail.passage_id}",
+            f"  Retrieval Rank: {detail.retrieval_rank}",
+            "  Retrieval Score: " + format(detail.retrieval_score, ".12g"),
+            "",
+        ]
+        lines.extend(_wrap_passage_text(detail.passage_text))
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def _build_llama_cpp_generator(
@@ -502,6 +764,7 @@ def _resolve_citations(
                 retrieval_rank=evidence_item.rank,
                 retrieval_score=evidence_item.score,
                 source_path=record.source_provenance.source_path,
+                passage_text=stored_passage.text,
             )
         )
 
