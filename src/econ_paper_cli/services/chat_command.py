@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import textwrap
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -467,7 +468,12 @@ def run_chat_command(
         out = sys.stdout if out is None else out
         err = sys.stderr if err is None else err
 
-    rendered = format_chat_command_output(result, show_evidence=options.show_evidence)
+    output_stream = err if result.outcome is ChatTerminalOutcome.FAILED else out
+    rendered = format_chat_command_output(
+        result,
+        show_evidence=options.show_evidence,
+        color=_terminal_color_enabled(output_stream),
+    )
     if result.outcome is ChatTerminalOutcome.FAILED:
         err.write(rendered + "\n")
     else:
@@ -476,7 +482,7 @@ def run_chat_command(
 
 
 def format_chat_command_output(
-    result: ChatCommandResult, *, show_evidence: bool = False
+    result: ChatCommandResult, *, show_evidence: bool = False, color: bool = False
 ) -> str:
     """Render deterministic, inspectable one-shot chat output."""
     lines = [
@@ -497,8 +503,8 @@ def format_chat_command_output(
             for position, claim in enumerate(result.claims, start=1):
                 lines.append(f"{position}. {claim.text}")
                 sources = ", ".join(claim.paper_titles)
-                identifiers = ", ".join(claim.citation_ids)
-                lines.append(f"   Source: {sources} [{identifiers}]")
+                identifiers = _format_citation_group(claim.citation_ids, color=color)
+                lines.append(f"   Source: {sources} {identifiers}")
         if result.withheld_claims:
             # A count, not the full dossier: the answer above is the product,
             # and burying it under per-claim diagnostics reads as failure to
@@ -519,13 +525,13 @@ def format_chat_command_output(
         else:
             lines.append("Finding Kinds: N/A")
         lines.append("\n--- Citations ---")
-        lines.extend(_render_citation_lines(result.citations))
+        lines.extend(_render_citation_lines(result.citations, color=color))
         if show_evidence and result.citations:
             lines.append("\n--- Evidence ---")
-            lines.append(format_evidence_detail(result.citations))
+            lines.append(format_evidence_detail(result.citations, color=color))
     elif result.outcome is ChatTerminalOutcome.WITHHELD:
         lines.append(f"Reason: {result.no_answer_reason}")
-        lines.extend(_render_withheld_lines(result.withheld_claims))
+        lines.extend(_render_withheld_lines(result.withheld_claims, color=color))
         if result.generation_method is not None:
             lines.append(f"Generation Method: {result.generation_method}")
         lines.append(f"\n{CHAT_EVIDENCE_SCOPE}")
@@ -551,6 +557,8 @@ def format_chat_command_output(
 
 def _render_withheld_lines(
     withheld: tuple[WithheldClaimDetail, ...],
+    *,
+    color: bool = False,
 ) -> list[str]:
     """Render suppressed claims so a withheld answer is visible, not silent."""
     if not withheld:
@@ -563,7 +571,9 @@ def _render_withheld_lines(
     ]
     for position, claim in enumerate(withheld, start=1):
         lines.append(f"{position}. {claim.text}")
-        lines.append(f"   Cited: {', '.join(claim.citation_ids)}")
+        lines.append(
+            f"   Cited: {_format_citation_ids(claim.citation_ids, color=color)}"
+        )
         lines.append(f"   Unsupported terms: {', '.join(claim.leaked_terms)}")
     return lines
 
@@ -577,7 +587,30 @@ def _format_page_range(detail: ChatCitationDetail) -> str:
     return f"{detail.page_start}-{detail.page_end}"
 
 
-def _render_citation_lines(citations: tuple[ChatCitationDetail, ...]) -> list[str]:
+def _terminal_color_enabled(stream: TextIO) -> bool:
+    """Return whether citation styling is appropriate for a terminal stream."""
+    return bool(stream.isatty()) and "NO_COLOR" not in os.environ
+
+
+def _format_citation_ids(citation_ids: tuple[str, ...], *, color: bool) -> str:
+    """Render citation IDs, optionally using terminal blue for the references."""
+    rendered = ", ".join(citation_ids)
+    if not color:
+        return rendered
+    return f"\033[34m{rendered}\033[0m"
+
+
+def _format_citation_group(citation_ids: tuple[str, ...], *, color: bool) -> str:
+    """Render a citation group in the existing bracketed output format."""
+    rendered = f"[{', '.join(citation_ids)}]"
+    if not color:
+        return rendered
+    return f"\033[34m{rendered}\033[0m"
+
+
+def _render_citation_lines(
+    citations: tuple[ChatCitationDetail, ...], *, color: bool = False
+) -> list[str]:
     """Render citations grouped by paper, shared by chat and the shell.
 
     Retrieval routinely returns several passages of one paper at different
@@ -606,16 +639,20 @@ def _render_citation_lines(citations: tuple[ChatCitationDetail, ...]) -> list[st
     lines: list[str] = []
     for paper_id, details in by_best_rank:
         ordered = sorted(details, key=lambda item: item.retrieval_rank)
-        identifiers = ", ".join(item.citation_id for item in ordered)
+        identifiers = _format_citation_group(
+            tuple(item.citation_id for item in ordered), color=color
+        )
         head = ordered[0]
-        lines.append(f"[{identifiers}] {_sanitize_metadata_field(head.paper_title)}")
+        lines.append(f"{identifiers} {_sanitize_metadata_field(head.paper_title)}")
         lines.append(f"  Paper ID: {paper_id}")
         lines.append(f"  Source Path: {_sanitize_metadata_field(head.source_path)}")
         lines.append(
             f"  Passages: {len(ordered)}" if len(ordered) > 1 else "  Passages: 1"
         )
         for detail in ordered:
-            lines.append(f"    [{detail.citation_id}]")
+            lines.append(
+                "    " + _format_citation_group((detail.citation_id,), color=color)
+            )
             heading = _sanitize_metadata_field(detail.section_heading or "N/A")
             lines.append(f"      Section Heading: {heading}")
             lines.append(f"      Page Range: {_format_page_range(detail)}")
@@ -675,6 +712,7 @@ def format_evidence_detail(
     citations: tuple[ChatCitationDetail, ...],
     *,
     citation_id: str | None = None,
+    color: bool = False,
 ) -> str:
     """Render full passage text and provenance for one or all citations.
 
@@ -694,7 +732,7 @@ def format_evidence_detail(
         section_heading = _sanitize_metadata_field(detail.section_heading or "N/A")
         source_path = _sanitize_metadata_field(detail.source_path)
         lines = [
-            f"[{detail.citation_id}] {title}",
+            f"{_format_citation_group((detail.citation_id,), color=color)} {title}",
             f"  Paper ID: {detail.paper_id}",
             f"  Source Path: {source_path}",
             f"  Section Heading: {section_heading}",

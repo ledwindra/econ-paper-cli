@@ -58,9 +58,12 @@ from econ_paper_cli.services.chat_command import (
     ChatClaimDetail,
     WithheldClaimDetail,
     _build_llama_cpp_generator,
+    _format_citation_group,
+    _format_citation_ids,
     _render_citation_lines,
     _render_withheld_lines,
     _resolve_citations,
+    _terminal_color_enabled,
     format_evidence_detail,
 )
 from econ_paper_cli.services.config_resolution import (
@@ -691,7 +694,9 @@ def format_shell_status(session: InteractiveShellSession) -> str:
     )
 
 
-def format_shell_show(session: InteractiveShellSession, citation_id: str | None) -> str:
+def format_shell_show(
+    session: InteractiveShellSession, citation_id: str | None, *, color: bool = False
+) -> str:
     """Render the ``/show`` command: list available IDs, or one full passage.
 
     Reads only ``session.last_turn_citations`` — the immutable evidence
@@ -705,18 +710,23 @@ def format_shell_show(session: InteractiveShellSession, citation_id: str | None)
             "answered, then run /show."
         )
     if citation_id is None:
-        available = ", ".join(item.citation_id for item in citations)
+        available = _format_citation_ids(
+            tuple(item.citation_id for item in citations), color=color
+        )
         return (
             f"Available citations: {available}\n"
-            f"Run /show ID to view one, e.g. /show {citations[0].citation_id}."
+            "Run /show ID to view one, e.g. /show "
+            f"{_format_citation_ids((citations[0].citation_id,), color=color)}."
         )
     if citation_id not in {item.citation_id for item in citations}:
-        available = ", ".join(item.citation_id for item in citations)
+        available = _format_citation_ids(
+            tuple(item.citation_id for item in citations), color=color
+        )
         return f"Unknown citation ID '{citation_id}'. Available: {available}"
-    return format_evidence_detail(citations, citation_id=citation_id)
+    return format_evidence_detail(citations, citation_id=citation_id, color=color)
 
 
-def format_shell_turn_output(result: ShellTurnResult) -> str:
+def format_shell_turn_output(result: ShellTurnResult, *, color: bool = False) -> str:
     """Render one question's result with the same fields as one-shot chat."""
     lines = [f"Question: {result.question}"]
     if result.resolved_question is not None:
@@ -732,8 +742,8 @@ def format_shell_turn_output(result: ShellTurnResult) -> str:
             for position, claim in enumerate(result.claims, start=1):
                 lines.append(f"{position}. {claim.text}")
                 sources = ", ".join(claim.paper_titles)
-                identifiers = ", ".join(claim.citation_ids)
-                lines.append(f"   Source: {sources} [{identifiers}]")
+                identifiers = _format_citation_group(claim.citation_ids, color=color)
+                lines.append(f"   Source: {sources} {identifiers}")
         if result.withheld_claims:
             total = len(result.claims) + len(result.withheld_claims)
             lines.append(
@@ -750,11 +760,11 @@ def format_shell_turn_output(result: ShellTurnResult) -> str:
         else:
             lines.append("Finding Kinds: N/A")
         lines.append("\n--- Citations ---")
-        lines.extend(_render_citation_lines(result.citations))
+        lines.extend(_render_citation_lines(result.citations, color=color))
         lines.append(f"\n{CHAT_EVIDENCE_SCOPE}")
     elif result.outcome is ShellTurnOutcome.WITHHELD:
         lines.append(f"Reason: {result.no_answer_reason}")
-        lines.extend(_render_withheld_lines(result.withheld_claims))
+        lines.extend(_render_withheld_lines(result.withheld_claims, color=color))
         if result.generation_method is not None:
             lines.append(f"Generation Method: {result.generation_method}")
         lines.append(f"\n{CHAT_EVIDENCE_SCOPE}")
@@ -848,7 +858,14 @@ def run_interactive_shell(
             if command_token == "/show":
                 remainder = stripped.split(None, 1)[1:]
                 citation_id = remainder[0].strip() if remainder else None
-                out.write(format_shell_show(session, citation_id or None) + "\n")
+                out.write(
+                    format_shell_show(
+                        session,
+                        citation_id or None,
+                        color=_terminal_color_enabled(out),
+                    )
+                    + "\n"
+                )
                 continue
             if stripped == "/reset":
                 session.reset_history()
@@ -859,7 +876,15 @@ def run_interactive_shell(
                 continue
 
             result = session.ask(stripped)
-            rendered = format_shell_turn_output(result)
+            output_stream = (
+                err
+                if result.outcome
+                in (ShellTurnOutcome.TYPED_FAILURE, ShellTurnOutcome.INTERNAL_FAILURE)
+                else out
+            )
+            rendered = format_shell_turn_output(
+                result, color=_terminal_color_enabled(output_stream)
+            )
             if result.outcome in (
                 ShellTurnOutcome.TYPED_FAILURE,
                 ShellTurnOutcome.INTERNAL_FAILURE,

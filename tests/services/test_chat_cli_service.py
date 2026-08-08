@@ -230,6 +230,11 @@ def test_answered_chat_renders_citations_from_durable_storage(
     assert "[e1]" in output and "[e2]" in output
     assert "Evidence scope: stored Abstract and Introduction passages only." in output
 
+    colored_output = format_chat_command_output(result, color=True)
+    assert "\033[34m[e1, e2]\033[0m" in colored_output
+    assert "\033[34m[e1]\033[0m" in colored_output
+    assert "\033[34m" not in output
+
     first = result.citations[0]
     second = result.citations[1]
     expected = (
