@@ -4,7 +4,7 @@ This document defines the backend-independent contract that all future retrieval
 
 ## Overview
 
-The retrieval contract isolates literature search logic from concrete search algorithms, vector stores, embedding models, and index structures. Higher-level application services interact with retrieval implementations exclusively through pure domain requests, protocols, and result validation functions.
+The retrieval contract isolates literature search logic from concrete search algorithms, vector stores, embedding models, and index structures. **[current]**; the only index structure behind the contract today is the in-memory BM25 index, and a persisted index is **[planned]**. Higher-level application services interact with retrieval implementations exclusively through pure domain requests, protocols, and result validation functions.
 
 ## Architectural Boundary
 
@@ -18,7 +18,7 @@ Application Services -> Retriever Protocol -> Concrete Retrieval Adapter
                  tuple[RetrievalEvidence, ...]
 ```
 
-Retrievers are configured with their target corpus or index during construction. The corpus or index is **not** passed into individual `retrieve(...)` invocations.
+Retrievers are configured with their target corpus or index during construction. The corpus or index is **not** passed into individual `retrieve(...)` invocations. **[current]**; `BM25Retriever` takes a `Corpus` and builds its index in memory at construction time.
 
 `BM25Retriever` (`econ_paper_cli.adapters.bm25.BM25Retriever`) is the first
 concrete adapter conforming to this protocol and is selected by Issue 9 as the
@@ -68,7 +68,7 @@ A pure validation function (`econ_paper_cli.protocols.retrieval.validate_retriev
 
 For the same:
 - `RetrievalRequest`;
-- configured corpus or index;
+- configured corpus or index (**[current]**: an in-memory BM25 index);
 - adapter implementation; and
 - adapter configuration;
 

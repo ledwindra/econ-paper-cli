@@ -57,7 +57,9 @@ The MVP should include:
 
 - a conversational command-line interface;
 - a local language model;
-- a bundled economics-paper metadata and retrieval index;
+- a bundled economics-paper metadata and retrieval index — **[planned]**,
+  post-MVP. Retrieval today is an in-memory BM25 index rebuilt on each run;
+  nothing is persisted to disk or shipped with the package;
 - literature synthesis;
 - follow-up questions;
 - evidence inspection;
@@ -367,7 +369,8 @@ The project may distribute:
 - source URLs;
 - abstracts where redistribution is permitted;
 - topic labels;
-- derived indexes that do not reconstruct copyrighted full text;
+- derived indexes that do not reconstruct copyrighted full text — **[planned]**;
+  no index is distributed today;
 - code that helps users build a local corpus from authorized sources.
 
 The project must not bundle converted full-text papers unless redistribution permission is established.
@@ -381,7 +384,7 @@ The approved future library uses four local layers:
 | Original PDFs | Authoritative user-provided source documents |
 | Generated Markdown | Inspectable derived representation |
 | SQLite | Structured catalog, retrieval-ready passages, provenance, checksums, ingestion state, and other application state |
-| Retrieval index | Rebuildable search accelerator |
+| Retrieval index | Rebuildable search accelerator. **[current]** as an in-memory BM25 index rebuilt on each run (`adapters/bm25.py`); **[planned]** as a persisted on-disk layer |
 
 Ingestion must never modify or delete a user's source PDFs. Whether the
 application later manages private PDF copies or registers files in place
@@ -391,7 +394,11 @@ preserves them.
 
 Generated Markdown, source-derived SQLite records, passage text, provenance,
 and retrieval indexes should be rebuildable from accessible PDFs plus versioned
-conversion logic and configuration. Future annotations, metadata corrections,
+conversion logic and configuration. For retrieval this invariant is
+**[current]** but trivially so — the BM25 index exists only in memory and is
+rebuilt from stored passages on every run, so there is nothing on disk that
+could go stale. It becomes a substantive guarantee only for the **[planned]**
+persisted index layer. Future annotations, metadata corrections,
 preferences, chat history, or similar unique user state may need separate
 backup or export behavior and is not assumed to be reconstructible.
 
@@ -399,7 +406,8 @@ The library location will be configurable and usable outside this repository.
 The ignored repository-root `/papers/` directory is only a convenience
 location, not a hard-coded application path. PDFs, converted copyrighted text,
 Markdown, databases, and indexes remain private user data and must not be
-committed or redistributed.
+committed or redistributed. **[current]** as a standing rule; it binds the
+in-memory BM25 index today and any **[planned]** persisted index later.
 
 Ordinary ingestion will run locally without network access. Future metadata
 enrichment would require separate approval and explicit opt-in. The MVP uses
@@ -511,6 +519,7 @@ pytest
 - Represent papers and evidence as typed domain objects.
 - Keep retrieval and generation behind replaceable interfaces.
 - Isolate filesystem, network, model, and index operations in adapters.
+  **[current]**; the BM25 index lives behind the `Retriever` protocol today.
 - Avoid unnecessary frameworks.
 - Prefer deterministic, offline tests.
 - Do not bind the core domain to a specific vector database or model runtime.
@@ -553,7 +562,14 @@ grounding checks.
 
 Not yet implemented: OCR, conversion beyond Abstract/Introduction, a persisted
 or bundled retrieval index, and validation of the ingestion pipeline against
-the six real journal layouts tracked by issue #59. See [`MVP-PLAN.md`](MVP-PLAN.md)
+the six real journal layouts tracked by issue #59.
+
+On retrieval specifically, this is the canonical statement of index scope:
+a persisted or bundled retrieval index is **[planned]** and post-MVP. What
+ships today is **[current]**: `BM25Retriever` builds an in-memory index from
+the passages already stored in SQLite, on every run, and writes nothing to
+disk. The bundled index remains approved future scope — it has not been
+dropped, and no release ships one. See [`MVP-PLAN.md`](MVP-PLAN.md)
 for the current milestone ladder toward MVP.
 
 
@@ -566,4 +582,5 @@ Pull requests should be small, issue-linked, tested, and limited to one coherent
 ## License
 
 The source code is released under the [MIT License](LICENSE). Models, corpora,
-indexes, and datasets retain their own licenses and terms.
+indexes, and datasets retain their own licenses and terms. **[current]** as a
+standing rule; no index is distributed under any license today.

@@ -58,7 +58,8 @@ configured over different content from being evaluated under the pinned corpus
 identity.
 
 The fingerprint intentionally excludes JSON whitespace, passage tuple order,
-and metadata that the current retriever does not index. It covers the exact text
+and metadata that the current retriever does not index (**[current]**:
+`BM25Retriever` indexes `Passage.text` only). It covers the exact text
 and identities that determine retrieval and passage-level judgments.
 
 ## Metrics and regression gates
@@ -119,4 +120,6 @@ The evaluator receives a validated `RetrievalBenchmark`, configured `Retriever`,
 and validated `Corpus`. It retrieves once per query at the maximum cutoff and
 derives smaller cutoffs from the same returned tuple. Evaluation itself performs
 no filesystem or network I/O and requires no downloads, models, GPU, paid API,
-persisted index, or CLI integration.
+persisted index, or CLI integration. **[historical]** as a scope statement for
+this benchmark. The persisted index remains **[planned]**; CLI integration has
+since shipped.

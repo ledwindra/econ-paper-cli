@@ -66,7 +66,8 @@ The version-4 migration:
 Early-section records reuse `papers` and `passages`. Consequently,
 `load_corpus()` exposes their passages in deterministic paper/ordinal order and
 the reopened corpus can be supplied directly to `BM25Retriever`. No BM25 token
-statistics or other retrieval-index state is persisted.
+statistics or other retrieval-index state is persisted. **[current]**; a
+persisted index remains **[planned]**.
 
 Saving a record uses one `BEGIN IMMEDIATE` transaction. A checksum already
 owned by another `paper_id` is rejected. Replacing the same checksum-derived
@@ -80,7 +81,7 @@ The storage protocol exposes explicit save, get, list, and delete operations
 for `EarlySectionLibraryRecord`. The existing generic paper-record and
 single-paper-analysis operations remain available. No Markdown file, PDF copy,
 retrieval index, model call, subprocess, or network request is created by this
-workflow.
+workflow. **[current]**.
 
 ## Analysis orchestration and reuse
 

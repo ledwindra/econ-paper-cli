@@ -6,7 +6,9 @@ Issue 9 selects `BM25Retriever` as the initial, replaceable retrieval backend.
 This is an MVP architecture decision, not a claim that BM25 is permanently
 optimal or superior to semantic, dense, or hybrid retrieval on real economics
 research questions. No default factory, CLI wiring, persisted index, generation
-integration, or second adapter is introduced by this decision.
+integration, or second adapter is introduced by this decision. **[historical]**
+as an Issue 9 scope statement. The persisted index is still absent and
+**[planned]**; CLI wiring and generation integration have since shipped.
 
 The existing `Retriever` protocol remains the application boundary. A future
 adapter must satisfy the same evidence, validation, determinism, offline, and
@@ -20,7 +22,8 @@ local baseline:
 - it passes every frozen `synthetic-economics-v1` regression gate without
   tuning;
 - it is pure Python and uses no production dependency, model, downloaded
-  artifact, paid API, API key, Docker service, GPU, or persisted index;
+  artifact, paid API, API key, Docker service, GPU, or persisted index
+  (**[current]**; the index is built in memory per run);
 - ordinary retrieval performs no filesystem or network I/O;
 - its ranks, evidence identities, duplicate suppression, and tie-breaking are
   deterministic and already covered by the retrieval contract; and

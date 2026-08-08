@@ -77,7 +77,7 @@ Do not:
 - redistribute copyrighted paper full text without documented permission;
 - weaken citation or evidence traceability;
 - collect telemetry by default;
-- upload user queries, documents, or indexes without explicit opt-in;
+- upload user queries, documents, or indexes without explicit opt-in (**[current]** rule);
 - redesign the architecture when a narrow interface extension is sufficient.
 
 A cloud backend may only be added later as an optional adapter. It must never become necessary for the default workflow.
@@ -93,7 +93,7 @@ A cloud backend may only be added later as an optional adapter. It must never be
 - Represent evidence explicitly; do not pass unstructured strings when source identity and passage boundaries matter.
 - Keep retrieval, generation, corpus ingestion, and artifact management separable.
 - Do not bind core logic directly to FAISS, a database, `llama.cpp`, or a specific embedding model.
-- Model downloads, corpus downloads, and index updates must eventually be resumable or safely restartable.
+- Model downloads, corpus downloads, and index updates must eventually be resumable or safely restartable. **[planned]** for index updates: there is no on-disk index to update, so this binds nothing today.
 - Every downloaded artifact must eventually have a manifest entry and checksum verification.
 
 ### Repository map
@@ -218,7 +218,7 @@ Retrieval code must:
 - support deterministic tests;
 - avoid duplicate or near-duplicate passages;
 - allow later replacement of the retrieval backend;
-- separate indexing from query-time retrieval.
+- separate indexing from query-time retrieval (**[current]** rule; `BM25Retriever` builds its index at construction, not per query).
 
 Do not claim that a retrieval method is superior without a benchmark against representative economics questions.
 
@@ -238,7 +238,7 @@ Generated citation identifiers must be validated against retrieved evidence befo
 
 ## Corpus and licensing requirements
 
-Before adding a corpus, model, or index artifact, document:
+Before adding a corpus, model, or index artifact, document (**[current]** rule; no index artifact exists yet, so for indexes it first applies to the **[planned]** persisted index):
 
 - source;
 - license;
@@ -253,7 +253,7 @@ Do not commit:
 - NBER PDFs;
 - converted copyrighted papers;
 - model weights;
-- user-generated indexes;
+- user-generated indexes (**[current]** rule);
 - cached downloads;
 - restricted datasets.
 
@@ -282,7 +282,7 @@ pytest
 
 If a command cannot run, state exactly why.
 
-Tests must not download models, papers, or indexes unless explicitly marked as integration or release tests.
+Tests must not download models, papers, or indexes unless explicitly marked as integration or release tests. **[current]** rule.
 
 ## Pre-PR contract self-review
 
@@ -301,7 +301,7 @@ Before opening or updating a pull request, reread the issue's exact scope and be
 - Do not rewrite unrelated history.
 - Do not modify lockfiles unless dependencies changed.
 - Never commit secrets, tokens, cookies, or personal paths.
-- Do not commit model files, paper PDFs, local indexes, caches, or virtual environments.
+- Do not commit model files, paper PDFs, local indexes, caches, or virtual environments (**[current]** rule).
 - Inspect the final diff before completion.
 - Keep pull requests narrowly reviewable.
 

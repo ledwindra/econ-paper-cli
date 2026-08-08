@@ -222,15 +222,19 @@ At the time this contract was first written, Issue 13 had evaluated two
 eligible candidates and explicitly deferred the initial replaceable default
 because neither passed the first mechanical run; model download, retrieval
 orchestration, CLI integration, conversational state, PDF ingestion,
-conversion, storage, segmentation, and indexing were all unimplemented. That
-is no longer current: retrieval orchestration, CLI integration (`chat`, bare
-`econpapers`), conversational state (`domain/conversation.py`), PDF
+conversion, storage, segmentation, and indexing were all unimplemented
+(**[historical]**). That is no longer current: retrieval orchestration, CLI
+integration (`chat`, bare `econpapers`), conversational state
+(`domain/conversation.py`), PDF
 ingestion/conversion/storage/segmentation/indexing (`analyze`, the
 early-section library), and model/runtime download (`econpapers setup`, see
 [`docs/managed-runtime-provisioning.md`](managed-runtime-provisioning.md)
 and `domain/model_manifest.py`) are all implemented — see
-[`docs/roadmap.md`](roadmap.md) for current status. OCR and full-document
-conversion (beyond Abstract/Introduction) remain unimplemented. The
+[`docs/roadmap.md`](roadmap.md) for current status. "Indexing" in that list
+means **[current]** in-memory BM25 index construction at query time only — a
+persisted or bundled retrieval index is **[planned]** and does not ship. OCR
+and full-document conversion (beyond Abstract/Introduction) remain
+unimplemented. The
 `LlamaCppGenerator` adapter described above still performs no downloads
 itself; downloading is a separate, adapter-independent provisioning step.
 

@@ -1,11 +1,16 @@
 # Artifact manifest schema
 
 Artifact manifests describe metadata for one future corpus, index, or model
-artifact. Schema version 1 is a domain contract only: it does not load files,
-access the network, calculate a checksum, or authorize downloading or
-redistributing an artifact.
+artifact. The `index` kind is **[planned]**: the schema accepts it today, but
+no index artifact is built, shipped, or manifested. Schema version 1 is a
+domain contract only: it does not load files, access the network, calculate a
+checksum, or authorize downloading or redistributing an artifact.
 
 ## Schema version 1
+
+The example below is illustrative only. It is **[planned]**: no
+`synthetic-fixture-index` artifact — or any other index artifact — exists,
+ships, or is downloadable.
 
 ```json
 {
@@ -30,7 +35,7 @@ Every field is required, and unknown fields are rejected.
 | --- | --- |
 | `schema_version` | Integer `1`. |
 | `artifact_id` | Lowercase identifier matching `[a-z0-9]+(?:[._-][a-z0-9]+)*`. |
-| `kind` | `corpus`, `index`, or `model`. |
+| `kind` | `corpus`, `index`, or `model`. The enum accepts `index` (**[current]**); no `index` artifact exists (**[planned]**). |
 | `version` | Nonempty version label supplied by the artifact maintainer. |
 | `source` | Nonempty provenance string; schema version 1 does not require a URL scheme. |
 | `license` | Nonempty license identifier or description. |

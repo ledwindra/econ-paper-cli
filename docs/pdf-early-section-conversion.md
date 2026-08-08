@@ -4,7 +4,8 @@ Issue 46 adds a pure application service that converts already detected
 Abstract and Introduction sections into inspectable Markdown and stable
 retrieval-ready passages. It does not perform extraction, section detection,
 OCR, persistence, indexing, model inference, subprocess execution, or network
-access.
+access. **[current]**; indexing happens later and in memory, and a persisted
+index is **[planned]**.
 
 ## Public contract
 
@@ -87,4 +88,4 @@ contiguous from zero and collectively account for the complete passage text;
 Conversion has no fixed page limit, but it intentionally converts only the
 detected Abstract and Introduction. It does not create full-document Markdown,
 write files or SQLite records, build a retrieval index, inspect PDF bytes, or
-validate the checksum against a filesystem source.
+validate the checksum against a filesystem source. **[current]**.

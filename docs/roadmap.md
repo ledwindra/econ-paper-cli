@@ -57,9 +57,11 @@ Completed:
 
 Not yet implemented:
 - Additional retrieval-adapter implementation or broader comparison benchmark
-- Persisted retrieval index or index artifact — `BM25Retriever` is rebuilt
-  in memory from `load_corpus()` on every `chat`/shell/`analyze` invocation;
-  there is still no on-disk index
+- Persisted retrieval index or index artifact — **[planned]**, post-MVP.
+  `BM25Retriever` is rebuilt in memory from `load_corpus()` on every
+  `chat`/shell/`analyze` invocation; there is still no on-disk index. The
+  in-memory rebuild is the **[current]** behavior, not a stopgap that has
+  replaced the bundled-index goal
 
 CLI integration is implemented: `chat` and the interactive shell both
 construct `BM25Retriever` from the durable library and retrieve against it
@@ -76,6 +78,8 @@ Approved design:
 - Standard-library SQLite as the future structured operational store behind a
   replaceable storage protocol
 - Rebuildable retrieval indexes separate from authoritative and structured data
+  — **[current]** as an invariant the in-memory BM25 index already satisfies;
+  **[planned]** as a constraint on a persisted index
 - Checksum-aware deduplication, deterministic re-ingestion, schema migrations,
   and transactional database writes
 - Configurable library location, private user data, and offline ingestion
@@ -85,7 +89,8 @@ Not implemented:
 
 - Storage protocol, SQLite schema, migrations, or database files
 - PDF discovery, extraction, OCR, conversion, segmentation, or ingestion
-- Markdown export or retrieval-index persistence
+- Markdown export or retrieval-index persistence — retrieval-index persistence
+  is **[planned]**
 - Ingestion CLI syntax
 
 ## 6. Local inference adapter and evaluation framework (Issue 12)

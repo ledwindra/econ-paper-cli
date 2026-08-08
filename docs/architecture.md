@@ -24,7 +24,9 @@ vector store, model runtime, embedding model, or network service.
 - **Protocols:** replaceable interfaces for retrieval, inference, storage, and
   artifact sources.
 - **Adapters:** CLI, filesystem, network, model runtime, index, and corpus
-  implementations. Effects remain visible and injectable.
+  implementations. Effects remain visible and injectable. **[current]**; the
+  index adapter is `adapters/bm25.py`, an in-memory BM25 index behind the
+  `Retriever` protocol.
 
 Retrieval, generation, corpus ingestion, and artifact management remain
 separate concerns. Evidence identity and passage boundaries remain structured
@@ -36,6 +38,12 @@ against retrieved evidence before display.
 Issue 11 approves the following future architecture. It is documentation and
 design only. No storage protocol, SQLite schema, ingestion service, PDF
 processing, or production index is currently implemented.
+
+**[historical]** — the sentence above is Issue 11's scope statement, true when
+it was written, and is not a status claim about today. On the retrieval-index
+half specifically it still holds: no production or persisted index is
+implemented, and that remains **[planned]**. Retrieval today is the
+**[current]** in-memory BM25 index.
 
 ```text
 User-selected PDF or directory
@@ -58,6 +66,8 @@ User-selected PDF or directory
 
 The application service owns orchestration. PDF readers, OCR tools,
 filesystems, SQLite, and retrieval indexes remain infrastructure adapters.
+**[current]** for retrieval; the diagram's "retrieval protocol/index adapter"
+box is satisfied today by `BM25Retriever`, which builds its index in memory.
 Domain and application modules must depend on a replaceable storage protocol,
 not on `sqlite3` or a concrete schema. The SQLite adapter should use Python's
 standard-library `sqlite3` unless a later implementation issue demonstrates a
@@ -70,7 +80,7 @@ need for another dependency.
 | Original PDFs | User-provided source documents | Authoritative source input. Ingestion never modifies or deletes them. Recovery depends on the files remaining accessible or on a later managed-copy policy preserving them. |
 | Generated Markdown | Human-readable converted document | Derived and inspectable. It can be regenerated from accessible PDFs with the recorded conversion version and configuration. |
 | SQLite | Catalog, retrieval-ready passage text, metadata, provenance, checksums, ingestion state, and other application state | Source-derived records are rebuildable from accessible PDFs and versioned conversion logic. Unique user state is not assumed to be reconstructible. |
-| Retrieval index | Query-time search optimization | Derived accelerator. It is rebuildable from stored passages and is never the only copy of paper or passage data. |
+| Retrieval index | Query-time search optimization | Derived accelerator. It is rebuildable from stored passages and is never the only copy of paper or passage data. **[current]** as an in-memory BM25 index rebuilt per run; **[planned]** as a persisted on-disk layer. |
 
 Whether the application manages private copies of PDFs or registers source
 files in place remains deferred. Registration cannot preserve an externally
@@ -86,7 +96,10 @@ converted text.
 Generated Markdown, source-derived catalog records, passage text, provenance,
 and retrieval indexes must be reproducible from accessible PDFs plus versioned
 conversion logic and configuration. Retrieval state should be rebuildable from
-SQLite passage records without repeating PDF extraction.
+SQLite passage records without repeating PDF extraction. **[current]** for
+retrieval, and satisfied by construction: `BM25Retriever` is built from the
+SQLite-backed `Corpus` on each run and does no PDF extraction. The requirement
+constrains the **[planned]** persisted index substantively.
 
 Future user-created annotations, metadata corrections, preferences, chat
 history, or similar unique state may require backup, export, or separate
@@ -131,7 +144,10 @@ transaction. The PDF filesystem, SQLite database, generated Markdown, and
 retrieval index are separate resources, so Issue 11 does not promise atomic
 commit across them. A later implementation issue must define staging, rollback,
 cleanup, index-freshness, and restart behavior without presenting partial work
-as successful.
+as successful. **[historical]** as an Issue 11 scope statement. On retrieval it
+is also moot today: the BM25 index writes nothing, so it is not a resource that
+can diverge, and index-freshness becomes a real concern only with the
+**[planned]** persisted index.
 
 SQLite schemas require explicit versions and forward migrations. Migration
 failures must preserve existing user data or stop with an actionable error.
@@ -141,8 +157,10 @@ policy remain deferred.
 ### Privacy, licensing, and portability
 
 PDFs, generated copyrighted text, databases, indexes, and OCR output are
-private user data. They must not be committed or redistributed. The ignored
-repository-root `/papers/` directory is a convenience input location only and
+private user data. They must not be committed or redistributed. **[current]**
+standing rule; it covers the in-memory BM25 index today and any **[planned]**
+persisted index later. The ignored repository-root `/papers/` directory is a
+convenience input location only and
 must not be hard-coded. The actual library location must be configurable and
 suitable for use outside a source checkout on Windows, macOS, and Linux.
 
@@ -161,7 +179,7 @@ Later storage or ingestion issues must decide:
 - encrypted-PDF and password handling;
 - conversion-version and reprocessing rules;
 - filesystem staging, cleanup, and recovery around the SQLite transaction;
-- persisted retrieval-index format and refresh behavior;
+- persisted retrieval-index format and refresh behavior — **[planned]**;
 - Markdown storage and export layout; and
 - ingestion command syntax and options.
 
@@ -169,6 +187,21 @@ These choices must preserve the approved local, offline, licensing, privacy,
 portability, evidence, and failure-reporting requirements.
 
 ## Current scaffold
+
+**Every paragraph in this section is [historical].** Each one records what a
+numbered Issue implemented or explicitly left out *as of that Issue*, in its
+original wording. None of them is a status claim about `main` today, and a
+statement that something "remains unimplemented" means unimplemented at the
+time that Issue closed. For what ships today, see "Current status" in
+[`README.md`](../README.md).
+
+On retrieval-index scope specifically, the `[historical]` "persisted index
+remains unimplemented" statements below happen to still be true: a persisted or
+bundled index is **[planned]** and post-MVP, and the **[current]** backend is
+the in-memory BM25 index rebuilt per run. Their sibling claims about storage,
+ingestion, and CLI wiring are *not* still true — storage, ingestion, and CLI
+wiring all shipped — which is exactly why the paragraphs below must be read as
+history rather than status.
 
 Issue 1 contains a standard-library CLI adapter and side-effect-free placeholder
 application services. The CLI parses commands, delegates once, prints the
@@ -185,7 +218,7 @@ Issue 5 introduces the pure immutable `Corpus` domain object (`econ_paper_cli.do
 
 Issue 6 defines the backend-independent retrieval boundary in `econ_paper_cli.protocols.retrieval`. It introduces the immutable `RetrievalRequest` domain object, the replaceable `Retriever` protocol, and pure result contract validation via `validate_retrieval_results` (enforcing contiguous 1-based ranks, non-increasing score order, ascending `passage_id` tie-breaking, uniform non-empty `retrieval_method` labels, and exact duplicate passage rejection). Near-duplicate passage suppression is deferred to adapter evaluation. For full specification details, see [`docs/retrieval-contract.md`](retrieval-contract.md).
 
-Issue 7 implements the first concrete `Retriever` adapter: `econ_paper_cli.adapters.bm25.BM25Retriever`. It is a pure-Python, standard-library-only BM25 baseline constructed over an in-memory `Corpus`. It computes corpus-wide term statistics once during initialization and indexes `Passage.text` only. It employs the `bm25-v1` tokenizer (`char.isalnum()` character scan with NFKC normalization and casefolding), positive IDF, score-descending sorting with `passage_id` ascending tie-breaking, and normalized lexical duplicate suppression. Returned tuples pass `validate_retrieval_results` with `retrieval_method="bm25-v1"`. Query-time retrieval performs zero filesystem or network I/O. Persisted index artifacts, CLI integration, PDF parsing, Markdown conversion, and local model inference remain unimplemented. `BM25Retriever` is not selected as the default retrieval backend.
+Issue 7 implements the first concrete `Retriever` adapter: `econ_paper_cli.adapters.bm25.BM25Retriever`. It is a pure-Python, standard-library-only BM25 baseline constructed over an in-memory `Corpus`. It computes corpus-wide term statistics once during initialization and indexes `Passage.text` only. It employs the `bm25-v1` tokenizer (`char.isalnum()` character scan with NFKC normalization and casefolding), positive IDF, score-descending sorting with `passage_id` ascending tie-breaking, and normalized lexical duplicate suppression. Returned tuples pass `validate_retrieval_results` with `retrieval_method="bm25-v1"`. Query-time retrieval performs zero filesystem or network I/O. Persisted index artifacts, CLI integration, PDF parsing, Markdown conversion, and local model inference remain unimplemented. `BM25Retriever` is not selected as the default retrieval backend. **[historical]** (Issue 7). Of the index claim: persisted index artifacts are still unimplemented and **[planned]**. The rest of that sentence, and the final sentence, no longer hold — `BM25Retriever` is the **[current]** default retrieval backend.
 
 Issue 8 adds `econ_paper_cli.evaluation.retrieval`, a pure evaluation boundary
 over the existing `Retriever` protocol. A frozen CC0 benchmark supplies 25
@@ -205,7 +238,10 @@ digests, initialization and query timings, Python heap, available process RSS,
 and machine metadata. Correctness remains CI-gated while timing and memory are
 non-gating observations. No second adapter, production dependency, model
 artifact, persisted index, CLI wiring, or generation integration is added. See
-[`docs/retrieval-selection.md`](retrieval-selection.md).
+[`docs/retrieval-selection.md`](retrieval-selection.md). **[historical]**
+(Issue 9). The persisted index is still absent and **[planned]**; the model
+artifact, CLI wiring, and generation integration named alongside it have since
+shipped.
 
 Issue 10 defines the backend-independent local-generation boundary in
 `econ_paper_cli.protocols.generation`. Immutable request and response objects
@@ -221,7 +257,9 @@ See [`docs/generation-contract.md`](generation-contract.md).
 Issue 11 documents the approved automatic local PDF-ingestion workflow and
 hybrid paper-library architecture. Original PDFs are authoritative inputs,
 Markdown is an inspectable derived artifact, SQLite is the future structured
-operational store, and retrieval indexes are rebuildable accelerators. Issue 11
+operational store, and retrieval indexes are rebuildable accelerators
+(**[current]** as a design invariant; the **[planned]** persisted index is what
+it will constrain substantively). Issue 11
 does not implement any of these components and does not change the domain,
 retrieval, generation, BM25, artifact, corpus, or evaluation contracts created
 by Issues 1 through 10. The frozen Issue 8 benchmark, fixture fingerprint,
@@ -292,6 +330,8 @@ and database path resolution for Windows (`%LOCALAPPDATA%` / `%APPDATA%`), macOS
 (`~/Library/Application Support`), and Linux (`${XDG_DATA_HOME:-~/.local/share}`),
 with explicit `ECONPAPERS_LIBRARY_DIR` environment variable override. End-to-end PDF
 ingestion, OCR, retrieval-index persistence, and cloud storage remain unimplemented.
+**[historical]**; retrieval-index persistence is still **[planned]**, but
+end-to-end PDF ingestion has since shipped.
 
 Issue 28 implements deterministic PDF discovery and ingestion preflight through
 `econ_paper_cli.services.ingestion.run_ingestion_preflight`. It accepts an explicit PDF
@@ -308,7 +348,9 @@ endings, translates filesystem, encryption, malformed-file, and parser failures 
 typed protocol errors, and never modifies the source. The application-facing
 `extract_pdf` service requires explicit extractor injection. OCR, bibliographic
 normalization, Markdown conversion, passage creation, database writes, index updates,
-CLI syntax, and network enrichment remain unimplemented.
+CLI syntax, and network enrichment remain unimplemented. **[historical]**;
+on-disk index updates are still **[planned]**, but Markdown conversion, passage
+creation, database writes, and CLI syntax have since shipped.
 
 Issue 32 implements immutable extraction-quality settings, measurements, page
 observations, warning contracts, and document statuses in the domain layer. The pure
@@ -332,7 +374,8 @@ persistence, and strict read-back share one per-file isolation boundary. Ordered
 immutable batch outcomes therefore preserve durable typed preflight failures,
 duplicate paths, and unexpected storage failures without concealing later
 papers. The feature does not add concurrency, downloads, OCR, Markdown
-generation, indexing, or full-document ingestion.
+generation, indexing, or full-document ingestion. **[historical]**; persisted
+indexing remains **[planned]**.
 
 Issue 46 adds a pure early-section conversion boundary. Immutable versioned
 settings, deterministic checksum-derived paper identity, settings and passage
@@ -345,6 +388,8 @@ It does not change the existing `Passage` contract, infer source-path equality,
 convert later sections, write derived artifacts, populate SQLite, or build a
 retrieval index. See
 [`docs/pdf-early-section-conversion.md`](pdf-early-section-conversion.md).
+**[historical]**; the conversion boundary still builds no index, and a
+persisted index remains **[planned]**.
 
 Issue 48 adds the immutable `EarlySectionLibraryRecord`, a pure projection
 service, explicit storage-protocol operations, and SQLite schema version 4.
@@ -367,6 +412,8 @@ Conversion, projection, or storage failures roll back and surface as internal
 failures. The workflow does not write Markdown files or persist a retrieval
 index. See
 [`docs/early-section-library-storage.md`](early-section-library-storage.md).
+**[historical]**; still true of this workflow, and a persisted index remains
+**[planned]**.
 
 Issue 54 adds a durable, versioned local runtime/model configuration boundary
 so `analyze` and `chat` can be run from any working directory without

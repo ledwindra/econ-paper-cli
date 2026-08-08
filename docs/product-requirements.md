@@ -8,7 +8,9 @@ Implementation status and milestone progress are tracked in
 
 The automatic full-document ingestion and hybrid local-library requirements
 below remain future product requirements. The current CLI does not perform
-full-document ingestion or build a persistent retrieval index. It does persist
+full-document ingestion or build a persistent retrieval index — **[current]**;
+retrieval runs on an in-memory BM25 index rebuilt per run, and the persistent
+index remains **[planned]**. It does persist
 detected Abstract and Introduction Markdown with stable passages and exact
 fragment provenance in SQLite alongside research-question analysis records.
 
@@ -54,7 +56,8 @@ The MVP must:
   insufficient;
 - distinguish descriptive findings from causal findings and retain uncertainty
   or disagreement;
-- avoid telemetry and uploads of queries, documents, or indexes by default; and
+- avoid telemetry and uploads of queries, documents, or indexes by default
+  (**[current]** standing rule); and
 - distribute only metadata, permitted derived artifacts, and content with
 ## PDF analysis workflow
 
@@ -96,8 +99,11 @@ Process exit code semantics:
 
 Every corpus, index, or model artifact must have versioned metadata describing
 its source, license, redistribution status, expected size, SHA-256 digest,
-update policy, copyrighted-full-text status, and portable local path. Manifest
-validation does not itself establish legal permission or verify file contents.
+update policy, copyrighted-full-text status, and portable local path.
+**[current]** as a standing requirement; it binds no index artifact today,
+because none is built or shipped, and would first apply to the **[planned]**
+persisted index. Manifest validation does not itself establish legal
+permission or verify file contents.
 
 Artifact metadata and checksum verification must remain separable from network
 downloads and filesystem persistence. Unknown or prohibited redistribution
@@ -150,7 +156,9 @@ The future local library has four storage layers:
   state. The MVP must use Python's standard-library `sqlite3` unless a later
   issue demonstrates that another dependency is necessary.
 - Retrieval indexes are rebuildable search accelerators. They must not be the
-  only copy of paper or passage data.
+  only copy of paper or passage data. **[current]** for the in-memory BM25
+  index, which holds no data SQLite does not already own; the requirement
+  binds substantively only on the **[planned]** persisted index.
 
 The actual library location must be configurable and usable outside the source
 repository. The repository-root `/papers/` directory remains an ignored
@@ -161,6 +169,7 @@ trapped in an opaque database.
 Domain and application layers must not depend directly on SQLite. Storage
 access must sit behind a replaceable repository or storage protocol, with
 filesystem, SQLite, and retrieval-index effects implemented by adapters.
+**[current]**; `BM25Retriever` sits behind the `Retriever` protocol today.
 
 ## Integrity, identity, and schema evolution
 
@@ -169,6 +178,10 @@ filesystem, SQLite, and retrieval-index effects implemented by adapters.
   SQLite transaction.
 - Filesystem, SQLite, and retrieval-index changes are separate resources.
   Issue 11 does not promise one atomic transaction across all three.
+  **[historical]** as an Issue 11 scope statement. Today there is no third
+  resource to coordinate: the BM25 index is in-memory and writes nothing, so
+  cross-resource atomicity becomes a live concern only with the **[planned]**
+  persisted index.
 - Re-ingestion and duplicate detection must be deterministic and
   checksum-aware.
 - Stable `paper_id` and `passage_id` identities must remain compatible with
@@ -191,26 +204,39 @@ recovery guarantee is conditional on the PDFs remaining accessible, or on a
 later approved managed-copy policy preserving them. Registering a PDF stored
 outside the library cannot protect it if the user later moves or deletes it.
 
+For retrieval the guarantee is **[current]**, but trivially so: the BM25 index
+is rebuilt from stored passages on every run and never outlives the process, so
+there is no index state that could fail to recover. It becomes a substantive
+recovery guarantee only for the **[planned]** persisted index.
+
 Not all future application state is necessarily source-derived. User-created
 annotations, metadata corrections, preferences, chat history, and similar
 unique state may require backup, export, or separate recovery behavior. Issue
 11 does not design those features or claim that PDFs can reconstruct them.
 
 Retrieval indexes must be rebuildable from stored passage records and must
-never become the only copy of paper or passage content. Failed or interrupted
+never become the only copy of paper or passage content. **[current]**;
+`BM25Retriever` is constructed from the SQLite-backed `Corpus` on each run and
+holds no unique data. Failed or interrupted
 work must not silently replace a previously valid ingestion or present
 incomplete records as successful.
 
 ## Privacy and offline operation
 
 - Retrieval, generation, indexing, and corpus inspection must run locally in
-  the default workflow.
+  the default workflow. **[current]**; BM25 index construction and query-time
+  retrieval perform zero network I/O.
 - Ordinary PDF ingestion, conversion, OCR, passage creation, database updates,
   and index refresh must run locally and must not require network access.
+  **[current]** for index construction; "index refresh" as a distinct on-disk
+  operation belongs to the **[planned]** persisted index and does not exist
+  today.
 - No user queries, documents, or search history may be uploaded to external
   services by default.
 - User PDFs, converted copyrighted full text, generated Markdown, databases,
   and indexes are private user data and must not be committed or redistributed.
+  **[current]** standing rule, covering the in-memory BM25 index today and any
+  **[planned]** persisted index later.
 - Default operation must remain offline after the required artifacts are
   installed.
 - Network access may occur only through explicit setup, manual update, or other
@@ -241,7 +267,9 @@ incomplete records as successful.
 ## Deferred capabilities
 
 New or changed model, corpus, index, artifact, and citation-format decisions
-require explicit design and maintainer approval before implementation. The
+require explicit design and maintainer approval before implementation.
+**[current]** standing rule; adopting the **[planned]** persisted index or a
+vector store is exactly such a decision. The
 following remain out of scope for default execution:
 
 - Paid cloud inference APIs (e.g. OpenAI, Anthropic)
