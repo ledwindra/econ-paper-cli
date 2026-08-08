@@ -348,6 +348,14 @@ def execute_chat_command(
         else:
             answer_text = response.answer_text
 
+        # response.finding_kinds describes the whole original response, not
+        # any one claim. Once a claim has been withheld, that label can no
+        # longer be trusted to describe the surviving answer -- e.g. a
+        # withheld claim could have been the only causal one, leaving a
+        # purely descriptive answer mislabeled "causal". Reporting nothing
+        # is safer than reporting a label that may no longer be true.
+        reported_finding_kinds = () if withheld else response.finding_kinds
+
         return ChatCommandResult(
             outcome=ChatTerminalOutcome.ANSWERED,
             exit_code=0,
@@ -356,7 +364,7 @@ def execute_chat_command(
             top_k=options.top_k,
             answer_text=answer_text,
             generation_method=response.generation_method,
-            finding_kinds=response.finding_kinds,
+            finding_kinds=reported_finding_kinds,
             citations=cited,
             claims=claim_details,
             withheld_claims=withheld,
@@ -600,15 +608,16 @@ def _render_citation_lines(citations: tuple[ChatCitationDetail, ...]) -> list[st
         ordered = sorted(details, key=lambda item: item.retrieval_rank)
         identifiers = ", ".join(item.citation_id for item in ordered)
         head = ordered[0]
-        lines.append(f"[{identifiers}] {head.paper_title}")
+        lines.append(f"[{identifiers}] {_sanitize_metadata_field(head.paper_title)}")
         lines.append(f"  Paper ID: {paper_id}")
-        lines.append(f"  Source Path: {head.source_path}")
+        lines.append(f"  Source Path: {_sanitize_metadata_field(head.source_path)}")
         lines.append(
             f"  Passages: {len(ordered)}" if len(ordered) > 1 else "  Passages: 1"
         )
         for detail in ordered:
             lines.append(f"    [{detail.citation_id}]")
-            lines.append(f"      Section Heading: {detail.section_heading or 'N/A'}")
+            heading = _sanitize_metadata_field(detail.section_heading or "N/A")
+            lines.append(f"      Section Heading: {heading}")
             lines.append(f"      Page Range: {_format_page_range(detail)}")
             lines.append(f"      Passage ID: {detail.passage_id}")
             lines.append(f"      Retrieval Rank: {detail.retrieval_rank}")

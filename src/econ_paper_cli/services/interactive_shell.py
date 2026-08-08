@@ -423,6 +423,12 @@ class InteractiveShellSession:
             else:
                 answer_text = response.answer_text
 
+            # response.finding_kinds describes the whole original response,
+            # not any one claim. Once a claim has been withheld, that label
+            # can no longer be trusted to describe the surviving answer, so
+            # reporting nothing is safer than reporting a stale label.
+            reported_finding_kinds = () if withheld else response.finding_kinds
+
             # Only an answered turn enters history: an abstention or a
             # withheld answer carries no established referent, so treating it
             # as context would resolve the next follow-up against something the
@@ -442,7 +448,7 @@ class InteractiveShellSession:
                 outcome=ShellTurnOutcome.ANSWERED,
                 answer_text=answer_text,
                 generation_method=response.generation_method,
-                finding_kinds=response.finding_kinds,
+                finding_kinds=reported_finding_kinds,
                 citations=cited,
                 claims=claim_details,
                 withheld_claims=withheld,

@@ -1249,6 +1249,12 @@ def test_claim_misattributing_another_papers_wording_is_withheld_from_the_answer
     assert "grocery" in result.withheld_claims[0].leaked_terms
     assert result.answer_text == "Transit corridors are described."
     assert "Grocery nutrition" not in (result.answer_text or "")
+    # response.finding_kinds described the whole original two-claim response,
+    # which is no longer an accurate label once one claim was withheld --
+    # e.g. the withheld claim could have been the only causal one. Reporting
+    # nothing is safer than reporting a label that may no longer hold for
+    # the surviving answer.
+    assert result.finding_kinds == ()
 
 
 def test_a_response_whose_every_claim_is_withheld_is_not_reported_as_abstention(
@@ -1281,6 +1287,34 @@ def test_a_response_whose_every_claim_is_withheld_is_not_reported_as_abstention(
     assert "Outcome: withheld" in output
     assert "Withheld Claims (1)" in output
     assert "grocery" in output
+
+
+def test_default_output_shows_answer_by_source_without_show_evidence(
+    tmp_path: Path,
+) -> None:
+    """The per-claim '--- Answer by Source ---' breakdown is part of the
+    default rendering contract (independent of --show-evidence), so a reader
+    can check any one sentence against the paper it came from without
+    matching opaque citation identifiers by hand."""
+    storage = _two_paper_storage(tmp_path)
+    generator = _ClaimGenerator(
+        ("Transit corridors are described.",),
+        cite_marker="transit corridors",
+    )
+
+    result = execute_chat_command(
+        _options(tmp_path, top_k=4),
+        storage=storage,
+        generator_provider=lambda _: generator,
+    )
+
+    assert result.outcome is ChatTerminalOutcome.ANSWERED
+    assert result.claims
+
+    output = format_chat_command_output(result)
+    assert "--- Answer by Source ---" in output
+    assert "1. Transit corridors are described." in output
+    assert "Source:" in output
 
 
 def test_withholding_drops_citations_no_surviving_claim_relies_on(
@@ -1451,6 +1485,26 @@ def test_papers_and_their_passages_keep_best_rank_ordering() -> None:
     assert rendered.index("Passage ID: passage-e1") < rendered.index(
         "Passage ID: passage-e3"
     )
+
+
+def test_default_citation_rendering_sanitizes_control_characters_in_metadata() -> None:
+    """The default citation block (no --show-evidence needed) renders paper
+    title, source path, and section heading straight from stored/extracted
+    metadata. A malicious or corrupted PDF's title or filename must not be
+    able to inject terminal control sequences into ordinary chat output."""
+    citations = (
+        _citation(
+            "e1",
+            paper_id="paper-a",
+            rank=1,
+            title="Injected\x1b[2JTitle",
+        ),
+    )
+
+    rendered = "\n".join(_render_citation_lines(citations))
+
+    assert "\x1b" not in rendered
+    assert "Injected" in rendered and "Title" in rendered
 
 
 def test_passage_text_resolved_from_citation_matches_stored_passage(

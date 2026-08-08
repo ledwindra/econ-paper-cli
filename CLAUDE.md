@@ -59,17 +59,19 @@ to fall back to durable config from `setup`; supplying some but not all
 five is a typed error. See `--help` on each subcommand for the full flag
 set. **On `main`, all of the above is merged and current.**
 
-Bare `econpapers` (no subcommand) opening an interactive multi-question
-shell over the same library (each question answered independently, but
+Bare `econpapers` (no subcommand) opens an interactive multi-question shell
+over the same library (each question answered independently, but
 follow-ups referring to an earlier turn are rewritten into standalone
-questions first — see `domain/conversation.py`; `/reset` clears that context) is issue #56, implemented on branch
-`feature/issue-56-interactive-shell` (PR #57) — **not yet merged to `main`**
-as of this writing, and the PR has two open review blockers (session
-snapshot must hold immutable citation/provenance state instead of
-re-reading live storage per turn; `ShellTurnOutcome` needs distinct
-typed/internal-failure outcomes and must preserve `generator_action` on
-failure paths). Check `gh pr view 57` before assuming this command exists
-on whatever branch is currently checked out.
+questions first — see `domain/conversation.py`; `/reset` clears that
+context, along with `/show` evidence state). This was issue #56 — **on
+`main`, it is merged and current**, including both review blockers that PR
+#57 originally left open: the session snapshot holds immutable
+citation/provenance state rather than re-reading live storage per turn, and
+`ShellTurnOutcome` distinguishes `TYPED_FAILURE` from `INTERNAL_FAILURE`
+while preserving `generator_action` on failure paths. `/show` (list or print
+one citation's full stored passage text) and one-shot `chat
+--show-evidence` are the evidence-inspection commands layered on top of
+this — see the "Evidence inspection" section of `README.md`.
 
 ## Architecture
 

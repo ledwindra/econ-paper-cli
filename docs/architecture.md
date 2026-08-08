@@ -502,8 +502,9 @@ answers, or citations; the library snapshot is fixed for the life of the
 process.
 
 Evidence inspection (`/show` in the shell, `--show-evidence` on one-shot
-`chat`) renders the exact stored passage text behind a citation, not just its
-metadata. `ChatCitationDetail` carries a `passage_text` field populated
+`chat`) renders the full stored passage text behind a citation, not just its
+metadata — safely normalized rather than byte-identical (see below), and
+never truncated. `ChatCitationDetail` carries a `passage_text` field populated
 directly from the `stored_passage` that `_resolve_citations` already
 validates against the retrieved passage — no second, unvalidated lookup, and
 no new `StorageBackend` method. `chat_command.format_evidence_detail(

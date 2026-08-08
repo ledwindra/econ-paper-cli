@@ -39,7 +39,7 @@ econpapers> /exit
 
 Each question is answered independently against the stored Abstract/Introduction corpus. The shell does resolve **follow-up questions**: a question that refers back to an earlier turn ("what about its effect on housing?") is rewritten into a standalone question first, and the rewrite is always printed as `Interpreted as:` so you can see — and correct — how it was read. Detection is conservative, so a self-contained question is never rewritten. `/reset` forgets earlier turns; only answered turns become context.
 
-`/show ID` prints the exact stored passage text behind one citation from the most recent answered turn — so a claim can be checked against the source, not just the citation metadata. Bare `/show` lists the citation IDs currently available. Evidence is scoped to the latest turn only: a turn that does not answer (`no_matches`, `abstained`, `withheld`, or a failure) clears it, and `/reset` clears it along with conversation history. One-shot `econpapers chat QUESTION --show-evidence` prints the same evidence inline under each citation, for scripting or a single lookup without opening the shell.
+`/show ID` prints the full stored passage text behind one citation from the most recent answered turn (safely normalized, not necessarily byte-identical — see "Evidence inspection" below) — so a claim can be checked against the source, not just the citation metadata. Bare `/show` lists the citation IDs currently available. Evidence is scoped to the latest turn only: a turn that does not answer (`no_matches`, `abstained`, `withheld`, or a failure) clears it, and `/reset` clears it along with conversation history. One-shot `econpapers chat QUESTION --show-evidence` prints the same evidence inline under each citation, for scripting or a single lookup without opening the shell.
 
 ## Product principles
 
@@ -248,8 +248,11 @@ answers exactly what it is given.
 
 A citation identifies a paper and passage, but not what the passage actually
 says — `/show` in the shell and `--show-evidence` on one-shot `chat` render
-the exact stored passage text so a claim can be checked against its source
-directly, without opening the database.
+the full stored passage text so a claim can be checked against its source
+directly, without opening the database. Rendering is safe rather than
+byte-identical: CRLF/CR line endings are normalized to LF, terminal control
+characters are replaced with a placeholder glyph, and long lines are wrapped
+for readability — nothing is truncated or summarized.
 
 `/show` reads only the citations already resolved for the *most recent*
 answered turn — it never re-reads storage, so a concurrent `analyze` cannot
@@ -475,39 +478,46 @@ pytest
 
 ## Current status
 
-This project has an installable package, placeholder CLI commands, initial
-requirements and architecture documents, cross-platform CI configuration, a
-pure domain contract for validating artifact metadata, filesystem adapters
-for loading local manifests and verifying file checksums, pure domain
-contracts for papers, passages, retrieval evidence, citations, and corpora,
-a synthetic CC0 fixture corpus with a local corpus loader adapter, a
+The CLI works end-to-end over a local library: `econpapers setup` provisions
+a local `llama.cpp` runtime and a default GGUF model (or accepts an
+explicit, already-installed one); `econpapers analyze` discovers PDFs,
+extracts and quality-checks them, detects Abstract/Introduction sections,
+converts them to inspectable Markdown/passages, and persists everything to
+SQLite transactionally, with exact-reuse and legacy-backfill paths that
+never require accessible model artifacts; `econpapers chat QUESTION` and
+bare `econpapers` (an interactive multi-question shell with follow-up
+resolution) both run retrieval (BM25) and local generation
+(`llama-completion`) against that library, validate citations, and detect
+and withhold claims that misattribute wording from a paper they do not
+cite. `/show` and `--show-evidence` (see "Evidence inspection" above) let a
+user check a claim against the exact stored passage behind it. `econpapers
+status` reports durable configuration, runtime/model readiness, and library
+state read-only.
+
+Underlying building blocks: an installable package with cross-platform CI; a
+pure domain contract for validating artifact metadata; filesystem adapters
+for loading local manifests and verifying file checksums; pure domain
+contracts for papers, passages, retrieval evidence, citations, and corpora; a
+synthetic CC0 fixture corpus with a local corpus loader adapter; a
 backend-independent retrieval protocol (`Retriever`, `RetrievalRequest`,
-`validate_retrieval_results`), a pure-Python BM25 baseline adapter
-(`BM25Retriever`) selected as the initial replaceable retrieval backend, and a
-database-independent local storage protocol (`StorageBackend`) with a standard-library
-`sqlite3` adapter (`SQLiteStorage`) supporting schema versioning, forward migrations,
-atomic transactions (`BEGIN IMMEDIATE`), case-insensitive checksum uniqueness,
-unique passage ordinals, full `Corpus` reconstruction (`load_corpus`), and cross-platform
-path resolution. Deterministic ingestion preflight discovers PDFs, computes checksums,
-deduplicates batch content, and classifies stored checksums without writing records.
-The replaceable `PDFExtractor` boundary and fully local `PyPDFExtractor` preserve
-ordered page boundaries, optional raw document metadata, parser provenance, and
-actionable extraction failures without modifying source PDFs. It also defines a
-backend-independent generation protocol with
-structured requests, responses, citations, and explicit abstention validation; a
-concrete, configurable local `llama-completion` adapter; and a fingerprinted CC0
-synthetic generation benchmark with opt-in evaluation tooling. Issue 13 explicitly
-deferred the default after both eligible candidates failed the first mechanical
-run, and generation is not connected to retrieval or the CLI.
-End-to-end ingestion orchestration, OCR, quality assessment, passage segmentation,
-Markdown generation, database writes, index refresh, and conversational execution
-remain unimplemented.
+`validate_retrieval_results`); a pure-Python BM25 baseline adapter
+(`BM25Retriever`) selected as the initial replaceable retrieval backend; a
+database-independent local storage protocol (`StorageBackend`) with a
+standard-library `sqlite3` adapter (`SQLiteStorage`) supporting schema
+versioning, forward migrations, atomic transactions (`BEGIN IMMEDIATE`),
+case-insensitive checksum uniqueness, unique passage ordinals, full `Corpus`
+reconstruction (`load_corpus`), and cross-platform path resolution; the
+replaceable `PDFExtractor` boundary and fully local `PyPDFExtractor`; and a
+backend-independent generation protocol with structured requests, responses,
+per-claim citations, explicit abstention validation, and cross-paper
+grounding checks.
 
-The immediate priorities are:
-
-1. implement automatic local PDF ingestion; and
-2. connect the approved library, retrieval, and generation components through
-   end-to-end application services.
+Not yet implemented: `econpapers update` (currently a deterministic
+placeholder — see [`MVP-PLAN.md`](MVP-PLAN.md)), OCR, conversion beyond
+Abstract/Introduction, a persisted or bundled retrieval index, and
+validation of the ingestion pipeline against the six real journal layouts
+tracked by issue #59. See [`MVP-PLAN.md`](MVP-PLAN.md) for the current
+milestone ladder toward MVP.
 
 
 ## Contributing

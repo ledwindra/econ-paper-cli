@@ -1077,6 +1077,10 @@ def test_shell_withholds_a_claim_that_misattributes_another_papers_wording(
     assert len(result.withheld_claims) == 1
     assert "grocery" in result.withheld_claims[0].leaked_terms
     assert "Grocery nutrition" not in (result.answer_text or "")
+    # The shell applies the same finding_kinds conservatism as one-shot chat:
+    # a label describing the whole original response is no longer trustworthy
+    # once one of its claims has been withheld.
+    assert result.finding_kinds == ()
     session.close()
 
 
