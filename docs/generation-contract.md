@@ -238,8 +238,9 @@ finding at least one stored early-section record; the interactive shell
 builds one when its session opens, for a paper library that is non-empty
 and so has a loadable corpus. Those conditions differ — a library holding
 only legacy paper records opens a shell corpus but still sends `chat` to
-its empty-library outcome — and where the condition fails, neither builds
-one. `analyze` itself constructs no retriever and builds no index, and a
+its empty-library outcome. When a command's respective gate fails, that
+command does not build one. `analyze` itself constructs no retriever and
+builds no index, and a
 persisted or bundled retrieval index is **[planned]** and does not ship. OCR
 and full-document conversion (beyond Abstract/Introduction) remain
 unimplemented. The

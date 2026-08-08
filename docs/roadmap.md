@@ -64,10 +64,11 @@ Not yet implemented:
   when its session opens, for a paper library that is non-empty and so has a
   loadable corpus. The two conditions are not identical: a library holding
   only legacy paper records opens a shell corpus but still sends `chat` to
-  its empty-library outcome. Where the condition fails, neither builds a
-  retriever — `chat` returns first, and a shell session opens without one
-  and short-circuits questions. `analyze` itself constructs no retriever
-  either, and there is still no on-disk index. The
+  its empty-library outcome. When a command's respective gate fails, that
+  command does not build a retriever: `chat` returns its empty-library
+  outcome first, and a shell session opens without one and short-circuits
+  questions. `analyze` itself constructs no retriever either, and there is
+  still no on-disk index. The
   in-memory rebuild is the **[current]** behavior, not a stopgap that has
   replaced the bundled-index goal
 
