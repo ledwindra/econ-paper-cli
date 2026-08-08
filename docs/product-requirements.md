@@ -54,16 +54,18 @@ The MVP must:
 - preserve paper identity and passage boundaries in evidence;
 - ground substantive claims in supplied evidence and abstain when evidence is
   insufficient;
-- distinguish descriptive findings from causal findings and retain uncertainty
-  or disagreement. The **[current]** implementation of the descriptive/causal
-  half is a response-level `finding_kinds` label that the model asserts:
-  *when present*, it is structurally validated (legal enum values, no
-  duplicates), and in the default `llama.cpp` adapter it is additionally
-  constrained by that adapter's grammar. It is **not** verified against the
-  cited evidence, so the tool does not itself determine whether a finding is
-  causal; semantic validation of that characterization is **[planned]**.
-  Retaining uncertainty and disagreement is prompt-level instruction with no
-  structural check;
+- report a backend-declared descriptive-versus-causal characterization *when
+  the model supplies one*, and retain uncertainty or disagreement. The MVP
+  does not undertake to classify findings itself: the **[current]**
+  implementation is a response-level `finding_kinds` label that the model
+  asserts and may legitimately omit, leaving an answered response with no
+  characterization at all. When present, the label is structurally validated
+  (legal enum values, no duplicates), and in the default `llama.cpp` adapter
+  it is additionally constrained by that adapter's grammar. It is **not**
+  verified against the cited evidence, so nothing here determines whether a
+  finding is causal; semantic validation of that characterization is
+  **[planned]**. Retaining uncertainty and disagreement is prompt-level
+  instruction with no structural check;
 - avoid telemetry and uploads of queries, documents, or indexes by default
   (**[current]** standing rule); and
 - distribute only metadata, permitted derived artifacts, and content with
