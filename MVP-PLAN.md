@@ -227,10 +227,11 @@ verify/repair/atomic-promote layer:
    does **not** make directory replacement itself atomic the way a single
    file's `os.replace` is — a directory generally cannot be atomically
    replaced onto a non-empty existing directory, especially on Windows —
-   it only removes the specific hard-failure-on-benign-race defect, so two
-   concurrent repairs of the same corrupt install both reach staging and
-   let the existing final-`os.replace` adoption logic decide the winner,
-   instead of one of them erroring out first.
+   it removes the specific hard-failure-on-benign-race defect. It lets a
+   process whose peer already removed the corrupt directory continue to
+   staging, where the existing final-`os.replace` adoption logic can still
+   handle a promotion race. The separate cleanup-versus-promotion race is
+   addressed, but not eliminated, below.
 
    **Added mitigation (finding 8): re-check immediately before deleting.**
    `FileNotFoundError`-tolerance alone does not stop this rmtree from
@@ -244,34 +245,29 @@ verify/repair/atomic-promote layer:
    duration" down to the handful of instructions between this re-check and
    the `rmtree` call — several orders of magnitude smaller — but it is a
    mitigation, not a proof: a promotion landing in that residual sliver is
-   still destroyed. Closing that residual sliver completely would require a
-   directory-level atomic replace (e.g. a symlink pointing at an immutable,
-   uniquely-named target directory, repointed via one atomic `os.replace`
-   on the symlink itself), which is a real architectural change and is
-   explicitly **out of scope for M2 v1** — see "Out of scope" below.
+   still destroyed. Eliminating the sliver requires serializing repairers or
+   changing how the final directory is named and promoted. A per-target
+   interprocess lock, a careful rename-to-quarantine protocol, or a symlink
+   pointing at an immutable, uniquely-named target directory are possible
+   approaches. Each is a real cross-platform design change, and all are
+   explicitly **out of scope for M2 v1**; see "Out of scope" below.
 
    Even after 0b and this mitigation, "prior valid artifact preserved
    through a failed repair" is not a single-call guarantee for the runtime
-   side the way it now is for the model side (0a). What M2 v1 actually
-   guarantees on the runtime side is **convergence within at most one
-   additional invocation, not within a single racing call**:
-   `ensure_managed_runtime` is fully idempotent and safe to re-run, so if
-   one process's `rmtree` destroys another process's just-promoted valid
-   install (the residual finding-8 sliver) or a *solo* (non-concurrent)
-   failure lands between a successful `rmtree` and a successful
-   `os.replace` (finding 3's runtime analogue — e.g. the download itself
-   fails, no race involved), the affected process's own download simply
-   needs to complete; if it does, the single call still ends in a valid
-   install despite the near-miss. Only if that process's *own* download
-   also fails does `final_install_dir` end up empty — recoverable by
-   re-running `update`/`setup`, not by anything internal to this call. This
-   replaces any claim of single-call, race-proof convergence on the
-   runtime side with the guarantee M2 v1 can actually build and test:
-   eventual convergence via retry, with the retry step being "run `update`
-   again," stated explicitly in the outcome text for a `FAILED` runtime
-   artifact. The model side (0a) has no equivalent residual gap: deleting
-   nothing before promotion means there is no destructive step for a race
-   to land in.
+   side the way it now is for the model side (0a). `ensure_managed_runtime`
+   is idempotent and safe to re-run, but idempotency is not a liveness
+   guarantee. If one process's `rmtree` destroys another process's
+   just-promoted valid install (the residual finding-8 sliver), its own
+   download can still restore the target before that same call returns. If
+   that download fails, or a solo repair fails after removing a corrupt
+   directory, `final_install_dir` can be empty. A later `update`/`setup`
+   invocation that completes successfully without another competing cleanup
+   race can repair that empty slot. M2 v1 makes no bound on retries under
+   repeated download failures, I/O failures, or continuing contention. Its
+   `FAILED` runtime outcome must say so and direct the user to resolve the
+   reported failure or wait for the other updater, then rerun `update`.
+   The model side (0a) has no equivalent destructive race because it does
+   not delete the final file before promoting a verified replacement.
 
 M2's own orchestration work — the part `setup` doesn't need — is deciding
 *which* already-configured artifacts are safe to touch, without a fresh
@@ -482,30 +478,26 @@ CLI-supplied identity to lean on the way `setup` has:
   process that started its own check while the target was still corrupt can
   still delete a valid install a *different* process promoted in the
   meantime, even though neither individual repair attempt "failed" in the
-  usual sense; see the retry-based convergence guarantee above. An
+  usual sense; see the recovery conditions above. An
   already-corrupt artifact whose *solo* (non-concurrent) repair attempt
   then fails may still end up with nothing in its place on the runtime
   side (directory-replace constraint, not fixable within M2) but not on
   the model side (fixed by step 0a) — this replaces the original draft's
   blanket, inaccurate claim that interrupted repairs always preserve the
   prior artifact;
-- concurrent updates converge on one verified artifact. **On the model
-  side this holds within a single racing call** once step 0a removes the
-  unlink-based race entirely — two concurrent `os.replace` calls with
-  checksum-identical staged content are safe in either order, and nothing
-  is ever deleted before a replacement is verified, so there is no window
-  for one racer to destroy another's valid install. **On the runtime side
-  this is a weaker, retry-based guarantee, not single-call atomicity**:
-  0b plus its finding-8 mitigation (re-checking immediately before the
-  pre-restage `rmtree`) shrinks the window in which one process's cleanup
-  can delete a second process's just-promoted valid install, but does not
-  close it, because a directory cannot be atomically replaced onto a
-  non-empty existing directory the way a single file can. What holds
-  instead: `ensure_managed_runtime` is idempotent, so the affected process
-  converges either within its own call (if its own download then succeeds)
-  or after one further `update` invocation (if it does not) — never
-  requiring more than one retry, and never leaving corrupted-but-plausible
-  state behind, only an honestly empty slot that the next call fills;
+- concurrent model repairs converge on one verified artifact within a
+  single racing call once step 0a removes the unlink-based race: two
+  `os.replace` calls with checksum-identical staged content are safe in
+  either order, and neither deletes the final file before promoting a
+  verified replacement. **Runtime repair has no single-call or bounded-retry
+  convergence guarantee.** Step 0b and the finding-8 re-check reduce, but
+  do not close, the window in which one cleanup can delete a second
+  process's just-promoted install. If the affected process then downloads
+  successfully, it restores a verified runtime before returning. If it
+  fails, the target can be empty. A later successful, uncontended invocation
+  repairs the empty slot; repeated failures or contention may require more
+  attempts. Every invocation verifies the target before reuse, so it never
+  treats an unchecked directory as a valid managed runtime;
 - **an artifact is only ever treated as managed-and-repair-eligible when
   durable config explicitly records that it was provisioned through
   managed provisioning** — `runtime_id`/`runtime_version_marker` both
@@ -628,23 +620,21 @@ Reuse the exact patterns already in `tests/services/test_setup_command.py`
   `FileNotFoundError` case above;
 - `--offline` with something needing a download → `UNAVAILABLE_OFFLINE`,
   no network call, prior valid artifact (if any) left untouched;
-- concurrent repair of the *same already-corrupt* target where the
-  finding-8 re-check itself loses the race (a fake hook installs a valid
+- concurrent repair of the *same already-corrupt* runtime target where the
+  finding-8 re-check itself loses the race: a fake hook installs a valid
   directory *after* the re-check reports corrupt but *before* `rmtree`
-  runs, so the mitigation cannot see it): assert `rmtree` still deletes the
-  now-valid directory without raising, `final_install_dir` is empty
-  afterward, and — this is the actual guarantee, not single-call atomicity
-  — either (a) letting that same `ensure_managed_runtime` call's own
-  download/verify/promote complete normally leaves a valid install by the
-  end of the *same* call, or (b), if that call's own download is made to
-  fail too, a second, independent `ensure_managed_runtime` call against the
-  same `runtime_dir` immediately afterward reports a fresh `REPAIRED`
-  rather than repeating the failure — proving retry-convergence rather
-  than asserting the false single-call convergence claim the second review
-  round already flagged; the equivalent model-side test only needs the
-  simpler "both start with nothing present" case, since step 0a removes
-  the destructive step that makes the runtime case possible at all — both
-  in `tests/services/test_runtime_provisioning.py` /
+  runs, so the mitigation cannot see it. The hook must prove that `rmtree`
+  deletes that newly valid directory. Then run two separately asserted
+  cases. With a working downloader, the original
+  `ensure_managed_runtime` call returns only after it has again promoted a
+  valid install. With a failing downloader, that call raises and the target
+  is empty at function return; a later, uncontended call using a working
+  downloader repairs it, and the update layer reports `REPAIRED`. This test
+  proves recoverability after the residual race, not a fixed retry bound.
+  The equivalent model-side test only needs the simpler "both start with
+  nothing present" case, since step 0a removes the destructive step that
+  makes the runtime case possible at all. Both belong in
+  `tests/services/test_runtime_provisioning.py` /
   `test_model_provisioning.py`;
 - `locate_managed_model_artifact`: matches only on filename containment
   (identity/`model_id`/`managed_model_provisioning` checks are the
@@ -685,16 +675,16 @@ known gap noted under Gate 0 above; not needed for the versioning
 distinction M2 requires — see step 4). Actually installing a newer pinned
 version once detected (`NEWER_VERSION_AVAILABLE` is report-only in v1;
 applying it needs config-persistence-on-upgrade design work deliberately
-deferred here). A directory-level atomic-replace primitive for the managed
-runtime install (e.g. a symlink-indirection layer: install each verified
-runtime under an immutable, uniquely-named directory and repoint a
-`current` symlink at it via one atomic `os.replace` on the symlink) — this
-is the only way to close finding 8's residual race window completely
-rather than shrink it; it is a real architectural change to how the
-runtime install path is laid out on disk, touching `locate_managed_install_root`,
-every `status`/`update` classification check, and existing installed
-layouts, so it is deliberately deferred past M2 v1 rather than folded into
-what was scoped as "two small upstream fixes."
+deferred here). A complete runtime-repair concurrency design. Candidate
+approaches include a per-target interprocess lock, an atomic
+rename-to-quarantine protocol for corrupt directories, and a
+symlink-indirection layout that installs each verified runtime under an
+immutable, uniquely-named directory then atomically repoints a `current`
+symlink. Each needs platform-specific failure and stale-owner semantics;
+the symlink layout would also change `locate_managed_install_root`, every
+`status`/`update` classification check, and existing installed layouts. That
+work is deliberately deferred past M2 v1 rather than folded into what was
+scoped as "two small upstream fixes."
 
 ---
 
