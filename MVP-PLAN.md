@@ -77,7 +77,9 @@ descriptive/causal label.
 contract this project already built for exactly this purpose. It has no
 `redistribution_status`, `update_policy`, or `contains_copyrighted_full_text`
 field, even though it does carry `license_name`, `sha256`,
-`size_bytes`/`expected_size_bytes`, and a source URL. The maintainer chose to
+`size_bytes`/`expected_size_bytes`, and a source URL.
+`ManagedRuntimeArtifact` (`domain/runtime_manifest.py`) has the same three
+omissions for the pinned `llama.cpp` archives. The maintainer chose to
 approve download/default-model behavior as implemented rather than gate that
 approval on adding these fields first; this is recorded as a real,
 un-actioned gap rather than silently dropped. M2 shipped without addressing
@@ -95,7 +97,7 @@ aligns the type itself (post-MVP, outside the completion gate).
 | M3 | Real-PDF acceptance corpus ✅ done | All six approved issue #59 cases pass their section-boundary and contamination assertions. |
 | M4 | Documentation truth pass | Five sweeps pass their acceptance criteria; every audited claim carries an explicit classification. **Up next — see below.** |
 | M5 | Release-readiness verification | Offline, restart, privacy, artifact, and cross-platform checks pass in reproducible environments. M5 is the last milestone before MVP, **not** the sole MVP-complete gate — see M5's exit condition. |
-| M6 | Artifact-metadata alignment (post-MVP) | `ManagedModelArtifact` conforms to or reuses `domain.ArtifactManifest`, carrying `redistribution_status`, `update_policy`, and `contains_copyrighted_full_text`. **Outside the MVP-complete gate** — M4 sweep 5 documents these facts in prose first, which is what `AGENTS.md` licensing actually requires. |
+| M6 | Artifact-metadata alignment (post-MVP) | `ManagedModelArtifact` **and `ManagedRuntimeArtifact`** conform to or reuse `domain.ArtifactManifest`, carrying `redistribution_status`, `update_policy`, and `contains_copyrighted_full_text`. **Outside the MVP-complete gate** — M4 sweep 5 documents these facts in prose first, which is what `AGENTS.md` licensing actually requires. |
 
 OCR, conversion beyond Abstract/Introduction, persisted retrieval indexes,
 semantic causal classification, and other features excluded by Gate 0 remain
@@ -255,7 +257,12 @@ pass: **setup/model/runtime download behavior**, **default-model status**,
 syntax and output** are all now current across README/AGENTS.md/
 docs/product-requirements.md/docs/roadmap.md/docs/generation-contract.md/
 docs/managed-runtime-provisioning.md/docs/local-generation-evaluation.md
-(see commits `583eb1b`, `8f2f90c`, `9b2e0fa`).
+(see commits `583eb1b`, `8f2f90c`, `9b2e0fa`) — **except the stale statements
+enumerated in the sweeps below**, which the sweeps still own. In particular,
+`docs/local-generation-evaluation.md`:119 still asserts in the present tense
+that runtime and model installation is manual (Sweep 3), and
+`docs/roadmap.md`:26 still says no update policy is documented for the managed
+artifacts (Sweep 5). Neither document is fully current until its sweep lands.
 
 Offline, privacy, restart, and cross-platform guarantees are M5's job, not a
 doc-pass item. A reproducible quickstart landed in `200abdd`.
@@ -416,11 +423,24 @@ adapter.
   - **the schema half is M6**, named below and outside the MVP-complete gate,
     matching the 2026-08-08 decision to approve download behavior rather than
     gate it on these fields.
+- `ManagedRuntimeArtifact` (`domain/runtime_manifest.py`) has the identical
+  gap and is in scope for the same split. `setup` downloads **four** pinned
+  `llama.cpp` archives (one per supported platform/architecture —
+  `services/setup_command.py`), not just the two GGUFs. Existing runtime
+  documentation gives source, license, expected size, and checksum, but not
+  redistribution status, update policy, or copyrighted-full-text status; the
+  roadmap (`docs/roadmap.md`:26) states outright that an update policy for
+  these artifacts is not separately documented. All four archives therefore
+  need the three missing facts written out in prose in this sweep, and the
+  roadmap's "not yet separately documented" sentence must be updated once
+  they are. The schema half for this type is M6 as well.
 
 Acceptance: no document implies full-document ingestion is supported; every
-artifact the application downloads has all seven `AGENTS.md` licensing facts
-documented in prose; and the residual schema gap points at M6 by name rather
-than at "later".
+artifact the application downloads — both Qwen2.5 GGUFs and all four pinned
+`llama.cpp` archives — has all seven `AGENTS.md` licensing facts documented in
+prose; `docs/roadmap.md`'s "an update policy for these artifacts is not yet
+separately documented" no longer holds; and the residual schema gap points at
+M6 by name rather than at "later".
 
 ---
 
@@ -461,17 +481,19 @@ of this gate.
 
 ## M6 — Artifact-metadata alignment (post-MVP)
 
-`ManagedModelArtifact` (`domain/model_manifest.py`) neither conforms to nor
-reuses `domain.ArtifactManifest` (schema version 1), the artifact-metadata
-contract this project already built for this purpose. It carries
+`ManagedModelArtifact` (`domain/model_manifest.py`) and
+`ManagedRuntimeArtifact` (`domain/runtime_manifest.py`) neither conform to nor
+reuse `domain.ArtifactManifest` (schema version 1), the artifact-metadata
+contract this project already built for this purpose. Both carry
 `license_name`, `sha256`, `size_bytes`/`expected_size_bytes`, and a source
-URL, but not `redistribution_status`, `update_policy`, or
+URL, but neither carries `redistribution_status`, `update_policy`, or
 `contains_copyrighted_full_text`.
 
-Scope: reconcile the two types — conform, reuse, or deliberately document why
-they stay separate — with the manifest schema bump, migration, and tests that
-implies. Consider `runtime_manifest.py` at the same time; it has the same
-question.
+Scope: reconcile all three types — conform, reuse, or deliberately document
+why they stay separate — with the manifest schema bump, migration, and tests
+that implies. `ManagedRuntimeArtifact` is in scope explicitly, not optionally:
+it lacks the same three fields for the four pinned `llama.cpp` archives that
+`setup` downloads.
 
 Not in the MVP gate. M4 sweep 5 documents the licensing facts in prose, which
 is what `AGENTS.md`'s corpus-and-licensing section actually requires; M6 is
