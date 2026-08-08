@@ -14,12 +14,17 @@ from econ_paper_cli.services.setup_command import (
 )
 
 
-def test_update_placeholder_succeeds(capsys: pytest.CaptureFixture[str]) -> None:
-    assert main(["update"]) == 0
-    assert (
-        capsys.readouterr().out.strip()
-        == "Updates are not implemented yet. No network request was made."
-    )
+def test_update_command_dispatches_to_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_update(args: object) -> int:
+        captured["args"] = args
+        return 0
+
+    monkeypatch.setattr(commands, "run_update", fake_run_update)
+    assert main(["update", "--offline", "--config-path", "/custom/config.json"]) == 0
+    assert getattr(captured["args"], "offline") is True
+    assert getattr(captured["args"], "config_path") == Path("/custom/config.json")
 
 
 def test_status_command_dispatches_to_handler(monkeypatch: pytest.MonkeyPatch) -> None:

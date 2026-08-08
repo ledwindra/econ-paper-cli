@@ -196,6 +196,7 @@ def run_setup_command(
         resolved_model_bytes = model_install.size_bytes
         resolved_model_checksum = model_install.sha256
 
+    is_managed_model = options.model_path is None
     try:
         config = LocalRuntimeModelConfig(
             # Canonicalize to absolute paths before they become durable: a
@@ -213,6 +214,7 @@ def run_setup_command(
             ),
             runtime_id=runtime_id,
             runtime_version_marker=runtime_version_marker,
+            managed_model_provisioning=is_managed_model,
         )
     except LocalConfigValidationError as error:
         err.write(f"Configuration error: {error}\n")

@@ -22,12 +22,23 @@ def build_parser() -> ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
-    command_definitions: tuple[tuple[str, str, CommandHandler], ...] = (
-        ("update", "Update local artifacts (placeholder).", commands.run_update),
+    update_parser = subparsers.add_parser(
+        "update",
+        help="Verify and repair managed local runtime and model artifacts.",
     )
-    for name, help_text, handler in command_definitions:
-        command_parser = subparsers.add_parser(name, help=help_text)
-        command_parser.set_defaults(handler=handler)
+    update_parser.add_argument(
+        "--config-path",
+        type=Path,
+        default=None,
+        help="Optional local configuration file path override.",
+    )
+    update_parser.add_argument(
+        "--offline",
+        action="store_true",
+        default=False,
+        help="Refuse downloads and report unavailable if repairs require network.",
+    )
+    update_parser.set_defaults(handler=commands.run_update)
 
     setup_parser = subparsers.add_parser(
         "setup",

@@ -22,6 +22,8 @@ Contract (see issue #58's approved plan):
   directory.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import shutil
@@ -29,13 +31,16 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
 
 from econ_paper_cli.adapters.filesystem import (
     VerificationError,
     inspect_local_file,
     verify_local_file,
 )
+from econ_paper_cli.adapters.storage_paths import get_default_runtime_dir
 from econ_paper_cli.domain.runtime_manifest import (
     ManagedRuntimeArtifact,
     ManagedRuntimeManifest,
@@ -49,8 +54,34 @@ from econ_paper_cli.services.platform_detection import (
     detect_current_platform,
 )
 
+if TYPE_CHECKING:
+    from econ_paper_cli.adapters.llama_cpp import LlamaCppConfig
+    from econ_paper_cli.domain.local_config import LocalRuntimeModelConfig
+
 _RECEIPT_FILENAME = "receipt.json"
 _EXECUTABLE_CHECK_TIMEOUT_SECONDS = 30.0
+
+
+class RuntimeOrigin(str, Enum):
+    """Where the configured runtime executable came from."""
+
+    MANAGED = "managed"
+    EXTERNAL = "external"
+    UNKNOWN = "unknown"
+
+
+class RuntimeState(str, Enum):
+    """Independent runtime-executable readiness classification.
+
+    Distinct from ``ModelState``: a missing/corrupt model must never be
+    misreported as a corrupt managed runtime, and vice versa.
+    """
+
+    VERIFIED = "verified"
+    MISSING = "missing"
+    CORRUPT_OR_MISMATCHED = "corrupt_or_mismatched"
+    UNSUPPORTED_PLATFORM = "unsupported_platform"
+    NOT_CHECKED = "not_checked"
 
 
 class RuntimeProvisioningError(Exception):
@@ -150,8 +181,16 @@ def ensure_managed_runtime(
                 "readiness verification, and downloads are disabled. Run setup "
                 "with network access, or supply an explicit executable path."
             )
+        # Finding 8 mitigation: re-check immediately before deleting. If a concurrent
+        # repairer already verified and promoted a valid install here, adopt it.
+        rechecked_receipt = _reuse_if_functional(final_install_dir, artifact, checker)
+        if rechecked_receipt is not None:
+            return _install_result(final_install_dir, rechecked_receipt)
+
         try:
             shutil.rmtree(final_install_dir)
+        except FileNotFoundError:
+            pass
         except OSError as error:
             raise RuntimeInstallIOError(
                 f"Failed to remove the corrupt install at '{final_install_dir}': "
@@ -645,3 +684,125 @@ def verify_executable_runs(executable_path: Path, version_marker: str) -> None:
             f"Executable '{executable_path}' does not match the expected "
             f"runtime version marker '{version_marker}'."
         )
+
+
+def classify_runtime_origin(
+    config: LocalRuntimeModelConfig,
+    llama_config: LlamaCppConfig,
+    runtime_checker: ExecutableReadinessChecker,
+    expected_artifact: ManagedRuntimeArtifact | None,
+    *,
+    runtime_dir: Path | None = None,
+    require_declared_identity: bool = False,
+) -> tuple[RuntimeOrigin, RuntimeState, str | None]:
+    """Classify the configured runtime's origin and independent readiness state.
+
+    Managed/external classification comes from locating a validated install
+    receipt owning the configured executable path, not merely from the
+    executable living under the default runtime directory — and origin is
+    only ever reported as ``MANAGED`` once every provenance check (receipt
+    validity, directory identity, manifest match, executable-path match, and
+    persisted-config identity) has actually passed; until then, a
+    managed-root-adjacent but unverified install is ``UNKNOWN`` (when
+    ``require_declared_identity`` is False) or ``EXTERNAL`` (when True).
+
+    When ``require_declared_identity`` is True (used by ``update``), both
+    ``config.runtime_id`` and ``config.runtime_version_marker`` must be set in
+    order to be classified as ``MANAGED``. If either is None, the runtime is
+    classified as ``EXTERNAL``.
+    """
+    resolved_runtime_dir = runtime_dir or get_default_runtime_dir()
+    managed_root = locate_managed_install_root(
+        config.executable_path, resolved_runtime_dir
+    )
+
+    if managed_root is not None:
+        if require_declared_identity and (
+            config.runtime_id is None or config.runtime_version_marker is None
+        ):
+            pass
+        else:
+            if expected_artifact is None:
+                return (
+                    RuntimeOrigin.UNKNOWN,
+                    RuntimeState.UNSUPPORTED_PLATFORM,
+                    "Configured executable is under the managed runtime directory, "
+                    "but this platform has no pinned managed runtime artifact to "
+                    "validate it against.",
+                )
+            try:
+                receipt = verify_managed_install(
+                    managed_root, expected_artifact=expected_artifact
+                )
+            except CorruptManagedInstallError as error:
+                origin = (
+                    RuntimeOrigin.MANAGED
+                    if require_declared_identity
+                    else RuntimeOrigin.UNKNOWN
+                )
+                return origin, RuntimeState.CORRUPT_OR_MISMATCHED, str(error)
+
+            expected_executable = (
+                managed_root / receipt.executable_relative_path
+            ).resolve()
+            if expected_executable != config.executable_path.resolve():
+                origin = (
+                    RuntimeOrigin.MANAGED
+                    if require_declared_identity
+                    else RuntimeOrigin.UNKNOWN
+                )
+                return (
+                    origin,
+                    RuntimeState.CORRUPT_OR_MISMATCHED,
+                    f"Configured executable '{config.executable_path}' does not match "
+                    f"the managed install's receipt executable '{expected_executable}'.",
+                )
+            if (
+                config.runtime_id is not None
+                and config.runtime_id != receipt.runtime_id
+            ):
+                origin = (
+                    RuntimeOrigin.MANAGED
+                    if require_declared_identity
+                    else RuntimeOrigin.UNKNOWN
+                )
+                return (
+                    origin,
+                    RuntimeState.CORRUPT_OR_MISMATCHED,
+                    f"Configured runtime_id '{config.runtime_id}' does not match "
+                    f"the validated managed install's runtime_id '{receipt.runtime_id}'.",
+                )
+            if (
+                config.runtime_version_marker is not None
+                and config.runtime_version_marker != receipt.version_marker
+            ):
+                origin = (
+                    RuntimeOrigin.MANAGED
+                    if require_declared_identity
+                    else RuntimeOrigin.UNKNOWN
+                )
+                return (
+                    origin,
+                    RuntimeState.CORRUPT_OR_MISMATCHED,
+                    f"Configured runtime_version_marker '{config.runtime_version_marker}' "
+                    "does not match the validated managed install's version_marker "
+                    f"'{receipt.version_marker}'.",
+                )
+
+            try:
+                runtime_checker(config.executable_path, receipt.version_marker)
+            except Exception as error:
+                return (
+                    RuntimeOrigin.MANAGED,
+                    RuntimeState.CORRUPT_OR_MISMATCHED,
+                    str(error),
+                )
+            return RuntimeOrigin.MANAGED, RuntimeState.VERIFIED, None
+
+    try:
+        runtime_checker(config.executable_path, llama_config.runtime_version_marker)
+    except Exception as error:
+        if not config.executable_path.exists():
+            return RuntimeOrigin.EXTERNAL, RuntimeState.MISSING, str(error)
+        return RuntimeOrigin.EXTERNAL, RuntimeState.CORRUPT_OR_MISMATCHED, str(error)
+    return RuntimeOrigin.EXTERNAL, RuntimeState.VERIFIED, None

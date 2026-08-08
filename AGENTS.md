@@ -113,8 +113,8 @@ on `chat`). `analyze` and `chat` take the runtime/model flags
 (`--llama-cpp-path`, `--model-path`, `--model-id`, `--model-bytes`,
 `--model-checksum`) as *optional* per-invocation overrides — omit all five to
 fall back to durable config from `setup`; supplying some but not all five is
-a typed error. `update` is currently a deterministic placeholder — see
-`MVP-PLAN.md`'s M2 for its planned scope. See `--help` on each subcommand for
+a typed error. `update` verifies and repairs managed local runtime and model
+artifacts against their pinned manifests and durable configuration. See `--help` on each subcommand for
 the full current flag set; `main` is always current.
 
 Layered, adapter-oriented design. Dependency direction:

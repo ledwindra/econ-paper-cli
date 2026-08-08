@@ -46,7 +46,7 @@ def test_to_mapping_round_trips_through_from_mapping() -> None:
     )
     mapping = config.to_mapping()
     assert mapping == {
-        "schema_version": 2,
+        "schema_version": 3,
         "executable_path": str(config.executable_path),
         "model_path": str(config.model_path),
         "model_id": config.model_id,
@@ -57,6 +57,7 @@ def test_to_mapping_round_trips_through_from_mapping() -> None:
         "db_path": str(config.db_path),
         "runtime_id": None,
         "runtime_version_marker": None,
+        "managed_model_provisioning": False,
     }
     restored = LocalRuntimeModelConfig.from_mapping(mapping)
     assert restored == config
@@ -81,7 +82,7 @@ def test_from_mapping_rejects_missing_required_fields() -> None:
         LocalRuntimeModelConfig.from_mapping(mapping)
 
 
-@pytest.mark.parametrize("schema_version", [0, 3, "1", 1.0, True])
+@pytest.mark.parametrize("schema_version", [0, 4, "1", 1.0, True])
 def test_rejects_invalid_schema_version(schema_version: object) -> None:
     with pytest.raises(LocalConfigValidationError):
         LocalRuntimeModelConfig(**_valid_kwargs(schema_version=schema_version))
@@ -242,6 +243,41 @@ def test_from_mapping_rejects_incomplete_schema_2_config(missing_field: str) -> 
     it is not treated as a legacy schema-1 file, since it explicitly
     declares schema_version 2."""
     mapping = LocalRuntimeModelConfig(**_valid_kwargs()).to_mapping()
+    mapping["schema_version"] = 2
+    del mapping["managed_model_provisioning"]
     del mapping[missing_field]
     with pytest.raises(LocalConfigValidationError, match="schema_version 2"):
         LocalRuntimeModelConfig.from_mapping(mapping)
+
+
+def test_schema_3_managed_model_provisioning_field() -> None:
+    config = LocalRuntimeModelConfig(**_valid_kwargs(managed_model_provisioning=True))
+    assert config.managed_model_provisioning is True
+    mapping = config.to_mapping()
+    assert mapping["schema_version"] == 3
+    assert mapping["managed_model_provisioning"] is True
+
+    restored = LocalRuntimeModelConfig.from_mapping(mapping)
+    assert restored.managed_model_provisioning is True
+
+
+def test_schema_1_and_2_upgrade_to_schema_3_on_resave() -> None:
+    schema_1 = LocalRuntimeModelConfig.from_mapping(_genuine_schema_1_mapping())
+    assert schema_1.managed_model_provisioning is False
+    assert schema_1.to_mapping()["schema_version"] == 3
+    assert schema_1.to_mapping()["managed_model_provisioning"] is False
+
+    schema_2_mapping = {
+        "schema_version": 2,
+        "executable_path": "/bin/llama",
+        "model_path": "/models/m.gguf",
+        "model_id": "qwen2.5-1.5b-instruct-q4-k-m",
+        "model_bytes": 1234,
+        "model_checksum": VALID_CHECKSUM,
+        "runtime_id": None,
+        "runtime_version_marker": None,
+    }
+    schema_2 = LocalRuntimeModelConfig.from_mapping(schema_2_mapping)
+    assert schema_2.managed_model_provisioning is False
+    assert schema_2.to_mapping()["schema_version"] == 3
+    assert schema_2.to_mapping()["managed_model_provisioning"] is False

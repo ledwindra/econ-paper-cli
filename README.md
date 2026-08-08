@@ -92,7 +92,7 @@ econpapers update
 econpapers analyze TARGET_PATH [--max-passage-characters 1200]
 ```
 
-`econpapers update` remains a deterministic placeholder.
+`econpapers update` verifies and repairs managed local runtime and model artifacts.
 
 Bare `econpapers` (no command) opens the interactive shell described above;
 `econpapers --help` still prints normal CLI help and exits.
@@ -508,12 +508,10 @@ backend-independent generation protocol with structured requests, responses,
 per-claim citations, explicit abstention validation, and cross-paper
 grounding checks.
 
-Not yet implemented: `econpapers update` (currently a deterministic
-placeholder — see [`MVP-PLAN.md`](MVP-PLAN.md)), OCR, conversion beyond
-Abstract/Introduction, a persisted or bundled retrieval index, and
-validation of the ingestion pipeline against the six real journal layouts
-tracked by issue #59. See [`MVP-PLAN.md`](MVP-PLAN.md) for the current
-milestone ladder toward MVP.
+Not yet implemented: OCR, conversion beyond Abstract/Introduction, a persisted
+or bundled retrieval index, and validation of the ingestion pipeline against
+the six real journal layouts tracked by issue #59. See [`MVP-PLAN.md`](MVP-PLAN.md)
+for the current milestone ladder toward MVP.
 
 
 ## Contributing

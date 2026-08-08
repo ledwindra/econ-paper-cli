@@ -89,12 +89,6 @@ def ensure_managed_model(
                 "verification and downloads are disabled. Re-run setup with "
                 "network access, or supply an explicit --model-path."
             )
-        try:
-            final_path.unlink()
-        except OSError as error:
-            raise ModelInstallIOError(
-                f"Failed to remove the corrupt model at '{final_path}': {error}."
-            ) from error
 
     if not allow_download:
         raise OfflineModelProvisioningError(
@@ -178,3 +172,36 @@ def _install_result(
         display_name=artifact.display_name,
         downloaded=downloaded,
     )
+
+
+def locate_managed_model_artifact(
+    model_path: Path,
+    model_dir: Path,
+    catalog: ManagedModelCatalog = MANAGED_MODEL_CATALOG,
+) -> ManagedModelArtifact | None:
+    """Return the catalog artifact ``model_path`` is lexically a managed
+    install location for, if any -- filename/containment only, mirroring
+    ``locate_managed_install_root``. Containment and ``model_id`` agreement
+    are necessary but *not sufficient* to classify a model as managed --
+    callers must additionally require ``config.managed_model_provisioning
+    is True``, the only durable signal that actually distinguishes a
+    managed install from an explicit one with coincidentally identical
+    identity (see step 3's design note).
+    """
+    from econ_paper_cli.services.runtime_provisioning import _containment_candidates
+
+    candidate_paths = _containment_candidates(model_path)
+    candidate_dirs = _containment_candidates(model_dir)
+
+    for candidate_dir in candidate_dirs:
+        for candidate_path in candidate_paths:
+            try:
+                relative = candidate_path.relative_to(candidate_dir)
+            except ValueError:
+                continue
+            if len(relative.parts) == 1:
+                filename = relative.parts[0]
+                for artifact in catalog.artifacts:
+                    if artifact.filename == filename:
+                        return artifact
+    return None

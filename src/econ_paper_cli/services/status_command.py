@@ -16,7 +16,6 @@ from econ_paper_cli.adapters.filesystem import (
 )
 from econ_paper_cli.adapters.llama_cpp import LlamaCppConfig
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
-from econ_paper_cli.adapters.storage_paths import get_default_runtime_dir
 from econ_paper_cli.domain.local_config import LocalRuntimeModelConfig
 from econ_paper_cli.domain.runtime_manifest import (
     ManagedRuntimeArtifact,
@@ -39,38 +38,12 @@ from econ_paper_cli.services.platform_detection import (
     detect_current_platform,
 )
 from econ_paper_cli.services.runtime_provisioning import (
-    CorruptManagedInstallError,
-    RuntimeProvisioningError,
-    locate_managed_install_root,
+    RuntimeOrigin,
+    RuntimeState,
+    classify_runtime_origin,
     verify_executable_runs,
-    verify_managed_install,
 )
 from econ_paper_cli.services.single_paper_analysis_cli import CLIExitCode
-
-RuntimeReadinessChecker = Callable[[Path, str], None]
-ModelReadinessChecker = Callable[[LlamaCppConfig], None]
-
-
-class RuntimeOrigin(str, Enum):
-    """Where the configured runtime executable came from."""
-
-    MANAGED = "managed"
-    EXTERNAL = "external"
-    UNKNOWN = "unknown"
-
-
-class RuntimeState(str, Enum):
-    """Independent runtime-executable readiness classification.
-
-    Distinct from ``ModelState``: a missing/corrupt model must never be
-    misreported as a corrupt managed runtime, and vice versa.
-    """
-
-    VERIFIED = "verified"
-    MISSING = "missing"
-    CORRUPT_OR_MISMATCHED = "corrupt_or_mismatched"
-    UNSUPPORTED_PLATFORM = "unsupported_platform"
-    NOT_CHECKED = "not_checked"
 
 
 class ModelState(str, Enum):
@@ -82,7 +55,10 @@ class ModelState(str, Enum):
     NOT_CONFIGURED = "not_configured"
 
 
-@dataclass(frozen=True, slots=True)
+RuntimeReadinessChecker = Callable[[Path, str], None]
+ModelReadinessChecker = Callable[[LlamaCppConfig], None]
+
+
 class StatusCommandOptions:
     """Parsed options for the ``econpapers status`` command."""
 
@@ -158,82 +134,14 @@ def _classify_runtime(
     runtime_checker: RuntimeReadinessChecker,
     expected_artifact: ManagedRuntimeArtifact | None,
 ) -> tuple[RuntimeOrigin, RuntimeState, str | None]:
-    """Classify the configured runtime's origin and independent readiness state.
-
-    Managed/external classification comes from locating a validated
-    install receipt owning the configured executable path, not merely from
-    the executable living under the default runtime directory — and origin
-    is only ever reported as ``MANAGED`` once every provenance check
-    (receipt validity, directory identity, manifest match, executable-path
-    match, and persisted-config identity) has actually passed; until then,
-    a managed-root-adjacent but unverified install is ``UNKNOWN``, not
-    ``MANAGED``.
-    """
-    runtime_dir = get_default_runtime_dir()
-    managed_root = locate_managed_install_root(config.executable_path, runtime_dir)
-
-    if managed_root is not None:
-        if expected_artifact is None:
-            return (
-                RuntimeOrigin.UNKNOWN,
-                RuntimeState.UNSUPPORTED_PLATFORM,
-                "Configured executable is under the managed runtime directory, "
-                "but this platform has no pinned managed runtime artifact to "
-                "validate it against.",
-            )
-        try:
-            receipt = verify_managed_install(
-                managed_root, expected_artifact=expected_artifact
-            )
-        except CorruptManagedInstallError as error:
-            return RuntimeOrigin.UNKNOWN, RuntimeState.CORRUPT_OR_MISMATCHED, str(error)
-
-        expected_executable = (
-            managed_root / receipt.executable_relative_path
-        ).resolve()
-        if expected_executable != config.executable_path.resolve():
-            return (
-                RuntimeOrigin.UNKNOWN,
-                RuntimeState.CORRUPT_OR_MISMATCHED,
-                f"Configured executable '{config.executable_path}' does not match "
-                f"the managed install's receipt executable '{expected_executable}'.",
-            )
-        if config.runtime_id is not None and config.runtime_id != receipt.runtime_id:
-            return (
-                RuntimeOrigin.UNKNOWN,
-                RuntimeState.CORRUPT_OR_MISMATCHED,
-                f"Configured runtime_id '{config.runtime_id}' does not match "
-                f"the validated managed install's runtime_id '{receipt.runtime_id}'.",
-            )
-        if (
-            config.runtime_version_marker is not None
-            and config.runtime_version_marker != receipt.version_marker
-        ):
-            return (
-                RuntimeOrigin.UNKNOWN,
-                RuntimeState.CORRUPT_OR_MISMATCHED,
-                f"Configured runtime_version_marker '{config.runtime_version_marker}' "
-                "does not match the validated managed install's version_marker "
-                f"'{receipt.version_marker}'.",
-            )
-
-        # Provenance (receipt, directory identity, manifest match,
-        # executable path, and persisted config identity) is fully
-        # validated at this point, so origin is confidently MANAGED
-        # regardless of the functional readiness outcome below.
-        try:
-            runtime_checker(config.executable_path, receipt.version_marker)
-        except RuntimeProvisioningError as error:
-            return RuntimeOrigin.MANAGED, RuntimeState.CORRUPT_OR_MISMATCHED, str(error)
-        return RuntimeOrigin.MANAGED, RuntimeState.VERIFIED, None
-
-    try:
-        runtime_checker(config.executable_path, llama_config.runtime_version_marker)
-    except RuntimeProvisioningError as error:
-        if not config.executable_path.exists():
-            return RuntimeOrigin.EXTERNAL, RuntimeState.MISSING, str(error)
-        return RuntimeOrigin.EXTERNAL, RuntimeState.CORRUPT_OR_MISMATCHED, str(error)
-    return RuntimeOrigin.EXTERNAL, RuntimeState.VERIFIED, None
+    """Classify the configured runtime's origin and independent readiness state."""
+    return classify_runtime_origin(
+        config,
+        llama_config,
+        runtime_checker,
+        expected_artifact,
+        require_declared_identity=False,
+    )
 
 
 def _classify_model(

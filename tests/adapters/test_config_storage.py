@@ -111,7 +111,7 @@ def test_load_rejects_semantically_invalid_configuration(tmp_path: Path) -> None
 def test_load_rejects_unsupported_schema_version(tmp_path: Path) -> None:
     config_path = tmp_path / "config.json"
     mapping = _sample_config().to_mapping()
-    mapping["schema_version"] = 3
+    mapping["schema_version"] = 4
     config_path.write_text(json.dumps(mapping), encoding="utf-8")
     storage = JSONConfigStorage(config_path)
 
@@ -120,14 +120,14 @@ def test_load_rejects_unsupported_schema_version(tmp_path: Path) -> None:
 
 
 def test_load_accepts_legacy_schema_version_1(tmp_path: Path) -> None:
-    """Issue #58 review: schema version 2 (adding runtime_id/
-    runtime_version_marker) must not break reading a genuinely older
+    """Issue #58 review: schema version 3 must not break reading a genuinely older
     version-1 file that predates those fields entirely."""
     config_path = tmp_path / "config.json"
     mapping = _sample_config().to_mapping()
     mapping["schema_version"] = 1
     del mapping["runtime_id"]
     del mapping["runtime_version_marker"]
+    del mapping["managed_model_provisioning"]
     config_path.write_text(json.dumps(mapping), encoding="utf-8")
     storage = JSONConfigStorage(config_path)
 
@@ -136,6 +136,22 @@ def test_load_accepts_legacy_schema_version_1(tmp_path: Path) -> None:
     assert loaded.schema_version == 1
     assert loaded.runtime_id is None
     assert loaded.runtime_version_marker is None
+    assert loaded.managed_model_provisioning is False
+
+
+def test_load_accepts_legacy_schema_version_2(tmp_path: Path) -> None:
+    """Schema version 3 must not break reading a genuinely older version-2 file."""
+    config_path = tmp_path / "config.json"
+    mapping = _sample_config().to_mapping()
+    mapping["schema_version"] = 2
+    del mapping["managed_model_provisioning"]
+    config_path.write_text(json.dumps(mapping), encoding="utf-8")
+    storage = JSONConfigStorage(config_path)
+
+    loaded = storage.load()
+    assert loaded is not None
+    assert loaded.schema_version == 2
+    assert loaded.managed_model_provisioning is False
 
 
 def test_failed_persistence_leaves_prior_configuration_untouched(

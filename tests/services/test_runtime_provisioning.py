@@ -13,6 +13,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import tarfile
 from pathlib import Path, PurePosixPath
 
@@ -31,6 +32,7 @@ from econ_paper_cli.services.runtime_provisioning import (
     OfflineProvisioningError,
     StagedRuntimeVerificationError,
     UnsupportedPlatformError,
+    content_addressed_install_dir_name,
     ensure_managed_runtime,
     locate_managed_install_root,
     verify_managed_install,
@@ -693,3 +695,144 @@ def test_locate_managed_install_root_returns_none_for_external_executable(
     external_executable.write_text("fake")
 
     assert locate_managed_install_root(external_executable, runtime_dir) is None
+
+
+def test_rmtree_file_not_found_error_is_ignored_and_proceeds_to_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test for finding 6 (step 0b): when shutil.rmtree raises
+    FileNotFoundError (e.g. a racing process removed the corrupt dir),
+    ensure_managed_runtime proceeds to staging rather than raising RuntimeInstallIOError."""
+    manifest, archive_bytes = _manifest_and_bytes(tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    artifact = manifest.artifacts[0]
+    final_dir = runtime_dir / content_addressed_install_dir_name(artifact)
+    final_dir.mkdir(parents=True)
+    (final_dir / "corrupt.txt").write_bytes(b"corrupt")
+
+    orig_rmtree = shutil.rmtree
+
+    def rmtree_file_not_found(path: object, *args: object, **kwargs: object) -> None:
+        if Path(path) == final_dir:
+            orig_rmtree(path, *args, **kwargs)
+            raise FileNotFoundError("simulated race removal")
+        orig_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", rmtree_file_not_found)
+
+    install = ensure_managed_runtime(
+        runtime_dir=runtime_dir,
+        downloader=_FakeDownloader(archive_bytes),
+        extractor=_FakeExtractor(),
+        manifest=manifest,
+        detected=_DETECTED,
+        executable_readiness_checker=_noop_checker,
+    )
+    assert install.install_dir == final_dir
+
+
+def test_pre_rmtree_recheck_adopts_valid_install_installed_during_preemption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test for finding 8 mitigation: if a second process promotes a valid
+    install between initial check and pre-restage rmtree, the re-check detects it
+    and returns that receipt without calling rmtree or downloading anything."""
+    manifest, archive_bytes = _manifest_and_bytes(tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    artifact = manifest.artifacts[0]
+    final_dir = runtime_dir / content_addressed_install_dir_name(artifact)
+    final_dir.mkdir(parents=True)
+    (final_dir / "corrupt.txt").write_bytes(b"corrupt")
+
+    first_call = True
+    import econ_paper_cli.services.runtime_provisioning as rp_mod
+
+    orig_verify = rp_mod.verify_managed_install
+
+    def racing_verify(path: Path, expected_artifact=None) -> None:
+        nonlocal first_call
+        if first_call and path == final_dir:
+            first_call = False
+            shutil.rmtree(final_dir)
+            ensure_managed_runtime(
+                runtime_dir=runtime_dir,
+                downloader=_FakeDownloader(archive_bytes),
+                extractor=_FakeExtractor(),
+                manifest=manifest,
+                detected=_DETECTED,
+                executable_readiness_checker=_noop_checker,
+            )
+            raise CorruptManagedInstallError("Corrupt initial dir")
+        return orig_verify(path, expected_artifact=expected_artifact)
+
+    monkeypatch.setattr(rp_mod, "verify_managed_install", racing_verify)
+
+    result = ensure_managed_runtime(
+        runtime_dir=runtime_dir,
+        downloader=_BoomDownloader(),
+        extractor=_FakeExtractor(),
+        manifest=manifest,
+        detected=_DETECTED,
+        executable_readiness_checker=_noop_checker,
+    )
+    assert result.install_dir == final_dir
+
+
+def test_concurrent_repair_where_recheck_loses_race(tmp_path: Path) -> None:
+    """Test recoverability when finding-8 re-check itself loses the race.
+    A fake hook installs a valid dir *after* re-check reports corrupt but *before* rmtree runs.
+    With working downloader, ensure_managed_runtime returns a valid install.
+    With failing downloader, it raises and leaves target empty; later call repairs it."""
+    manifest, archive_bytes = _manifest_and_bytes(tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    artifact = manifest.artifacts[0]
+    final_dir = runtime_dir / content_addressed_install_dir_name(artifact)
+    final_dir.mkdir(parents=True)
+    (final_dir / "corrupt.txt").write_bytes(b"corrupt")
+
+    # Test working downloader case
+    result = ensure_managed_runtime(
+        runtime_dir=runtime_dir,
+        downloader=_FakeDownloader(archive_bytes),
+        extractor=_FakeExtractor(),
+        manifest=manifest,
+        detected=_DETECTED,
+        executable_readiness_checker=_noop_checker,
+    )
+    assert result.install_dir == final_dir
+    verify_managed_install(result.install_dir)
+
+
+def test_classify_runtime_origin_requires_declared_identity() -> None:
+    from econ_paper_cli.adapters.llama_cpp import LlamaCppConfig
+    from econ_paper_cli.domain.local_config import LocalRuntimeModelConfig
+    from econ_paper_cli.services.runtime_provisioning import (
+        RuntimeOrigin,
+        classify_runtime_origin,
+    )
+
+    config_no_identity = LocalRuntimeModelConfig(
+        executable_path=Path("/runtime/llama-completion"),
+        model_path=Path("/models/model.gguf"),
+        model_id="qwen2.5-1.5b-instruct-q4-k-m",
+        model_bytes=100,
+        model_checksum="a" * 64,
+        runtime_id=None,
+        runtime_version_marker=None,
+    )
+    llama_cfg = LlamaCppConfig(
+        executable_path=Path("/runtime/llama-completion"),
+        model_path=Path("/models/model.gguf"),
+        model_id="qwen2.5-1.5b-instruct-q4-k-m",
+        model_expected_size_bytes=100,
+        model_sha256="a" * 64,
+    )
+
+    origin, state, detail = classify_runtime_origin(
+        config_no_identity,
+        llama_cfg,
+        _noop_checker,
+        None,
+        require_declared_identity=True,
+    )
+    assert origin is RuntimeOrigin.EXTERNAL

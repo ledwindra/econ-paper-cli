@@ -26,6 +26,10 @@ from econ_paper_cli.services.status_command import (
     StatusCommandOptions,
     run_status_command,
 )
+from econ_paper_cli.services.update_command import (
+    UpdateCommandOptions,
+    run_update_command,
+)
 
 
 def _optional_path(value: object) -> Path | None:
@@ -125,9 +129,18 @@ def run_shell(args: Namespace | None = None) -> int:
 
 
 def run_update(args: Namespace | None = None) -> int:
-    """Describe the update placeholder without performing side effects."""
-    sys.stdout.write("Updates are not implemented yet. No network request was made.\n")
-    return 0
+    """Verify and repair managed local runtime and model artifacts."""
+    try:
+        offline = bool(getattr(args, "offline", False)) if args else False
+        config_path = _optional_path(
+            getattr(args, "config_path", None) if args else None
+        )
+        options = UpdateCommandOptions(offline=offline, config_path=config_path)
+    except (AttributeError, ValueError, TypeError) as err:
+        sys.stderr.write(f"Invalid CLI argument values: {err}\n")
+        return CLIExitCode.TYPED_FAILURE_OR_CONFIG_ERROR
+
+    return run_update_command(options)
 
 
 def run_analyze(args: Namespace) -> int:

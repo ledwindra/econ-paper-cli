@@ -275,3 +275,72 @@ def test_manifest_rejects_a_non_https_source_url() -> None:
 def test_catalog_rejects_a_default_id_that_is_not_in_the_catalog() -> None:
     with pytest.raises(ManagedModelManifestError, match="not in the catalog"):
         ManagedModelCatalog(artifacts=(ARTIFACT,), default_model_id="absent")
+
+
+class FailingDownloader:
+    def download(
+        self, url: str, destination: Path, *, expected_size_bytes: int
+    ) -> None:
+        raise OSError("simulated network failure during download")
+
+
+def test_failed_repair_preserves_corrupt_file_on_disk(tmp_path: Path) -> None:
+    """Regression test for finding 3 (step 0a): if repair of an existing corrupt model
+    fails during replacement download, the original corrupt file is preserved on disk
+    (never deleted before replacement verifies) so it is still present and fails verification."""
+    corrupt_path = tmp_path / ARTIFACT.filename
+    corrupt_path.write_bytes(b"corrupt")
+
+    with pytest.raises(OSError, match="simulated network failure"):
+        ensure_managed_model(
+            model_dir=tmp_path,
+            downloader=FailingDownloader(),
+            catalog=CATALOG,
+            allow_download=True,
+        )
+
+    assert corrupt_path.exists()
+    assert corrupt_path.read_bytes() == b"corrupt"
+
+
+def test_locate_managed_model_artifact_filename_containment(tmp_path: Path) -> None:
+    from econ_paper_cli.services.model_provisioning import locate_managed_model_artifact
+
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    valid_path = model_dir / ARTIFACT.filename
+    valid_path.touch()
+
+    artifact = locate_managed_model_artifact(valid_path, model_dir, catalog=CATALOG)
+    assert artifact == ARTIFACT
+
+    outside_path = tmp_path / ARTIFACT.filename
+    assert (
+        locate_managed_model_artifact(outside_path, model_dir, catalog=CATALOG) is None
+    )
+
+    unknown_path = model_dir / "unknown.gguf"
+    assert (
+        locate_managed_model_artifact(unknown_path, model_dir, catalog=CATALOG) is None
+    )
+
+
+@pytest.mark.skipif(
+    not hasattr(Path, "symlink_to"), reason="Symlinks not supported on this platform"
+)
+def test_locate_managed_model_artifact_symlink_containment(tmp_path: Path) -> None:
+    from econ_paper_cli.services.model_provisioning import locate_managed_model_artifact
+
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    target = tmp_path / "target.gguf"
+    target.touch()
+    symlink_path = model_dir / ARTIFACT.filename
+    try:
+        symlink_path.symlink_to(target)
+    except OSError:
+        pytest.skip("Symlink creation failed")
+
+    # Lexical containment under model_dir still matches ARTIFACT.filename
+    artifact = locate_managed_model_artifact(symlink_path, model_dir, catalog=CATALOG)
+    assert artifact == ARTIFACT

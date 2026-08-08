@@ -109,7 +109,7 @@ Not yet implemented:
 - Real-model semantic and resource evaluation of the Issue 13 candidate set
   specifically (the mechanical benchmark below); a default model has since
   been selected outside that benchmark — see §10
-- Artifact update behavior (`econpapers update` remains a placeholder)
+- Artifact update behavior (`econpapers update` verifies and repairs local artifacts)
 
 Claim-level citation association/rendering and artifact download are now
 implemented; see §10.
@@ -210,7 +210,7 @@ Not yet implemented:
 - Evidence inspection: `/show` in the shell and `--show-evidence` on
   one-shot `chat` render the full stored passage text behind a citation
   (implemented)
-- Connect `update` (still a deterministic placeholder)
+- Managed artifact update command (`econpapers update` verifies and repairs managed runtime/model artifacts)
 - Connect the approved library, ingestion, retrieval, and generation adapters
 - Verify offline operation, privacy, restart safety, and cross-platform behavior
 - Document artifact licenses and release procedures
