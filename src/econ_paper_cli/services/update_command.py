@@ -35,7 +35,6 @@ from econ_paper_cli.services.model_provisioning import (
     ModelProvisioningError,
     OfflineModelProvisioningError,
     ensure_managed_model,
-    locate_managed_model_artifact,
     verify_managed_model,
 )
 from econ_paper_cli.services.platform_detection import (
@@ -48,12 +47,29 @@ from econ_paper_cli.services.runtime_provisioning import (
     RuntimeOrigin,
     RuntimeProvisioningError,
     RuntimeState,
+    _containment_candidates,
     classify_runtime_origin,
     content_addressed_install_dir_name,
     ensure_managed_runtime,
     locate_managed_install_root,
     verify_executable_runs,
 )
+
+
+def _is_model_contained_in_dir(model_path: Path, model_dir: Path) -> bool:
+    """Return True if model_path is lexically a direct child file of model_dir."""
+    candidate_paths = _containment_candidates(model_path)
+    candidate_dirs = _containment_candidates(model_dir)
+
+    for candidate_dir in candidate_dirs:
+        for candidate_path in candidate_paths:
+            try:
+                relative = candidate_path.relative_to(candidate_dir)
+            except ValueError:
+                continue
+            if len(relative.parts) == 1:
+                return True
+    return False
 
 
 class UpdateArtifactOutcome(str, Enum):
@@ -234,7 +250,9 @@ def execute_update_command(
     model_outcome: UpdateArtifactOutcome
     model_detail: str | None = None
 
-    if not config.managed_model_provisioning:
+    is_contained = _is_model_contained_in_dir(config.model_path, resolved_model_dir)
+
+    if not config.managed_model_provisioning or not is_contained:
         model_outcome = UpdateArtifactOutcome.EXTERNAL_SKIPPED
         model_detail = "Configured model is external or lacks managed origin flag."
     else:
@@ -256,46 +274,37 @@ def execute_update_command(
                 f"Catalog pinned model '{config.model_id}' identity differs from "
                 "configured model."
             )
+        elif verify_managed_model(config.model_path, catalog_artifact):
+            model_outcome = UpdateArtifactOutcome.REUSED
+            model_detail = None
+        elif options.offline:
+            model_outcome = UpdateArtifactOutcome.UNAVAILABLE_OFFLINE
+            model_detail = "Managed model requires repair but --offline is set."
         else:
-            located_model_artifact = locate_managed_model_artifact(
-                config.model_path, resolved_model_dir, model_catalog
-            )
-            if located_model_artifact is None:
-                model_outcome = UpdateArtifactOutcome.EXTERNAL_SKIPPED
-                model_detail = (
-                    "Configured model path is outside managed model directory."
+            try:
+                resolved_downloader = downloader or UrllibDownloader(
+                    trusted_redirect_host_suffixes=DEFAULT_TRUSTED_REDIRECT_HOST_SUFFIXES
                 )
-            elif verify_managed_model(config.model_path, catalog_artifact):
-                model_outcome = UpdateArtifactOutcome.REUSED
+                ensure_managed_model(
+                    model_dir=resolved_model_dir,
+                    downloader=resolved_downloader,
+                    model_id=config.model_id,
+                    catalog=model_catalog,
+                    allow_download=True,
+                )
+                model_outcome = UpdateArtifactOutcome.REPAIRED
                 model_detail = None
-            elif options.offline:
+            except OfflineModelProvisioningError as err:
                 model_outcome = UpdateArtifactOutcome.UNAVAILABLE_OFFLINE
-                model_detail = "Managed model requires repair but --offline is set."
-            else:
-                try:
-                    resolved_downloader = downloader or UrllibDownloader(
-                        trusted_redirect_host_suffixes=DEFAULT_TRUSTED_REDIRECT_HOST_SUFFIXES
-                    )
-                    ensure_managed_model(
-                        model_dir=resolved_model_dir,
-                        downloader=resolved_downloader,
-                        model_id=config.model_id,
-                        catalog=model_catalog,
-                        allow_download=True,
-                    )
-                    model_outcome = UpdateArtifactOutcome.REPAIRED
-                    model_detail = None
-                except OfflineModelProvisioningError as err:
-                    model_outcome = UpdateArtifactOutcome.UNAVAILABLE_OFFLINE
-                    model_detail = str(err)
-                except (
-                    ModelProvisioningError,
-                    DownloadError,
-                    ManagedModelManifestError,
-                    OSError,
-                ) as err:
-                    model_outcome = UpdateArtifactOutcome.FAILED
-                    model_detail = str(err)
+                model_detail = str(err)
+            except (
+                ModelProvisioningError,
+                DownloadError,
+                ManagedModelManifestError,
+                OSError,
+            ) as err:
+                model_outcome = UpdateArtifactOutcome.FAILED
+                model_detail = str(err)
 
     return UpdateReport(
         config_path=backend.config_path,

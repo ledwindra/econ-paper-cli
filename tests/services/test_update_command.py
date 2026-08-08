@@ -691,6 +691,68 @@ def test_model_filename_rename_reports_newer_version_available(
     assert exit_code == 1
 
 
+def test_managed_origin_flag_true_with_outside_path_and_changed_catalog_identity_returns_external_skipped(
+    tmp_path: Path,
+) -> None:
+    """Inverse regression test: managed_model_provisioning=True but model_path is outside
+    model_dir, and catalog identity has changed. Containment check MUST fail first, returning
+    EXTERNAL_SKIPPED with 0 downloads, rather than reporting NEWER_VERSION_AVAILABLE."""
+    rt_bytes, rt_sha, rt_size = _build_runtime_archive(tmp_path)
+    manifest = _make_runtime_manifest(rt_sha, rt_size)
+    runtime_dir = tmp_path / "runtimes"
+    model_dir = tmp_path / "models"
+    downloader = RecordingDownloader(runtime_payload=rt_bytes)
+    extractor = FakeExtractor()
+
+    from econ_paper_cli.services.runtime_provisioning import ensure_managed_runtime
+
+    rt_install = ensure_managed_runtime(
+        runtime_dir=runtime_dir,
+        downloader=downloader,
+        extractor=extractor,
+        manifest=manifest,
+        detected=DETECTED,
+        executable_readiness_checker=_noop_checker,
+    )
+
+    outside_dir = tmp_path / "outside_dir"
+    outside_dir.mkdir()
+    outside_model_path = outside_dir / "custom-model.gguf"
+    outside_model_path.write_bytes(b"outside model")
+
+    config = LocalRuntimeModelConfig(
+        executable_path=rt_install.executable_path,
+        model_path=outside_model_path,
+        model_id=MODEL_ARTIFACT.model_id,
+        model_bytes=100,
+        model_checksum="0" * 64,
+        runtime_id=rt_install.runtime_id,
+        runtime_version_marker=rt_install.version_marker,
+        managed_model_provisioning=True,
+    )
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(config)
+
+    downloader.download_count = 0
+
+    report = execute_update_command(
+        UpdateCommandOptions(),
+        config_backend=config_backend,
+        runtime_dir=runtime_dir,
+        model_dir=model_dir,
+        downloader=downloader,
+        extractor=extractor,
+        runtime_manifest=manifest,
+        model_catalog=MODEL_CATALOG,
+        runtime_readiness_checker=_noop_checker,
+        detected_platform=DETECTED,
+    )
+
+    assert report.model_outcome is UpdateArtifactOutcome.EXTERNAL_SKIPPED
+    assert report.runtime_outcome is UpdateArtifactOutcome.REUSED
+    assert downloader.download_count == 0
+
+
 class ExplodingDownloader:
     def download(
         self, url: str, destination: Path, *, expected_size_bytes: int
