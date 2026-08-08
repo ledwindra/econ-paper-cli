@@ -116,8 +116,19 @@ not the digest of the extracted executable. Readiness therefore verifies the
 runtime version marker and model artifact checksum; it does not misapply the
 archive digest to the extracted binary.
 
-Runtime and model installation is manual. The adapter never uses `-hf`, model
-URLs, automatic updates, Docker, or a package-managed download.
+Runtime and model installation is manual. That sentence is **[historical]**
+and scoped to Issue 13 evaluation specifically — it accurately describes the
+evaluation procedure above, in which evaluators installed both artifacts by
+hand, and this document's instructions still assume that. It is *not* covered
+by the opening note, which concerns deferred default selection.
+
+**[current]**, outside that evaluation: `econpapers setup` provisions both
+artifacts automatically, downloading and checksum-verifying the pinned
+`llama.cpp` runtime and a pinned GGUF model against
+`domain/runtime_manifest.py` and `domain/model_manifest.py`. `econpapers
+update` verifies and repairs them. Provisioning lives in those commands, not
+in the adapter: the adapter itself still never uses `-hf`, model URLs,
+automatic updates, Docker, or a package-managed download.
 
 ## Candidate model artifacts
 

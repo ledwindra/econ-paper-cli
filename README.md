@@ -222,6 +222,16 @@ for the manifest/receipt schema, the pinned release's license and
 attribution, and recovery instructions. Model acquisition remains manual
 and out of scope for this issue.
 
+That last sentence is **[historical]** — it is scoped to the runtime
+provisioning issue and no longer describes the tool. **[current]**:
+`econpapers setup` provisions the model as well as the runtime. When
+`--model-path` and its companion flags are omitted, it downloads and
+checksum-verifies a pinned GGUF from `domain/model_manifest.py` — Qwen2.5
+1.5B Instruct Q4_K_M by default, the 7B available via `--model` — under the
+maintainer approval recorded in [`AGENTS.md`](AGENTS.md). Supplying the
+explicit model flags bypasses provisioning entirely, exactly as
+`--llama-cpp-path` does for the runtime.
+
 `econpapers status` is a read-only report of whether durable configuration
 exists and is valid, independent runtime-executable and model-artifact
 readiness (runtime is further classified as managed/external/unknown origin,
@@ -560,9 +570,19 @@ backend-independent generation protocol with structured requests, responses,
 per-claim citations, explicit abstention validation, and cross-paper
 grounding checks.
 
-Not yet implemented: OCR, conversion beyond Abstract/Introduction, a persisted
-or bundled retrieval index, and validation of the ingestion pipeline against
-the six real journal layouts tracked by issue #59.
+Not yet implemented: OCR, conversion beyond Abstract/Introduction, and a
+persisted or bundled retrieval index.
+
+Validation of the ingestion pipeline against the journal layouts tracked by
+issue #59 was previously listed above as not implemented. It is complete
+(**[current]**). All six approved cases (`case_a` through `case_f`, covering the JUE,
+JEG, AER, Wiley, and Taylor & Francis layouts plus one further approved
+case) pass their section-boundary and contamination assertions, then
+round-trip through SQLite close/reopen, BM25 retrieval, and grounded
+generation with citation validation. The harness
+(`tests/evaluation/test_pdf_acceptance_harness.py`) is opt-in under
+`-m real_pdf` and runs against a private corpus, so it is deliberately not
+part of the default `pytest` run: the source PDFs are not redistributable.
 
 On retrieval specifically, this is the canonical statement of index scope:
 a persisted or bundled retrieval index is **[planned]** and post-MVP. What

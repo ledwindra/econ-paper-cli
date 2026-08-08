@@ -45,6 +45,14 @@ half specifically it still holds: no production or persisted index is
 implemented, and that remains **[planned]**. Retrieval today is the
 **[current]** in-memory BM25 index.
 
+That scope statement's other four items are no longer true. The storage protocol
+(`protocols/storage.StorageBackend`), the versioned SQLite schema
+(`adapters/sqlite_storage.py`), the ingestion service
+(`services/ingestion.py`), and PDF processing (extraction, quality
+assessment, section detection, and early-section conversion under
+`services/`) have all shipped. What follows in this section is therefore the
+approved design as Issue 11 recorded it, not a list of missing components.
+
 ```text
 User-selected PDF or directory
               |
@@ -186,7 +194,7 @@ Later storage or ingestion issues must decide:
 These choices must preserve the approved local, offline, licensing, privacy,
 portability, evidence, and failure-reporting requirements.
 
-## Current scaffold
+## Build history by Issue
 
 **Every paragraph in this section is [historical].** Each one records what a
 numbered Issue implemented or explicitly left out *as of that Issue*, in its
@@ -301,6 +309,15 @@ and marked the remaining scheduled runs `not_run`; no semantic scoring was
 applicable. No default generation adapter configuration is approved. The
 backend-independent generation boundary and replaceable adapter architecture
 remain unchanged.
+
+The approval sentence above is **[historical]** to Issue 13 and is now false
+as a status claim. **[current]**: on 2026-08-08 the maintainer approved
+Qwen2.5 1.5B Instruct Q4_K_M as the default local model, with Qwen2.5 7B
+Instruct Q4_K_M available via `--model`, both checksum-verified against the
+pinned `domain/model_manifest.py`. See "Approved decisions" in
+[`AGENTS.md`](../AGENTS.md). The generation boundary and replaceable adapter
+architecture are unchanged by that approval, so the final sentence still
+holds.
 
 Issue 24 implements the local SQLite storage foundation behind a
 database-independent storage protocol. `econ_paper_cli.protocols.storage.StorageBackend`

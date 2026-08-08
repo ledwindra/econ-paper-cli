@@ -186,11 +186,19 @@ Completed:
 
 Not yet implemented:
 
-- Connect preflight eligibility decisions to extraction orchestration
-- Add supported OCR and connect extraction-quality outcomes to orchestration
+- Add supported OCR
 - Extend conversion beyond the currently supported Abstract and Introduction
-- Refresh rebuildable retrieval state after library changes
-- Verify offline, restart-safe, and cross-platform behavior
+- Refresh rebuildable retrieval state after library changes — a shell session
+  builds its retriever once at startup, so an `analyze` run during that
+  session is not reflected until it is reopened
+- Verify offline, restart-safe, and cross-platform behavior systematically
+  (M5 in [`../MVP-PLAN.md`](../MVP-PLAN.md))
+
+Two items previously on this list have been removed as complete: preflight
+eligibility decisions and extraction-quality outcomes are both connected to
+`analyze` orchestration — preflight failure, extraction failure,
+`LIKELY_NEEDS_OCR`, and `UNUSABLE` all resolve to `NOT_ELIGIBLE` without
+reaching conversion. OCR itself remains genuinely unimplemented.
 
 ## 10. End-to-end MVP orchestration
 
@@ -231,6 +239,13 @@ Completed:
 
 Not yet implemented:
 
-- Connect the approved library, ingestion, retrieval, and generation adapters
-- Verify offline operation, privacy, restart safety, and cross-platform behavior
-- Document artifact licenses and release procedures
+- Verify offline operation, privacy, restart safety, and cross-platform
+  behavior systematically — the pieces exist (`--offline`, network confined
+  to `setup`/`update`, SQLite close/reopen round-trips, cross-platform CI),
+  but the consolidated release-readiness pass is M5 in
+  [`../MVP-PLAN.md`](../MVP-PLAN.md)
+- Document artifact licenses and release procedures (M4 sweep 5 and M5)
+
+"Connect the approved library, ingestion, retrieval, and generation adapters"
+was removed from this list as complete: the Completed items directly above
+are that connection.
