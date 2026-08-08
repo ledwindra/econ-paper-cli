@@ -68,11 +68,30 @@ knowing a passage ID or opening SQLite.
   evidence state.
 - One-shot chat: `econpapers chat "..." --show-evidence` prints each cited
   passage beneath the citation block.
-- Adding `--show-evidence` is the only thing that changes chat output: with
-  the flag omitted, output is unchanged from whatever chat/shell already
-  rendered before M1 (including the pre-existing per-claim "Answer by
-  Source" breakdown and paper-grouped citation block, neither of which is
-  part of M1 — evidence inspection adds nothing when the flag is absent).
+- Adding `--show-evidence` is the only thing M1 changes about chat/shell
+  output. With the flag omitted, output is unaffected by evidence
+  inspection specifically.
+
+**On default output changing at all:** it did — but not because of M1.
+Commit `b71ae00` is where claim-level citations, the per-claim "Answer by
+Source" breakdown, and paper-grouped citation rendering first entered this
+repository's git history, in the same commit as M1's evidence-inspection
+work. That code was written and tested in an earlier session and left
+uncommitted; it landed in `b71ae00` because it was still sitting in the
+working tree when a plain "make a git commit" was requested, not because it
+is part of M1. There is no earlier commit that shows chat output before
+that change — git history alone cannot distinguish "M1 didn't touch this"
+from "this was already true," which is exactly why this note exists. The
+claim is verifiable independently of git history: M1's own diff (see
+`format_evidence_detail`/`--show-evidence`/`/show` in `chat_command.py` and
+`interactive_shell.py`) never touches `_render_citation_lines`'s grouping
+logic or the claim-rendering block in `format_chat_command_output`. Two
+tests pin this down directly:
+`test_default_chat_output_is_unchanged_without_show_evidence` (golden output
+for the paper-grouped citation block) and
+`test_default_output_shows_answer_by_source_without_show_evidence` (the
+per-claim breakdown renders with no flag at all, so `--show-evidence` is not
+what causes it to appear).
 
 The stored passage text is shown in full — nothing is truncated or
 summarized — but rendering is *safely normalized*, not byte-identical:

@@ -1,5 +1,14 @@
 # Local generation adapter and evaluation
 
+**Status note:** this document is the historical record of the Issue 13
+mechanical benchmark and its candidate set (SmolLM2 1.7B, Qwen3 0.6B, Qwen2.5
+1.5B), which is a different, earlier evaluation from the default model
+`econpapers setup` provisions today (Qwen2.5 1.5B/7B Instruct, selected
+outside this benchmark — see the README's "Choosing a model" section and
+`domain/model_manifest.py`). Every "deferred"/"no approved default"
+statement below describes the outcome of *this specific benchmark run*, not
+current default-model status.
+
 ## Decision status
 
 Issue 12 implements a concrete, replaceable local-generation adapter and a

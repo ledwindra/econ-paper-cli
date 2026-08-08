@@ -18,6 +18,16 @@ features are available.
 - Keep downloads absent until sources, licenses, sizes, and update policies are
   approved
 
+This last bullet was this section's original policy statement, before §10's
+managed runtime/model provisioning existed. Both now perform real downloads
+(checksum-verified, with pinned sources and sizes) without an update policy
+having been separately documented, and without the explicit maintainer
+approval `AGENTS.md` requires for "introducing automatic model downloads" —
+see the Gate-0 note in [`product-requirements.md`](product-requirements.md).
+This section is left as the original policy statement rather than edited to
+match current behavior, since resolving that gap is the maintainer's call,
+not a documentation correction.
+
 ## 3. Corpus contracts and fixtures (implemented)
 
 - Define pure, immutable `Corpus` domain contract with cross-record invariant validation
@@ -48,8 +58,13 @@ Completed:
 
 Not yet implemented:
 - Additional retrieval-adapter implementation or broader comparison benchmark
-- Persisted retrieval index or index artifact
-- CLI integration
+- Persisted retrieval index or index artifact — `BM25Retriever` is rebuilt
+  in memory from `load_corpus()` on every `chat`/shell/`analyze` invocation;
+  there is still no on-disk index
+
+CLI integration is implemented: `chat` and the interactive shell both
+construct `BM25Retriever` from the durable library and retrieve against it
+— see §10.
 
 ## 5. Hybrid local-library requirements and architecture (Issue 11 documented)
 

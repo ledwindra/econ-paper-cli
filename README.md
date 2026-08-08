@@ -292,30 +292,26 @@ for the existing backend-independent `Generator` protocol. It uses explicit
 local paths, offline mode, a versioned evidence-only prompt, a fingerprinted
 GBNF constraint derived from the authoritative JSON schema, authoritative
 citation resolution, and final response validation. This adapter itself does
-not download anything; the only network access anywhere in the application is
-the explicit managed-runtime provisioning step inside `econpapers setup`
-described above (issue #58) — `analyze`, `chat`, bare `econpapers`, and
-`status` remain unconditionally network-free. The `analyze` and `chat`
-commands construct this adapter
-only from local runtime and model paths — either explicit per-invocation CLI
+not download anything; network access anywhere in the application is limited
+to the explicit runtime and model provisioning steps inside `econpapers
+setup` (see "Choosing a model" above, and issue #58 for the runtime side) —
+`analyze`, `chat`, bare `econpapers`, and `status` remain unconditionally
+network-free. The `analyze` and `chat` commands construct this adapter only
+from local runtime and model paths — either explicit per-invocation CLI
 overrides or durable configuration written by `econpapers setup` — and only
 when a local generator is actually required.
 
-`llama.cpp` b10199 is pinned for adapter compatibility testing and the initial
-Issue 13 comparison, not as a permanent product runtime. Three model artifacts
-are approved for evaluation only:
-
-- SmolLM2 1.7B Instruct Q4_K_M, conditional on completing its immutable
-  source-revision and conversion-provenance record;
-- official Qwen3 0.6B Q8_0; and
-- official Qwen2.5 1.5B Instruct Q4_K_M.
-
-No first-party Qwen3 0.6B Q4 GGUF was identified, correcting the earlier
-provisional wording. Issue 13 found that neither eligible Qwen candidate passed
-its first mechanical evaluation run, so no default model has been approved. See
+`llama.cpp` b10199 is pinned for adapter compatibility. Issue 13's original
+mechanical benchmark evaluated three candidates for the initial comparison
+(SmolLM2 1.7B Instruct Q4_K_M, official Qwen3 0.6B Q8_0, and official Qwen2.5
+1.5B Instruct Q4_K_M) and, at that time, neither eligible Qwen candidate
+passed its first mechanical run, so no default was selected from that
+benchmark. A default was later chosen outside that benchmark and is what
+`econpapers setup` now provisions — see "Choosing a model" above. See
 [`docs/local-generation-evaluation.md`](docs/local-generation-evaluation.md)
-for exact revisions, checksums, licenses, adapter behavior, and the Issue 13
-deferral evidence.
+for the Issue 13 benchmark's exact revisions, checksums, licenses, and
+mechanical-failure evidence; that document is a historical record of the
+benchmark run, not a statement of current default-model status.
 
 ## Corpus policy
 

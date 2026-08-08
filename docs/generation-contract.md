@@ -216,13 +216,23 @@ downloads. Runtime, prompt, schema, privacy, failure, benchmark, artifact, and
 evaluation details are in
 [`docs/local-generation-evaluation.md`](local-generation-evaluation.md).
 
-## Deferred work
+## Status note
 
-Issue 13 evaluated the two eligible candidates and explicitly deferred the
-initial replaceable default because neither passed the first mechanical run.
-Model download, retrieval orchestration, CLI integration, conversational state,
-PDF ingestion, OCR, conversion, storage, segmentation, and indexing remain
-unimplemented.
+At the time this contract was first written, Issue 13 had evaluated two
+eligible candidates and explicitly deferred the initial replaceable default
+because neither passed the first mechanical run; model download, retrieval
+orchestration, CLI integration, conversational state, PDF ingestion,
+conversion, storage, segmentation, and indexing were all unimplemented. That
+is no longer current: retrieval orchestration, CLI integration (`chat`, bare
+`econpapers`), conversational state (`domain/conversation.py`), PDF
+ingestion/conversion/storage/segmentation/indexing (`analyze`, the
+early-section library), and model/runtime download (`econpapers setup`, see
+[`docs/managed-runtime-provisioning.md`](managed-runtime-provisioning.md)
+and `domain/model_manifest.py`) are all implemented — see
+[`docs/roadmap.md`](roadmap.md) for current status. OCR and full-document
+conversion (beyond Abstract/Introduction) remain unimplemented. The
+`LlamaCppGenerator` adapter described above still performs no downloads
+itself; downloading is a separate, adapter-independent provisioning step.
 
 The repository-root `papers/` directory is private future ingestion input. It
 is ignored by Git and is not a public corpus, test fixture, package resource, or

@@ -2,10 +2,20 @@
 
 `econpapers setup` can automatically install a pinned `llama.cpp` runtime so
 an ordinary user never has to build `llama.cpp`, edit `PATH`, or locate an
-executable manually. This issue provisions **only the runtime**; selecting or
-downloading a default GGUF model remains a separate, unapproved decision
-(issue #13) — `--model-path`/`--model-id`/`--model-bytes`/`--model-checksum`
-stay required, explicit, user-supplied flags.
+executable manually. This issue provisions **only the runtime**; runtime and
+model provisioning are independent (staged and promoted separately, with
+independent status reporting in `econpapers status`) even though both are
+now implemented. Model provisioning (a pinned default GGUF, selection logic,
+and its own downloader) is documented separately in the README's "Choosing a
+model" section and `domain/model_manifest.py`/`services/model_provisioning.py`
+— it did not exist under issue #13, which only ran a mechanical benchmark
+and deferred a default; see `docs/roadmap.md` §7 and §10 for that history.
+The explicit flags below remain available as an opt-in bypass, independently
+for each side: `--llama-cpp-path` alone bypasses runtime provisioning, and
+all four `--model-path`/`--model-id`/`--model-bytes`/`--model-checksum`
+flags together bypass model provisioning (supplying only some of the four is
+a typed error). Both bypasses are available on `setup` and, per-invocation,
+on `analyze`/`chat`.
 
 ## When provisioning runs
 
