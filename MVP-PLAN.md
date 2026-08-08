@@ -132,7 +132,30 @@ can overwrite an existing file directly, so nothing needs deleting first;
 structural comparison against the manifest, addressed by narrowing scope
 below instead of by adding metadata.
 
-### Design: mostly reuse, with one small upstream fix
+A second adversarial review of that revision found three more gaps, all
+verified against the actual source before being folded in below: (5) the
+"full identity chain" for runtime classification still only checked
+`config.runtime_id`/`config.runtime_version_marker` *when set*
+(`status_command.py`'s own soft-check pattern, confirmed by reading it) —
+so an explicitly-supplied `--llama-cpp-path` that happens to point at (or
+under) a byte-identical, receipt-valid managed install would still pass
+every check and be treated as repair-eligible, and the model side has no
+comparable signal to check *at all*, soft or hard, since `model_id`/
+`model_bytes`/`model_checksum` are populated identically whether `setup`'s
+managed path or its explicit-four-flags path wrote them; (6) confirmed by
+reading `runtime_provisioning.py`: the `shutil.rmtree(final_install_dir)`
+before restaging a corrupt install wraps *any* `OSError` — including
+`FileNotFoundError` from a second process racing to remove what a first
+process already removed — into a hard `RuntimeInstallIOError`, so two
+concurrent repairs of the *same already-corrupt* install can have one fail
+outright rather than converge (the existing race-adoption logic lives only
+around the later `os.replace` promotion step, never around this earlier
+cleanup step); (7) the manual verification sequence corrupts the GGUF,
+repairs it, and then immediately re-runs `update --offline` still expecting
+`UNAVAILABLE_OFFLINE` — but the artifact is valid again after the repair,
+so that step would actually report `REUSED`.
+
+### Design: mostly reuse, with two small upstream fixes and one schema addition
 
 `econpapers setup` already implements most of what M2 needs at the
 verify/repair/atomic-promote layer:
@@ -141,10 +164,10 @@ verify/repair/atomic-promote layer:
   downloader, extractor, allow_download, ...)` — reuse-if-functional via
   `verify_managed_install` (receipt + every declared-member checksum), else
   stage into a sibling temp dir, download, verify, and `os.replace` onto a
-  content-addressed path. A lost promotion race adopts the winner instead of
-  failing (`_reuse_if_functional` re-check after `OSError`). This *is*
-  "concurrent updates converge on one verified artifact" for the runtime
-  side — no new code needed there.
+  content-addressed path. A lost promotion race at the final `os.replace`
+  adopts the winner instead of failing (`_reuse_if_functional` re-check
+  after `OSError`) — but a race on the earlier `shutil.rmtree` cleanup step
+  does not have the same protection; **see step 0 below.**
 - `services/model_provisioning.ensure_managed_model(*, model_dir,
   downloader, model_id, allow_download, ...)` — same shape, single file
   (`model_dir / artifact.filename`), no archive/extraction step. **Needs one
@@ -154,31 +177,54 @@ verify/repair/atomic-promote layer:
   `adapters/runtime_extractor.SafeArchiveExtractor` — HTTPS-only, bounded
   redirects, incremental size cap, partial-file cleanup on any failure.
 
-0. **Fix `ensure_managed_model`'s premature delete** (`model_provisioning.py`,
-   the `final_path.unlink()` call before staging begins). Today: if the
-   existing file fails verification, it is deleted *before* the replacement
-   is downloaded and verified; if the download or staged verification then
-   fails, `final_path` is left with nothing at all, and two concurrent
-   repairs race on the `unlink()` call itself. Neither is necessary:
-   `os.replace(staged_path, final_path)` — the existing promotion step —
-   already atomically overwrites `final_path` whether or not something is
-   there, on every platform this project supports. Remove the `unlink()`
-   call entirely; the corrupt/missing-vs-present branch collapses to "stage,
-   download, verify, then `os.replace` regardless." This is a small,
-   self-contained fix to existing shared code (also strictly improves
-   `setup`'s safety, not just `update`'s), not new M2-specific logic, and
-   should land and be tested on its own before the orchestration below is
-   built on top of it. The runtime side's analogous `shutil.rmtree` before
-   restaging a corrupt *directory* is not similarly removable — a directory
-   generally cannot be atomically replaced onto a non-empty existing
-   directory the way a single file can via `os.replace`, especially on
-   Windows — so the runtime side keeps a narrower version of this gap:
-   "prior valid artifact preserved through a failed repair" holds for the
-   *"was already valid, never touched"* case (always true) but not for the
-   *"was already corrupt, repair itself then fails"* case (runtime: still
-   loses the corrupt directory; model: fixed by step 0 above). Document this
-   asymmetry explicitly in the required-behavior list below rather than
-   claiming a blanket guarantee the runtime side can't actually provide.
+0. **Two small fixes to existing shared code, landed and tested on their own
+   before the orchestration below is built on top of them:**
+
+   **0a — `ensure_managed_model`'s premature delete**
+   (`model_provisioning.py`, the `final_path.unlink()` call before staging
+   begins). Today: if the existing file fails verification, it is deleted
+   *before* the replacement is downloaded and verified; if the download or
+   staged verification then fails, `final_path` is left with nothing at
+   all, and two concurrent repairs race on the `unlink()` call itself.
+   Neither is necessary: `os.replace(staged_path, final_path)` — the
+   existing promotion step — already atomically overwrites `final_path`
+   whether or not something is there, on every platform this project
+   supports. Remove the `unlink()` call entirely; the
+   corrupt/missing-vs-present branch collapses to "stage, download, verify,
+   then `os.replace` regardless." Also strictly improves `setup`'s safety,
+   not just `update`'s.
+
+   **0b — `ensure_managed_runtime`'s non-race-tolerant cleanup**
+   (`runtime_provisioning.py`, the `shutil.rmtree(final_install_dir)` call
+   before restaging a corrupt install). Confirmed by reading it: the
+   `try/except OSError` around this call converts *any* removal failure —
+   including `FileNotFoundError` from a second process racing to remove
+   what a first process already removed — into a hard
+   `RuntimeInstallIOError`, well before reaching the `os.replace`-based
+   race-adoption logic that protects the later promotion step. Fix: catch
+   `FileNotFoundError` specifically and treat it as success (someone else
+   already removed it; proceed to staging as this process would have after
+   its own successful `rmtree`), re-raising only for other `OSError`
+   subtypes (permission errors, etc., which are genuine failures). This
+   does **not** make directory replacement itself atomic the way a single
+   file's `os.replace` is — a directory generally cannot be atomically
+   replaced onto a non-empty existing directory, especially on Windows —
+   it only removes the specific hard-failure-on-benign-race defect, so two
+   concurrent repairs of the same corrupt install both reach staging and
+   let the existing final-`os.replace` adoption logic decide the winner,
+   instead of one of them erroring out first.
+
+   Even after 0b, "prior valid artifact preserved through a failed repair"
+   is not a blanket guarantee for the runtime side the way it now is for
+   the model side (0a): a *solo* (non-concurrent) failure between a
+   successful `rmtree` and a successful `os.replace` — e.g. the download
+   itself fails, no race involved — still leaves nothing at
+   `final_install_dir` on the runtime side, because removing the old
+   corrupt directory genuinely cannot be deferred until the replacement
+   is verified, unlike the single-file model case. 0b closes the
+   *concurrency* gap (finding 6), not this narrower solo-failure gap; both
+   are documented explicitly in the required-behavior list below rather
+   than papered over with a blanket claim.
 
 M2's own orchestration work — the part `setup` doesn't need — is deciding
 *which* already-configured artifacts are safe to touch, without a fresh
@@ -194,37 +240,84 @@ CLI-supplied identity to lean on the way `setup` has:
    `econpapers setup` first, exit code 1. This keeps `update` strictly a
    repair command, never a silent alternate path to initial setup.
 
-2. **Classify runtime as managed or external using the full chain, not
-   containment alone.** `locate_managed_install_root` checks lexical path
-   containment *only* — its own docstring says so explicitly and requires
-   callers to combine it with receipt verification. A user-supplied
-   `--llama-cpp-path` that happens to lexically resolve under the managed
-   runtime directory must not be treated as repair-eligible just because
-   `locate_managed_install_root` returns non-`None`. Reuse the *same full
-   chain* `status`'s `_classify_runtime` already implements (as a
-   standalone helper both can call, not by duplicating the logic inline):
-   locate the candidate root, then `verify_managed_install` against the
-   platform's pinned artifact, then confirm the receipt's executable path
-   resolves back to `config.executable_path` *and* (when set)
-   `config.runtime_id`/`config.runtime_version_marker` agree with the
-   receipt. Only if every one of those checks passes is the runtime
-   `MANAGED` and eligible for `ensure_managed_runtime(allow_download=not
-   offline)`. Any failure in that chain — including "lexically contained
-   but receipt doesn't validate" — reports `EXTERNAL_SKIPPED`, the same as
-   genuinely-external, and `update` does **not** hand it to
-   `ensure_managed_runtime` (which would otherwise "repair" a directory
-   that was never actually its install by deleting and replacing it).
-   Extract this chain from `status_command._classify_runtime` into a
-   shared, testable function (e.g. `runtime_provisioning.classify_runtime_origin`)
-   that both `status` and `update` call, rather than inlining a second copy
-   of the same five-check sequence.
+2. **Classify runtime as managed or external, requiring declared identity
+   for `update` even though `status` doesn't.** `locate_managed_install_root`
+   checks lexical path containment *only* — its own docstring says so
+   explicitly. `status._classify_runtime` goes further (receipt
+   verification, executable-path match) but still treats
+   `config.runtime_id`/`config.runtime_version_marker` agreement as
+   *conditional* — `if config.runtime_id is not None and ... != receipt...`
+   (confirmed by reading it) — skipped entirely when those fields are
+   `None`. That soft check is the right call for `status`, which is
+   read-only and has nothing to lose from a generous classification. It is
+   the wrong call for `update`: an explicitly-supplied `--llama-cpp-path`
+   that happens to point at a byte-identical, receipt-valid managed
+   install (contrived, but possible — e.g. a user manually copied a
+   managed install and pointed `--llama-cpp-path` at the copy) has
+   `runtime_id`/`runtime_version_marker` left `None` by `setup`'s explicit-path
+   branch, and would pass every one of `status`'s checks anyway, since none
+   of the *other* checks depend on those two fields being set.
+   `runtime_id`/`runtime_version_marker` are the only signal anywhere in
+   durable config that specifically means "this was populated by
+   `ensure_managed_runtime`, not typed in by a user" (see
+   `local_config.py`'s own docstring) — so `update` must not skip them.
 
-3. **Classify model the same way — containment *and* identity, not
-   either alone.** There is no existing helper for this (unlike runtime,
-   `status._classify_model` never distinguishes managed/external at all —
-   it only checks the configured path against the configured checksum). Add
-   one small, pure, testable function next to `ensure_managed_model` in
-   `model_provisioning.py`:
+   Extract `status`'s chain into a shared function taking a
+   `require_declared_identity: bool` parameter (e.g.
+   `runtime_provisioning.classify_runtime_origin(config, ...,
+   require_declared_identity=False)`), rather than duplicating the
+   five-check sequence a second time. `status` calls it with the parameter
+   `False` (current, unchanged behavior). `update` calls it with `True`:
+   when `True`, `config.runtime_id is None` or
+   `config.runtime_version_marker is None` unconditionally means "not
+   confidently managed," full stop, regardless of what containment/receipt
+   verification would otherwise conclude — downgrading straight to
+   `EXTERNAL_SKIPPED` without even running the receipt check. A real
+   managed install whose config predates schema 2 (so these fields were
+   never populated) is therefore treated conservatively as external by
+   `update` until the user re-runs `setup` once (idempotent, reuse-if-valid,
+   and upgrades the config to schema 2 with these fields populated) — an
+   acceptable cost for never risking a destructive repair against
+   unconfirmed identity. Only when every check passes, including the two
+   hard identity fields, is the runtime `MANAGED` and eligible for
+   `ensure_managed_runtime(allow_download=not offline)`.
+
+3. **Classify model: containment and identity are not enough on their own —
+   add an explicit origin marker to durable config.** Unlike runtime, there
+   is *no* existing field anywhere in `LocalRuntimeModelConfig` that
+   distinguishes "populated by managed provisioning" from "populated
+   because the user explicitly typed `--model-id`/`--model-bytes`/
+   `--model-checksum`": `setup`'s explicit-four-flags path requires the
+   user to supply exactly the same three fields the managed path derives
+   from the catalog, so a user who separately downloaded the identical
+   catalog file themselves (same size, same checksum, same chosen
+   `model_id` string) and pointed `--model-path`/`--model-id`/etc. at it
+   produces a config byte-for-byte indistinguishable from a genuinely
+   managed install — filename containment and `model_id` matching both
+   pass, with nothing left to check. This is not a contrived edge case the
+   way the runtime one is; it is the *default* shape of every explicit
+   model config, managed or not. Path/identity checks alone cannot close
+   this gap; only an explicit, durable, `setup`-recorded fact can.
+
+   Add one new optional field to `LocalRuntimeModelConfig`
+   (`domain/local_config.py`), bumping `LOCAL_CONFIG_SCHEMA_VERSION` from 2
+   to 3 following the exact precedent already set for `runtime_id`/
+   `runtime_version_marker` (new *serialized* content, so schema-2 files
+   must not silently claim schema 3; schema 1 and 2 files remain fully
+   readable and are transparently upgraded to 3 on next write):
+
+   ```python
+   managed_model_provisioning: bool = False
+   ```
+
+   Set to `True` only inside `setup_command.py`'s managed-model branch
+   (never by the explicit-four-flags branch); defaults to `False` for
+   every schema-1/2 file, including a genuinely-managed install configured
+   before this field existed — same conservative "re-run `setup` once to
+   upgrade" tradeoff as the runtime side's schema-2 fields.
+
+   Add one small, pure, testable function next to `ensure_managed_model` in
+   `model_provisioning.py` for the containment half:
 
    ```python
    def locate_managed_model_artifact(
@@ -234,23 +327,24 @@ CLI-supplied identity to lean on the way `setup` has:
    ) -> ManagedModelArtifact | None:
        """Return the catalog artifact `model_path` is lexically a managed
        install location for, if any -- filename/containment only, mirroring
-       `locate_managed_install_root`. Callers must additionally confirm
-       `config.model_id` matches the returned artifact's `model_id` before
-       treating the path as genuinely managed; this function alone is not
-       sufficient, exactly as `locate_managed_install_root` alone is not
-       sufficient for the runtime side (see step 2).
+       `locate_managed_install_root`. Containment and `model_id` agreement
+       are necessary but *not sufficient* to classify a model as managed --
+       callers must additionally require `config.managed_model_provisioning
+       is True`, the only durable signal that actually distinguishes a
+       managed install from an explicit one with coincidentally identical
+       identity (see step 3's design note).
        """
    ```
 
-   The caller (`update`'s orchestration, not this helper) then requires
-   **both**: `locate_managed_model_artifact(...)` returns a non-`None`
-   artifact, **and** `config.model_id == artifact.model_id`. Only then is
-   the model `MANAGED` and eligible for
-   `ensure_managed_model(model_id=config.model_id, allow_download=not
-   offline)` — repairing whichever `model_id` durable config already names,
-   never defaulting to the catalog default, so `update` can never switch a
-   user from the 1.5B to the 7B or vice versa. Either check failing reports
-   `EXTERNAL_SKIPPED`.
+   `update`'s orchestration then requires **all three**:
+   `locate_managed_model_artifact(...)` returns a non-`None` artifact,
+   **and** `config.model_id == artifact.model_id`, **and**
+   `config.managed_model_provisioning is True`. Only then is the model
+   `MANAGED` and eligible for `ensure_managed_model(model_id=config.model_id,
+   allow_download=not offline)` — repairing whichever `model_id` durable
+   config already names, never defaulting to the catalog default, so
+   `update` can never switch a user from the 1.5B to the 7B or vice versa.
+   Any of the three checks failing reports `EXTERNAL_SKIPPED`.
 
 4. **Persist the result when the identity actually changes** — this is the
    piece the first draft omitted entirely. After a `REPAIRED` outcome,
@@ -333,18 +427,28 @@ CLI-supplied identity to lean on the way `setup` has:
 - existing valid artifacts are reused without downloading (`REUSED`);
 - downloads are staged, size/checksum verified, and atomically promoted
   (true of both `ensure_managed_runtime`/`ensure_managed_model` after step 0's
-  fix);
+  fixes);
 - **a currently-valid artifact is never touched by a failed repair attempt
   (always true — nothing is deleted until a replacement verifies); an
-  already-corrupt artifact whose repair attempt itself then fails may still
-  end up with nothing in its place on the runtime side (directory-replace
-  constraint, not fixable within M2) but not on the model side (fixed by
-  step 0)** — this replaces the original draft's blanket, inaccurate claim
-  that interrupted repairs always preserve the prior artifact;
-- concurrent updates converge on one verified artifact (true for runtime via
-  the race-adoption branch; true for the model once step 0 removes the
-  unlink-based race entirely — two concurrent `os.replace` calls with
-  checksum-identical staged content are safe in either order);
+  already-corrupt artifact whose *solo* (non-concurrent) repair attempt
+  then fails may still end up with nothing in its place on the runtime
+  side (directory-replace constraint, not fixable within M2) but not on
+  the model side (fixed by step 0a)** — this replaces the original draft's
+  blanket, inaccurate claim that interrupted repairs always preserve the
+  prior artifact;
+- concurrent updates converge on one verified artifact, **including
+  concurrent repairs of the same already-corrupt artifact** (true for
+  runtime once step 0b makes the pre-restage cleanup race-tolerant; true
+  for the model once step 0a removes the unlink-based race entirely — two
+  concurrent `os.replace` calls with checksum-identical staged content are
+  safe in either order);
+- **an artifact is only ever treated as managed-and-repair-eligible when
+  durable config explicitly records that it was provisioned through
+  managed provisioning** — `runtime_id`/`runtime_version_marker` both
+  non-`None` and matching for runtime; the new `managed_model_provisioning
+  is True` flag for models — never reconstructed from path containment,
+  filename, or checksum/identity agreement alone, even when those happen
+  to agree with a real managed install (steps 2 and 3);
 - a mismatch between durable config and the artifact the code's current
   manifest pins is detected and reported (`NEWER_VERSION_AVAILABLE`) rather
   than silently repaired-to-old or silently upgraded;
@@ -356,12 +460,26 @@ CLI-supplied identity to lean on the way `setup` has:
 ### Files
 
 - `src/econ_paper_cli/services/model_provisioning.py` — remove the
-  premature `final_path.unlink()` (step 0); add `locate_managed_model_artifact`
+  premature `final_path.unlink()` (step 0a); add `locate_managed_model_artifact`
   (step 3).
-- `src/econ_paper_cli/services/runtime_provisioning.py` — extract
-  `status_command._classify_runtime`'s full managed-vs-external chain into
-  a shared, testable function (step 2); `status_command.py` switches to
-  calling it too, so the logic has one owner.
+- `src/econ_paper_cli/services/runtime_provisioning.py` — make the
+  pre-restage `shutil.rmtree` race-tolerant (step 0b); extract
+  `status_command._classify_runtime`'s chain into a shared, testable
+  function taking `require_declared_identity: bool` (step 2).
+- `src/econ_paper_cli/services/status_command.py` — switch to calling the
+  extracted classifier with `require_declared_identity=False` (unchanged
+  behavior), so the logic has one owner instead of two copies.
+- `src/econ_paper_cli/domain/local_config.py` — bump
+  `LOCAL_CONFIG_SCHEMA_VERSION` to 3; add `managed_model_provisioning: bool
+  = False` as a schema-3-only serialized field, following the exact
+  precedent of the schema-1-to-2 `runtime_id`/`runtime_version_marker`
+  addition (step 3).
+- `src/econ_paper_cli/adapters/config_storage.py` — schema 3
+  serialize/deserialize round-trip for the new field; confirm schema 1/2
+  files still load and transparently upgrade on next write.
+- `src/econ_paper_cli/services/setup_command.py` — set
+  `managed_model_provisioning=True` only on the managed-model branch, never
+  on the explicit-four-flags branch.
 - `src/econ_paper_cli/services/update_command.py` (new) — orchestration,
   outcome enum, `execute_update_command`/`run_update_command`, output
   rendering. Mirrors `status_command.py`'s shape (read config, classify,
@@ -373,9 +491,15 @@ CLI-supplied identity to lean on the way `setup` has:
 - `src/econ_paper_cli/cli.py` — dedicated `update` subparser.
 - `tests/services/test_update_command.py` (new).
 - `tests/services/test_model_provisioning.py` — tests for the unlink
-  removal (step 0) and `locate_managed_model_artifact` (step 3).
-- `tests/services/test_runtime_provisioning.py` / `test_status_command.py` —
-  tests for the extracted classifier function (step 2).
+  removal (step 0a) and `locate_managed_model_artifact` (step 3).
+- `tests/services/test_runtime_provisioning.py` — tests for the rmtree
+  race fix (step 0b) and the extracted classifier's
+  `require_declared_identity` parameter (step 2).
+- `tests/services/test_status_command.py` — confirm `status` still behaves
+  identically after switching to the shared classifier
+  (`require_declared_identity=False`).
+- `tests/domain/test_local_config.py` — schema 3 field validation and the
+  schema 1/2 → 3 upgrade-on-write path.
 - `tests/test_cli.py` — parser/dispatch tests for the new flags.
 - `README.md`, `docs/roadmap.md`, `docs/managed-runtime-provisioning.md` —
   replace "`update` remains a deterministic placeholder" language.
@@ -395,13 +519,26 @@ Reuse the exact patterns already in `tests/services/test_setup_command.py`
   downloader, exit code 0, and a second `update` immediately after reports
   `REUSED` with zero further downloader calls (this is the plan's stated
   acceptance test);
-- a path that is lexically under the managed directory but fails receipt/
-  identity verification (a user file coincidentally placed there, or a
-  managed-shaped filename with a different `model_id`) → `EXTERNAL_SKIPPED`,
-  `ensure_managed_*` never called, file left byte-identical — this is the
-  regression test for finding 1, and must exist for both runtime and model;
+- a path that is lexically under the managed directory and even fully
+  receipt-verifies, but `config.runtime_id`/`config.runtime_version_marker`
+  are `None` (an explicit `--llama-cpp-path` pointed at a byte-identical
+  managed install, or a genuinely-managed pre-schema-2 config) →
+  `EXTERNAL_SKIPPED`, `ensure_managed_runtime` never called, directory left
+  byte-identical — the regression test for finding 5's runtime half, and
+  the reason `require_declared_identity=True` must be asserted to change
+  the outcome relative to `status`'s own (unchanged) classification of the
+  identical config;
+- a model path that lexically matches a catalog filename *and* whose
+  `config.model_id` matches that artifact's `model_id`, but
+  `config.managed_model_provisioning` is `False` or absent (schema 1/2) →
+  `EXTERNAL_SKIPPED`, `ensure_managed_model` never called, file left
+  byte-identical — the regression test for finding 5's model half; also
+  test the inverse (flag `True`, everything else matching) actually
+  reaches `REUSED`/`REPAIRED`, so the flag is a necessary *and* sufficient
+  gate together with the other two checks, not an accidentally-always-off
+  one;
 - genuinely externally-supplied runtime/model (`config.executable_path`/
-  `model_path` outside the managed directories) → `EXTERNAL_SKIPPED`,
+  `model_path` outside the managed directories entirely) → `EXTERNAL_SKIPPED`,
   downloader never invoked, file left byte-identical;
 - durable config names a `model_id`/platform whose manifest-pinned identity
   (sha256/version_marker) no longer matches what's configured →
@@ -413,20 +550,29 @@ Reuse the exact patterns already in `tests/services/test_setup_command.py`
   verification it failed before — never silently absent — regression test
   for finding 3, added to `test_model_provisioning.py` directly against
   `ensure_managed_model`, not just through `update`;
+- `ensure_managed_runtime` repair-of-corrupt where `shutil.rmtree` raises
+  `FileNotFoundError` (simulating a second process having already removed
+  the directory): the call proceeds to staging rather than raising
+  `RuntimeInstallIOError` — regression test for finding 6's fix (0b),
+  added directly against `ensure_managed_runtime`;
 - `--offline` with something needing a download → `UNAVAILABLE_OFFLINE`,
   no network call, prior valid artifact (if any) left untouched;
-- concurrent-update race: two `ensure_managed_runtime`/`ensure_managed_model`
-  calls against the same target — this property lives in
-  `runtime_provisioning.py`/`model_provisioning.py`; confirm via
-  `tests/services/test_runtime_provisioning.py` /
-  `test_model_provisioning.py`, adding a same-target-race test for the
-  model side specifically (post-step-0, since pre-step-0 the race was on
-  `unlink()`, not `os.replace()`);
+- concurrent repair of the *same already-corrupt* target: two
+  `ensure_managed_runtime`/`ensure_managed_model` calls racing against a
+  target that starts corrupt (not merely missing) — this is the specific
+  scenario finding 6 identified as unsafe before the 0b fix, so it needs
+  its own test distinct from the simpler "both start with nothing present"
+  race case, in `tests/services/test_runtime_provisioning.py` /
+  `test_model_provisioning.py`;
 - `locate_managed_model_artifact`: matches only on filename containment
-  (identity/`model_id` cross-check is the caller's job, tested separately
-  at the orchestration level per the bullet above); a symlink at the
-  managed path is not lexically escaped (mirrors the existing
-  `locate_managed_install_root` symlink test on the runtime side).
+  (identity/`model_id`/`managed_model_provisioning` checks are the
+  caller's job, tested separately at the orchestration level per the
+  bullets above); a symlink at the managed path is not lexically escaped
+  (mirrors the existing `locate_managed_install_root` symlink test on the
+  runtime side);
+- schema 1 and schema 2 config files both still load correctly with
+  `managed_model_provisioning` defaulting to `False`, and are transparently
+  upgraded to schema 3 on the next `setup`-triggered write.
 
 ### Verification
 
@@ -440,8 +586,12 @@ Then a manual pass against a real (throwaway) config/library directory:
 `econpapers setup` (fresh install) → `econpapers update` (expect all
 `REUSED`, zero network) → deliberately corrupt the installed GGUF (truncate
 a byte) → `econpapers update` (expect `REPAIRED`, one download) →
-`econpapers update --offline` against a corrupted install (expect
-`UNAVAILABLE_OFFLINE`, no download, clear message).
+**re-corrupt the GGUF again** (the repair just made it valid, so this step
+is required — the first draft of this sequence skipped it and expected
+`UNAVAILABLE_OFFLINE` against an artifact that was, at that point, actually
+valid) → `econpapers update --offline` (expect `UNAVAILABLE_OFFLINE`, no
+download, clear message, artifact still corrupt afterward since offline
+mode never touches it).
 
 ### Out of scope
 
