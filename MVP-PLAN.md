@@ -271,16 +271,24 @@ manual" was scoped to Issue 13 evaluation by Sweep 3 (`56d50f2`), and
 
 ### Run record
 
-Executed 2026-08-08. Five sweeps plus six review-driven corrections, all
-local, none pushed:
+Executed 2026-08-08. Five sweeps plus seven review-driven corrections to the
+sweeps, then the closeout below — all local, none pushed. Every commit after
+the first in each row was raised by adversarial review, not self-caught:
 
-| Sweep | Commits |
-| --- | --- |
-| 1 — retrieval-index scope | `e4b6146`, then `878cdf6`, `720aa84`, `b86e88c` |
-| 2 — descriptive-vs-causal | `783d6a0`, then `ad4ac02`, `f933c67` |
-| 3 — status reconciliation | `56d50f2`, then `d623e84` |
-| 4 — grounding scope | `0fea1f6` |
-| 5 — corpus scope and licensing | `72e7dd2`, then `62f8e00` |
+| Sweep | Initial | Corrections |
+| --- | --- | ---: |
+| 1 — retrieval-index scope | `e4b6146` | `878cdf6`, `720aa84`, `b86e88c` (3) |
+| 2 — descriptive-vs-causal | `783d6a0` | `ad4ac02`, `f933c67` (2) |
+| 3 — status reconciliation | `56d50f2` | `d623e84` (1) |
+| 4 — grounding scope | `0fea1f6` | none (0) |
+| 5 — corpus scope and licensing | `72e7dd2` | `62f8e00` (1) |
+
+Seven in total. `62f8e00` counts once here although it fixed three separate
+P1s at the same time.
+
+Closing out M4 and Gate 0 in this plan took further review-driven commits of
+its own, starting with `1d2679e`. Those are not sweep work and are not
+counted above; `git log` on this file is the complete record.
 
 Documentation only: one source file changed and only its docstring
 (`domain/runtime_manifest_data.py`). `ruff check`, `ruff format --check`, and

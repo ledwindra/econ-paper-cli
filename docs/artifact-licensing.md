@@ -122,10 +122,15 @@ reports `newer_version_available` and stops rather than migrating silently;
 adopting the new pin is the user's decision.
 
 Changing a pin is a maintainer action, not an automatic one. It requires
-downloading the real asset, computing its size and digest from that download,
-and updating the manifest — pins are never transcribed from upstream
-documentation. Both manifest modules state this rule in their docstrings,
-because a wrong pin breaks provisioning for every user at once.
+downloading the real asset and computing the verified values from that
+download: expected size, archive or file SHA-256, and — for runtime archives
+— the digest of every file inside the archive. Those three are never
+transcribed from a release page or upstream documentation. The remaining
+fields (URL, platform, architecture, archive format, version marker,
+executable path) are chosen when the pin is written; the download is what
+confirms them. Both manifest modules state this rule in their docstrings,
+because a wrong checksum breaks provisioning for every user on that platform
+at once.
 
 ## Residual schema gap — M6
 
