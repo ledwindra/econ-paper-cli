@@ -174,6 +174,35 @@ def _install_result(
     )
 
 
+def is_model_path_contained_in_dir(model_path: Path, model_dir: Path) -> bool:
+    """Return True if ``model_path`` is lexically a direct child file of
+    ``model_dir``, mirroring ``locate_managed_install_root``'s containment
+    check on the runtime side.
+
+    This is the single containment implementation for the model side;
+    callers (including ``services.update_command``) must use this rather
+    than duplicating the lexical containment walk or importing runtime's
+    private ``_containment_candidates`` helper directly. It is deliberately
+    independent of catalog filename matching -- see MVP-PLAN.md's
+    "renamed-pin exception" for why `update`'s MANAGED/EXTERNAL
+    classification uses this instead of ``locate_managed_model_artifact``.
+    """
+    from econ_paper_cli.services.runtime_provisioning import _containment_candidates
+
+    candidate_paths = _containment_candidates(model_path)
+    candidate_dirs = _containment_candidates(model_dir)
+
+    for candidate_dir in candidate_dirs:
+        for candidate_path in candidate_paths:
+            try:
+                relative = candidate_path.relative_to(candidate_dir)
+            except ValueError:
+                continue
+            if len(relative.parts) == 1:
+                return True
+    return False
+
+
 def locate_managed_model_artifact(
     model_path: Path,
     model_dir: Path,
@@ -188,20 +217,10 @@ def locate_managed_model_artifact(
     managed install from an explicit one with coincidentally identical
     identity (see step 3's design note).
     """
-    from econ_paper_cli.services.runtime_provisioning import _containment_candidates
-
-    candidate_paths = _containment_candidates(model_path)
-    candidate_dirs = _containment_candidates(model_dir)
-
-    for candidate_dir in candidate_dirs:
-        for candidate_path in candidate_paths:
-            try:
-                relative = candidate_path.relative_to(candidate_dir)
-            except ValueError:
-                continue
-            if len(relative.parts) == 1:
-                filename = relative.parts[0]
-                for artifact in catalog.artifacts:
-                    if artifact.filename == filename:
-                        return artifact
+    if not is_model_path_contained_in_dir(model_path, model_dir):
+        return None
+    filename = model_path.name
+    for artifact in catalog.artifacts:
+        if artifact.filename == filename:
+            return artifact
     return None

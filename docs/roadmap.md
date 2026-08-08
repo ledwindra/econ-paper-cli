@@ -180,37 +180,43 @@ Not yet implemented:
 
 ## 10. End-to-end MVP orchestration
 
-- One-shot cited chat over the local early-section library (implemented)
+Completed:
+
+- One-shot cited chat over the local early-section library
 - Durable, versioned local runtime/model configuration; `econpapers setup` and
   `econpapers status`; optional `analyze`/`chat` runtime/model arguments
-  resolved from configuration when omitted (Issue 54 implemented)
+  resolved from configuration when omitted (Issue 54)
 - Bare `econpapers` interactive cited-chat shell reusing the durable library,
   retrieval, generation, citation, and configuration boundaries, with a
-  lazily constructed and reused generator (Issue 56 implemented)
+  lazily constructed and reused generator (Issue 56)
 - Managed `llama.cpp` runtime provisioning during `econpapers setup` — pinned
   per-platform manifest, checksum-verified download, safe extraction, atomic
   content-addressed install, and an install receipt independent of model
-  acquisition (Issue 58 implemented)
+  acquisition (Issue 58)
 - Managed default GGUF model provisioning during `econpapers setup`,
   independent of runtime acquisition — a pinned model manifest
   (`domain/model_manifest.py`), checksum-verified download, and a default
   model (Qwen2.5 1.5B Instruct, with a 7B variant opt-in via `--model`)
-  selected for the analyze/chat/shell path (implemented; approved by the
-  maintainer 2026-08-08, see `AGENTS.md`'s "Approved decisions" — not yet
-  written up in this roadmap as its own numbered issue section)
+  selected for the analyze/chat/shell path (approved by the maintainer
+  2026-08-08, see `AGENTS.md`'s "Approved decisions" — not yet written up in
+  this roadmap as its own numbered issue section)
 - Claim-level citation association and per-source answer rendering: the
   generator emits per-claim citations, and claims whose wording is
   distinctive to a paper they do not cite are detected and withheld rather
-  than shown misattributed (`domain/claim_grounding.py`, implemented)
+  than shown misattributed (`domain/claim_grounding.py`)
 - Follow-up question resolution in the interactive shell: a question
   referring to an earlier turn is rewritten into a standalone question
   before retrieval, shown to the user as `Interpreted as:`
-  (`domain/conversation.py`, implemented)
+  (`domain/conversation.py`)
 - Evidence inspection: `/show` in the shell and `--show-evidence` on
   one-shot `chat` render the full stored passage text behind a citation
-  (implemented)
 - Managed artifact update command (`econpapers update` verifies and repairs
-  managed runtime and model artifacts, implemented)
+  managed runtime and model artifacts against their pinned manifests and
+  durable configuration, including the renamed-pin exception for the model
+  side — see M2 in [`../MVP-PLAN.md`](../MVP-PLAN.md))
+
+Not yet implemented:
+
 - Connect the approved library, ingestion, retrieval, and generation adapters
 - Verify offline operation, privacy, restart safety, and cross-platform behavior
 - Document artifact licenses and release procedures

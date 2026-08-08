@@ -35,6 +35,7 @@ from econ_paper_cli.services.model_provisioning import (
     ModelProvisioningError,
     OfflineModelProvisioningError,
     ensure_managed_model,
+    is_model_path_contained_in_dir,
     verify_managed_model,
 )
 from econ_paper_cli.services.platform_detection import (
@@ -47,29 +48,12 @@ from econ_paper_cli.services.runtime_provisioning import (
     RuntimeOrigin,
     RuntimeProvisioningError,
     RuntimeState,
-    _containment_candidates,
     classify_runtime_origin,
     content_addressed_install_dir_name,
     ensure_managed_runtime,
     locate_managed_install_root,
     verify_executable_runs,
 )
-
-
-def _is_model_contained_in_dir(model_path: Path, model_dir: Path) -> bool:
-    """Return True if model_path is lexically a direct child file of model_dir."""
-    candidate_paths = _containment_candidates(model_path)
-    candidate_dirs = _containment_candidates(model_dir)
-
-    for candidate_dir in candidate_dirs:
-        for candidate_path in candidate_paths:
-            try:
-                relative = candidate_path.relative_to(candidate_dir)
-            except ValueError:
-                continue
-            if len(relative.parts) == 1:
-                return True
-    return False
 
 
 class UpdateArtifactOutcome(str, Enum):
@@ -250,7 +234,7 @@ def execute_update_command(
     model_outcome: UpdateArtifactOutcome
     model_detail: str | None = None
 
-    is_contained = _is_model_contained_in_dir(config.model_path, resolved_model_dir)
+    is_contained = is_model_path_contained_in_dir(config.model_path, resolved_model_dir)
 
     if not config.managed_model_provisioning or not is_contained:
         model_outcome = UpdateArtifactOutcome.EXTERNAL_SKIPPED

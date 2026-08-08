@@ -389,6 +389,38 @@ CLI-supplied identity to lean on the way `setup` has:
    `update` can never switch a user from the 1.5B to the 7B or vice versa.
    Any of the three checks failing reports `EXTERNAL_SKIPPED`.
 
+   **Renamed-pin exception.** The three-check gate above has a gap:
+   `locate_managed_model_artifact` matches by *filename*, so if a future
+   catalog revision renames a pinned model's GGUF filename, an install that
+   is still genuinely managed (correct directory, correct `model_id`,
+   `managed_model_provisioning is True`) now resolves to no catalog
+   artifact at all, because its on-disk filename no longer matches any
+   entry. Applying the three-check gate literally would report that install
+   `EXTERNAL_SKIPPED` — indistinguishable from a user having pointed a
+   config at some unrelated file — when the correct report is
+   `NEWER_VERSION_AVAILABLE`: the pin moved, and repairing it is exactly
+   `update`'s job, not something to silently ignore as external.
+
+   `update`'s classification of MANAGED vs. EXTERNAL therefore uses only
+   **containment plus the provenance flag** — `model_path` is a direct
+   child file of `model_dir` (the same lexical containment
+   `locate_managed_model_artifact` performs internally, exposed as its own
+   reusable step: `is_model_path_contained_in_dir` in
+   `model_provisioning.py`) **and** `config.managed_model_provisioning is
+   True`. `model_id`/filename agreement against the catalog is deferred to
+   the identity-comparison step described above (`catalog_artifact is
+   None or catalog_artifact.size_bytes != config.model_bytes or
+   catalog_artifact.sha256 != config.model_checksum or
+   catalog_artifact.filename != config.model_path.name`) — a mismatch there,
+   including a renamed filename, reports `NEWER_VERSION_AVAILABLE`, not
+   `EXTERNAL_SKIPPED`. `locate_managed_model_artifact` itself is unchanged
+   and remains useful wherever filename-exact matching is actually wanted;
+   `update` just does not use it for the MANAGED/EXTERNAL gate.
+   `is_model_path_contained_in_dir` is the one containment implementation —
+   `update_command.py` must call it rather than duplicating the lexical
+   containment walk or importing runtime's private
+   `_containment_candidates` helper directly.
+
 4. **Persist the result when the identity actually changes** — this is the
    piece the first draft omitted entirely. After a `REPAIRED` outcome,
    compare the `ensure_managed_*` result's identity against what durable
