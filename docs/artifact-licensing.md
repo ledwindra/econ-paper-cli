@@ -12,6 +12,14 @@ redistributed by it; each is fetched directly from its upstream publisher over
 HTTPS, and only by an explicit `econpapers setup` or `econpapers update`
 invocation.
 
+## Classification
+
+**Every statement in this document is [current] unless it carries a different
+marker.** The six artifact entries, their seven licensing facts, and the
+update policy all describe `main` today: these are the exact pins `econpapers
+setup` and `econpapers update` use. The only exception is the "Residual schema
+gap" section at the end, which is explicitly **[planned]** (M6).
+
 ## Scope of this document
 
 **[current]**: this covers exactly the artifacts the application can download.

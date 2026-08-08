@@ -21,6 +21,12 @@ the real release assets downloaded from the URLs below — every file actually
 present in each archive is declared here, not merely computed at install
 time, so a tampered file plus a rewritten receipt.json still fails
 verification against this static, version-controlled anchor.
+
+Pins must never be added or changed from upstream documentation alone: every
+value here has to come from a real download of that exact URL, with the size
+and digest computed locally from the downloaded bytes. A wrong pin makes
+provisioning fail for every user on that platform at once. The managed-model
+manifest states the same rule for the same reason.
 """
 
 from pathlib import PurePosixPath

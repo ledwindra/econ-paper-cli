@@ -58,11 +58,12 @@ The model-download and default-model decisions are already reflected in
 `docs/managed-runtime-provisioning.md`, `docs/generation-contract.md`,
 `docs/local-generation-evaluation.md`, and `docs/roadmap.md`.
 
-The index-scope and causal-classification decisions above are **decided but
-not yet reflected in the documents** — propagating them is M4 sweep 1 and
+The index-scope and causal-classification decisions above were **decided
+before the documents reflected them** — propagating them was M4 sweep 1 and
 sweep 2 respectively, including the `README.md` relabel and the
-`docs/product-requirements.md`:55 / `AGENTS.md` rewording. Until M4 lands,
-those documents still state the pre-decision wording.
+`docs/product-requirements.md`:55 / `AGENTS.md` rewording. Both sweeps have
+landed (`e4b6146`, `783d6a0` and their corrections), so those documents now
+state the post-decision wording and Gate 0 is closed.
 
 With all four resolved, the MVP product scope is: local user-provided PDFs,
 stored Abstract/Introduction passages, in-memory BM25 retrieval rebuilt per
@@ -91,11 +92,11 @@ aligns the type itself (post-MVP, outside the completion gate).
 
 | # | Milestone | Exit condition |
 | --- | --- | --- |
-| Gate 0 | Reconcile MVP contract ✅ decided | All 4 items decided 2026-08-08. Decisions recorded above; **propagating the latter two into the documents is M4's job**, so Gate 0 is not "closed" until M4 lands. |
+| Gate 0 | Reconcile MVP contract ✅ closed | All 4 items decided 2026-08-08. Propagation of the latter two into the documents was M4's job and landed with M4's five sweeps, so Gate 0 is now closed. |
 | M1 | Evidence inspection ✅ done | A user can inspect the full stored passage for a citation in both CLI surfaces. |
 | M2 | Real `econpapers update` ✅ done | Explicit update repairs approved managed artifacts without touching user data or silently changing versions. |
 | M3 | Real-PDF acceptance corpus ✅ done | All six approved issue #59 cases pass their section-boundary and contamination assertions. |
-| M4 | Documentation truth pass | Five sweeps pass their acceptance criteria; every audited claim carries an explicit classification. **Up next — see below.** |
+| M4 | Documentation truth pass ✅ done | All five sweeps landed and passed their acceptance criteria; every audited claim carries an explicit classification. See M4's run record below. |
 | M5 | Release-readiness verification | Offline, restart, privacy, artifact, and cross-platform checks pass in reproducible environments. M5 is the last milestone before MVP, **not** the sole MVP-complete gate — see M5's exit condition. |
 | M6 | Artifact-metadata alignment (post-MVP) | `ManagedModelArtifact` **and `ManagedRuntimeArtifact`** conform to or reuse `domain.ArtifactManifest`, carrying `redistribution_status`, `update_policy`, and `contains_copyrighted_full_text`. **Outside the MVP-complete gate** — M4 sweep 5 documents these facts in prose first, which is what `AGENTS.md` licensing actually requires. |
 
@@ -249,20 +250,46 @@ without it.
 
 ---
 
-## M4 — Documentation truth pass
+## M4 — Documentation truth pass ✅ done
 
-Largely done as a side effect of the M1 review cycle, not as a standalone
-pass: **setup/model/runtime download behavior**, **default-model status**,
-**follow-up behavior and `/reset` semantics**, and **evidence-inspection
-syntax and output** are all now current across README/AGENTS.md/
-docs/product-requirements.md/docs/roadmap.md/docs/generation-contract.md/
+Partly done as a side effect of the M1 review cycle: **setup/model/runtime
+download behavior**, **default-model status**, **follow-up behavior and
+`/reset` semantics**, and **evidence-inspection syntax and output** were
+already current across README/AGENTS.md/docs/product-requirements.md/
+docs/roadmap.md/docs/generation-contract.md/
 docs/managed-runtime-provisioning.md/docs/local-generation-evaluation.md
-(see commits `583eb1b`, `8f2f90c`, `9b2e0fa`) — **except the stale statements
-enumerated in the sweeps below**, which the sweeps still own. In particular,
-`docs/local-generation-evaluation.md`:119 still asserts in the present tense
-that runtime and model installation is manual (Sweep 3), and
-`docs/roadmap.md`:26 still says no update policy is documented for the managed
-artifacts (Sweep 5). Neither document is fully current until its sweep lands.
+before the sweeps began (see commits `583eb1b`, `8f2f90c`, `9b2e0fa`). The
+rest — the stale statements enumerated in the sweeps below — was the sweeps'
+own work.
+
+The two examples this section used to cite in the present tense are now
+**[historical]** as descriptions of the plan's starting state:
+`docs/local-generation-evaluation.md`'s "runtime and model installation is
+manual" was scoped to Issue 13 evaluation by Sweep 3 (`56d50f2`), and
+`docs/roadmap.md`'s "no update policy is documented" was retired by Sweep 5
+(`72e7dd2`). Both documents are current.
+
+### Run record
+
+Executed 2026-08-08. Five sweeps plus six review-driven corrections, all
+local, none pushed:
+
+| Sweep | Commits |
+| --- | --- |
+| 1 — retrieval-index scope | `e4b6146`, then `878cdf6`, `720aa84`, `b86e88c` |
+| 2 — descriptive-vs-causal | `783d6a0`, then `ad4ac02`, `f933c67` |
+| 3 — status reconciliation | `56d50f2`, then `d623e84` |
+| 4 — grounding scope | `0fea1f6` |
+| 5 — corpus scope and licensing | `72e7dd2`, then `62f8e00` |
+
+Documentation only: one source file changed and only its docstring
+(`domain/runtime_manifest_data.py`). `ruff check`, `ruff format --check`, and
+`pytest` (1450 passed, 1 skipped) were green on every commit — which proves
+nothing about the claims themselves, since no test covers them. Each sweep's
+assertions were checked by reading the code they describe.
+
+Gate 0's propagation condition is satisfied by these sweeps, so Gate 0 is
+closed.
 
 Offline, privacy, restart, and cross-platform guarantees are M5's job, not a
 doc-pass item. A reproducible quickstart landed in `200abdd`.
@@ -281,6 +308,13 @@ it — it labels it as exactly one of:
 A sweep is done when every claim it touched carries one of these three
 classifications and no claim silently changes category. Deleting a `[planned]`
 requirement is a scope change and needs maintainer approval, not a doc edit.
+
+**Every sweep specification below is [historical].** Each describes the state
+M4 found and the work it prescribed, in its original wording — including
+present-tense assertions such as "`docs/roadmap.md`:26 states outright that an
+update policy is not separately documented". Those described the pre-sweep
+repository, not `main` today; all five sweeps have since landed. For the
+resulting state, read the documents themselves.
 
 ### Sweep 1 — Retrieval index scope
 
