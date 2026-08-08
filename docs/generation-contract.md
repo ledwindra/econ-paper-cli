@@ -49,9 +49,10 @@ to a tuple. `to_mapping()` emits a JSON-native list.
 - `citations`: an immutable tuple of existing `Citation` domain objects;
 - `generation_method`: a non-empty adapter-defined identity;
 - `abstained`: an explicit boolean state;
-- `abstention_reason`: `insufficient_evidence` or `null`; and
+- `abstention_reason`: `insufficient_evidence` or `null`;
 - `finding_kinds`: a duplicate-free tuple containing zero or more of
-  `descriptive` and `causal`; and
+  `descriptive` and `causal` — optional metadata, empty whenever the backend
+  asserts none; and
 - `claims`: an immutable tuple of `GeneratedClaim`, each a single
   self-contained sentence with the `citation_ids` supporting that sentence
   alone. Empty for backends that emit only flat prose.
@@ -60,9 +61,41 @@ Every identifier a claim cites must also appear in `citations`, so the
 per-claim attribution and the response citation list can never disagree about
 which passages back the answer.
 
-`FindingKind` is backend-declared answer-level metadata. Structural validation
-can verify only that the values are well formed. It cannot prove that prose is
-correctly characterized as descriptive or causal.
+`FindingKind` is a two-value enum — `descriptive` and `causal` — declared by
+the backend at the response level. It is optional metadata, not a guarantee
+the tool provides. Nothing derives it from the evidence or checks it against
+the evidence: the model asserts it, and validation is purely structural. A
+response therefore never establishes that a finding *is* causal; it records
+only what the backend claimed. Semantic validation of that characterization
+is **[planned]** and does not exist today.
+[`docs/local-generation-evaluation.md`](local-generation-evaluation.md)
+scores causal-versus-descriptive characterization through blinded human
+review, which is a manual evaluation procedure, not a runtime check.
+
+"Optional" is literal, in three separate ways:
+
+- an abstaining response must carry no finding kinds at all, and
+  `validate_generation_response` rejects one that does;
+- an answered response is not required to carry any — the empty tuple is
+  legal, and `chat`/the interactive shell then render `Finding Kinds: N/A`;
+  and
+- `chat`/the shell clear the label whenever any claim was withheld (see
+  below).
+
+The serialized field is always required: `from_mapping` rejects a mapping with
+no `finding_kinds` key. What is optional is the label itself, expressed as an
+empty list. Nothing in the contract makes a response "carry" a
+descriptive-or-causal characterization.
+
+Structural validation of the tuple itself checks that every element is a legal
+`FindingKind` and that there are no duplicates; the abstention-state check
+noted above adds the further constraint that an abstaining response carry
+none. Those are the only checks the label receives. The default
+`llama.cpp` adapter narrows the space further by enumerating the five legal
+arrays in its `generation-v3` grammar, so a degenerate repeat is not even
+representable. That grammar constraint belongs to the adapter, not to the
+generation protocol — a replacement adapter satisfies the protocol with no
+grammar at all.
 
 Because `finding_kinds` is answer-level rather than per-claim, it cannot
 survive claim-level withholding intact: if cross-paper grounding withholds
@@ -72,8 +105,11 @@ surviving ones, could have been the causal one). `chat`/the interactive
 shell handle this conservatively — see `services/chat_command.py` and
 `services/interactive_shell.py` — by reporting no finding kind at all
 whenever any claim was withheld, rather than risk mislabeling the answer
-that is actually shown. Attributing `finding_kinds` per claim instead of per
-response would require a schema change and is not implemented.
+that is actually shown. An answered response with partial withholding
+therefore prints `Finding Kinds: N/A`; a response whose claims were *all*
+withheld prints no finding-kind line at all, because it shows no answer to
+characterize. Attributing `finding_kinds` per claim instead of per response
+would require a schema change and is not implemented.
 
 Direct construction requires tuple fields and enum objects. Mapping parsing
 accepts JSON lists and enum strings, then normalizes them to immutable tuples
