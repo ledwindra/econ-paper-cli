@@ -611,6 +611,170 @@ def test_offline_mode_refuses_required_download(tmp_path: Path) -> None:
     assert md_install.model_path.read_bytes() == b"corrupt"
 
 
+def test_model_filename_rename_reports_newer_version_available(
+    tmp_path: Path,
+) -> None:
+    """Regression test for P1: model catalog update renames the GGUF filename.
+    A managed-origin config with matching model_id but older filename must report
+    NEWER_VERSION_AVAILABLE (exit code 1) without being mislabeled EXTERNAL_SKIPPED."""
+    rt_bytes, rt_sha, rt_size = _build_runtime_archive(tmp_path)
+    manifest = _make_runtime_manifest(rt_sha, rt_size)
+    runtime_dir = tmp_path / "runtimes"
+    model_dir = tmp_path / "models"
+    downloader = RecordingDownloader(runtime_payload=rt_bytes)
+    extractor = FakeExtractor()
+
+    from econ_paper_cli.services.model_provisioning import ensure_managed_model
+    from econ_paper_cli.services.runtime_provisioning import ensure_managed_runtime
+
+    rt_install = ensure_managed_runtime(
+        runtime_dir=runtime_dir,
+        downloader=downloader,
+        extractor=extractor,
+        manifest=manifest,
+        detected=DETECTED,
+        executable_readiness_checker=_noop_checker,
+    )
+    ensure_managed_model(
+        model_dir=model_dir, downloader=downloader, catalog=MODEL_CATALOG
+    )
+
+    # Config has old filename under model_dir
+    old_model_path = model_dir / "old-model-name.gguf"
+    old_model_path.write_bytes(_MODEL_PAYLOAD)
+
+    config = LocalRuntimeModelConfig(
+        executable_path=rt_install.executable_path,
+        model_path=old_model_path,
+        model_id=MODEL_ARTIFACT.model_id,
+        model_bytes=MODEL_ARTIFACT.size_bytes,
+        model_checksum=MODEL_ARTIFACT.sha256,
+        runtime_id=rt_install.runtime_id,
+        runtime_version_marker=rt_install.version_marker,
+        managed_model_provisioning=True,
+    )
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(config)
+
+    downloader.download_count = 0
+
+    options = UpdateCommandOptions()
+    report = execute_update_command(
+        options,
+        config_backend=config_backend,
+        runtime_dir=runtime_dir,
+        model_dir=model_dir,
+        downloader=downloader,
+        extractor=extractor,
+        runtime_manifest=manifest,
+        model_catalog=MODEL_CATALOG,
+        runtime_readiness_checker=_noop_checker,
+        detected_platform=DETECTED,
+    )
+
+    assert report.model_outcome is UpdateArtifactOutcome.NEWER_VERSION_AVAILABLE
+    assert report.runtime_outcome is UpdateArtifactOutcome.REUSED
+    assert downloader.download_count == 0
+
+    exit_code = run_update_command(
+        options,
+        config_backend=config_backend,
+        runtime_dir=runtime_dir,
+        model_dir=model_dir,
+        downloader=downloader,
+        extractor=extractor,
+        runtime_manifest=manifest,
+        model_catalog=MODEL_CATALOG,
+        runtime_readiness_checker=_noop_checker,
+        detected_platform=DETECTED,
+    )
+    assert exit_code == 1
+
+
+class ExplodingDownloader:
+    def download(
+        self, url: str, destination: Path, *, expected_size_bytes: int
+    ) -> None:
+        raise OSError("simulated network connection failure")
+
+
+def test_update_download_failure_reports_failed_and_exit_code_3(
+    tmp_path: Path,
+) -> None:
+    """Test driving an update repair download failure to FAILED and exit code 3."""
+    rt_bytes, rt_sha, rt_size = _build_runtime_archive(tmp_path)
+    manifest = _make_runtime_manifest(rt_sha, rt_size)
+    runtime_dir = tmp_path / "runtimes"
+    model_dir = tmp_path / "models"
+    downloader = RecordingDownloader(runtime_payload=rt_bytes)
+    extractor = FakeExtractor()
+
+    from econ_paper_cli.services.model_provisioning import ensure_managed_model
+    from econ_paper_cli.services.runtime_provisioning import ensure_managed_runtime
+
+    rt_install = ensure_managed_runtime(
+        runtime_dir=runtime_dir,
+        downloader=downloader,
+        extractor=extractor,
+        manifest=manifest,
+        detected=DETECTED,
+        executable_readiness_checker=_noop_checker,
+    )
+    md_install = ensure_managed_model(
+        model_dir=model_dir, downloader=downloader, catalog=MODEL_CATALOG
+    )
+
+    config = LocalRuntimeModelConfig(
+        executable_path=rt_install.executable_path,
+        model_path=md_install.model_path,
+        model_id=MODEL_ARTIFACT.model_id,
+        model_bytes=MODEL_ARTIFACT.size_bytes,
+        model_checksum=MODEL_ARTIFACT.sha256,
+        runtime_id=rt_install.runtime_id,
+        runtime_version_marker=rt_install.version_marker,
+        managed_model_provisioning=True,
+    )
+    config_backend = JSONConfigStorage(tmp_path / "config.json")
+    config_backend.save(config)
+
+    # Corrupt model file
+    md_install.model_path.write_bytes(b"corrupt")
+
+    exploding_downloader = ExplodingDownloader()
+
+    options = UpdateCommandOptions()
+    report = execute_update_command(
+        options,
+        config_backend=config_backend,
+        runtime_dir=runtime_dir,
+        model_dir=model_dir,
+        downloader=exploding_downloader,
+        extractor=extractor,
+        runtime_manifest=manifest,
+        model_catalog=MODEL_CATALOG,
+        runtime_readiness_checker=_noop_checker,
+        detected_platform=DETECTED,
+    )
+
+    assert report.model_outcome is UpdateArtifactOutcome.FAILED
+    assert report.runtime_outcome is UpdateArtifactOutcome.REUSED
+    assert "simulated network connection failure" in str(report.model_detail)
+
+    exit_code = run_update_command(
+        options,
+        config_backend=config_backend,
+        runtime_dir=runtime_dir,
+        model_dir=model_dir,
+        downloader=exploding_downloader,
+        extractor=extractor,
+        runtime_manifest=manifest,
+        model_catalog=MODEL_CATALOG,
+        runtime_readiness_checker=_noop_checker,
+        detected_platform=DETECTED,
+    )
+    assert exit_code == 3
+
+
 def test_format_update_report_rendering() -> None:
     report = execute_update_command(
         UpdateCommandOptions(),
