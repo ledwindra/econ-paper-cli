@@ -174,3 +174,8 @@ full license text is bundled inside every downloaded release archive
 `econpapers` only downloads the official upstream release asset directly
 from GitHub at setup time, checksum-verifies it, and installs it locally; it
 is never vendored into this project's own source tree or packages.
+
+[`artifact-licensing.md`](artifact-licensing.md) records the remaining
+licensing facts for all four pinned archives — redistribution status, update
+policy, and copyrighted-full-text status — alongside their per-platform
+sources, sizes, and checksums.

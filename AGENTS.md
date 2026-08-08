@@ -250,6 +250,15 @@ Before adding a corpus, model, or index artifact, document (**[current]** rule; 
 - update policy;
 - whether it contains copyrighted full text.
 
+For the artifacts the application already downloads — both pinned Qwen2.5
+GGUFs and all four pinned `llama.cpp` archives — all seven facts are recorded
+in [`docs/artifact-licensing.md`](docs/artifact-licensing.md). Add any new
+downloadable artifact there. `ManagedModelArtifact`/`ManagedRuntimeArtifact`
+do not yet carry `redistribution_status`, `update_policy`, or
+`contains_copyrighted_full_text` as typed fields; conforming them to
+`domain.ArtifactManifest` is tracked as M6 in `MVP-PLAN.md` (post-MVP), and
+until then that document is where those three facts live.
+
 Do not commit:
 
 - NBER PDFs;

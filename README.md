@@ -115,6 +115,15 @@ verifies); `analyze` is safe to re-run over the same or a growing directory,
 since it skips PDFs it has already ingested. After that, `econpapers` (shell)
 or `econpapers chat QUESTION` both work offline.
 
+What `analyze` ingests is the **Abstract and Introduction only** — that is the
+**[current]** supported corpus scope, and answers are drawn from those
+sections alone. Full-document ingestion is **[planned]** and does not ship:
+`analyze` detects those two sections, converts them to Markdown, and stores
+their passages; the rest of each PDF is left unread. A question whose answer
+lives only in a paper's results section will not be answerable from the
+library, and the tool will say so rather than guess. Your source PDFs are
+never modified or deleted.
+
 Everything `setup`/`analyze` write lands in per-user application directories,
 never inside the repository or working directory, each independently
 overridable:
@@ -163,6 +172,12 @@ same Qwen2.5 7B Instruct base weights. Neither this repository's MIT license
 nor its checksum pin changes the upstream model's license — see
 `domain/model_manifest.py`'s `license_name`/`attribution_text` fields for the
 exact recorded text per artifact.
+
+[`docs/artifact-licensing.md`](docs/artifact-licensing.md) is the
+authoritative record for every artifact `econpapers` downloads — both models
+and all four pinned `llama.cpp` archives — with source, license,
+redistribution status, size, checksum, update policy, and
+copyrighted-full-text status for each.
 
 ```bash
 econpapers setup                                       # default 1.5B

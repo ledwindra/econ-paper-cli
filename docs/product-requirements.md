@@ -127,6 +127,17 @@ status must never be interpreted as authorization to download or redistribute.
 
 ## Automatic local paper ingestion
 
+**This section is a future requirement**, as the opening note above states.
+The steps below describe full-document ingestion, which is **[planned]** and
+does not ship. **[current]**: `econpapers analyze` implements this workflow
+for the detected Abstract and Introduction only — it discovers PDFs, computes
+checksums, deduplicates, extracts, assesses quality, detects those two
+sections, converts them to Markdown, segments them into passages, and writes
+records transactionally. The remainder of each PDF is not read. Step 6 (OCR)
+is not implemented at all. Step 12 is only half met: retrieval state is built
+in memory when `chat` or a shell session starts, but there is no durable
+retrieval state for `analyze` to refresh.
+
 For ordinary use, a user should only need to place legally obtained PDF files
 in a folder, or select a PDF or folder, and invoke ingestion. The application
 must automatically:

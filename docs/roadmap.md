@@ -23,9 +23,11 @@ managed runtime/model provisioning existed. Both now perform real downloads
 (checksum-verified, with pinned sources and sizes); the maintainer approved
 automatic model downloads and the default model on 2026-08-08 (see
 `AGENTS.md`'s "Approved decisions"), which is why §10 below documents them
-as implemented rather than blocked on approval. An update policy for these
-artifacts is not yet separately documented — see M2 in
-[`../MVP-PLAN.md`](../MVP-PLAN.md) (`econpapers update`).
+as implemented rather than blocked on approval. Sources, licenses,
+redistribution status, sizes, checksums, the update policy, and
+copyrighted-full-text status are now documented for all six downloadable
+artifacts — both GGUF models and all four pinned `llama.cpp` archives — in
+[`artifact-licensing.md`](artifact-licensing.md).
 
 ## 3. Corpus contracts and fixtures (implemented)
 
