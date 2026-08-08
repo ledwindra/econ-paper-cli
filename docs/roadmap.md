@@ -20,13 +20,12 @@ features are available.
 
 This last bullet was this section's original policy statement, before §10's
 managed runtime/model provisioning existed. Both now perform real downloads
-(checksum-verified, with pinned sources and sizes) without an update policy
-having been separately documented, and without the explicit maintainer
-approval `AGENTS.md` requires for "introducing automatic model downloads" —
-see the Gate-0 note in [`product-requirements.md`](product-requirements.md).
-This section is left as the original policy statement rather than edited to
-match current behavior, since resolving that gap is the maintainer's call,
-not a documentation correction.
+(checksum-verified, with pinned sources and sizes); the maintainer approved
+automatic model downloads and the default model on 2026-08-08 (see
+`AGENTS.md`'s "Approved decisions"), which is why §10 below documents them
+as implemented rather than blocked on approval. An update policy for these
+artifacts is not yet separately documented — see M2 in
+[`../MVP-PLAN.md`](../MVP-PLAN.md) (`econpapers update`).
 
 ## 3. Corpus contracts and fixtures (implemented)
 
@@ -197,9 +196,9 @@ Not yet implemented:
   independent of runtime acquisition — a pinned model manifest
   (`domain/model_manifest.py`), checksum-verified download, and a default
   model (Qwen2.5 1.5B Instruct, with a 7B variant opt-in via `--model`)
-  selected for the analyze/chat/shell path (implemented, but not yet written
-  up in this roadmap as its own numbered issue section — see
-  [`product-requirements.md`](product-requirements.md)'s Gate-0 note)
+  selected for the analyze/chat/shell path (implemented; approved by the
+  maintainer 2026-08-08, see `AGENTS.md`'s "Approved decisions" — not yet
+  written up in this roadmap as its own numbered issue section)
 - Claim-level citation association and per-source answer rendering: the
   generator emits per-claim citations, and claims whose wording is
   distinctive to a paper they do not cite are detected and withheld rather

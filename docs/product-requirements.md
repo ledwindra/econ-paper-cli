@@ -24,12 +24,9 @@ see `domain/model_manifest.py`, `services/model_provisioning.py`, and
 `services/runtime_provisioning.py`. `analyze` and `chat` still accept
 explicit per-invocation runtime/model overrides, but no longer require them:
 omitting all five identity flags falls back to this durable, `setup`-written
-configuration. This makes automatic model downloads and a selected default
-model part of current behavior; `AGENTS.md`'s "decisions requiring
-maintainer approval" list still names both, and `docs/roadmap.md` does not
-yet have a written narrative section for this work the way it does for
-runtime provisioning (Issue 58) — reconciling that is tracked as Gate 0 in
-[`../MVP-PLAN.md`](../MVP-PLAN.md).
+configuration. Automatic model downloads and the selected default model were
+approved by the maintainer on 2026-08-08 — see `AGENTS.md`'s "Approved
+decisions" — closing that part of Gate 0 in [`../MVP-PLAN.md`](../MVP-PLAN.md).
 
 The CLI also includes a one-shot cited `chat` command and a bare `econpapers`
 interactive shell (with follow-up resolution and `/show` evidence

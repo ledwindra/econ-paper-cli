@@ -225,6 +225,20 @@ Ask before:
 - changing the supported Python versions;
 - changing the evidence citation format.
 
+### Approved decisions
+
+- **2026-08-08 — default local-model family and automatic model
+  downloads.** The maintainer approved `econpapers setup`'s managed model
+  provisioning as final: Qwen2.5 1.5B Instruct Q4_K_M as the default (no
+  flags required), Qwen2.5 7B Instruct Q4_K_M available via `--model`, both
+  checksum-verified downloads from a pinned manifest
+  (`domain/model_manifest.py`), with explicit per-invocation flags
+  (`--model-path`/`--model-id`/`--model-bytes`/`--model-checksum`, all four
+  together) remaining available to bypass provisioning entirely. This closes
+  the "changing the default local-model family" and "introducing automatic
+  model downloads" items above for this specific feature; both remain
+  standing policy for any future change to either.
+
 ## Agent responsibilities
 
 The maintainer defines product direction and approves major decisions.

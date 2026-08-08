@@ -19,25 +19,45 @@ milestone is accepted.
 
 ## Gate 0 — Reconcile the MVP contract
 
-This gate must be resolved before calling M1–M5 “MVP complete.” The repository
-currently contains conflicting statements about:
+This gate must be resolved before calling M1–M5 "MVP complete." The repository
+contained conflicting statements about:
 
 - whether MVP includes a bundled metadata/retrieval index or a user-provided
-  local early-section library;
-- whether descriptive-versus-causal classification is an MVP guarantee;
-- whether setup may automatically download model artifacts; and
-- whether the default model is selected or still deferred.
+  local early-section library — **still open**;
+- whether descriptive-versus-causal classification is an MVP guarantee —
+  **still open**;
+- whether setup may automatically download model artifacts — **resolved
+  2026-08-08**: yes, approved by the maintainer; see `AGENTS.md`'s "Approved
+  decisions"; and
+- whether the default model is selected or still deferred — **resolved
+  2026-08-08**: Qwen2.5 1.5B Instruct (default) / 7B Instruct (opt-in),
+  approved alongside the download decision above (the two were the same
+  maintainer decision). `docs/roadmap.md` §7's "deferred" language describes
+  the earlier, separate Issue 13 benchmark and is explicitly marked
+  historical, not current status.
 
-The maintainer must choose one coherent contract and update
-`README.md`, `docs/product-requirements.md`, `docs/architecture.md`, and
-`docs/roadmap.md` together. The decision must preserve the project guardrails:
-local inference, no paid service, no required GPU, no telemetry, and no
-redistribution of copyrighted full text.
+The two resolved items are reflected in `README.md`,
+`docs/product-requirements.md`, `docs/managed-runtime-provisioning.md`,
+`docs/generation-contract.md`, `docs/local-generation-evaluation.md`, and
+`docs/roadmap.md`. The two still-open items remain the maintainer's call;
+until resolved, the plan treats the implemented product scope as: local
+user-provided PDFs, stored Abstract/Introduction passages, local BM25
+retrieval, local generation with a managed default model, inspectable
+evidence, and no persisted retrieval index. It does not silently redefine
+the README MVP requirements beyond what's now approved.
 
-Until this gate is resolved, the plan treats the implemented product scope as:
-local user-provided PDFs, stored Abstract/Introduction passages, local BM25
-retrieval, local generation, inspectable evidence, and no persisted retrieval
-index. It does not silently redefine the README MVP requirements.
+**Known, non-blocking gap from the approval above:** `ManagedModelArtifact`
+(`domain/model_manifest.py`) does not conform to, or reuse,
+`domain.ArtifactManifest` (schema version 1 — see
+[`artifact-manifest.md`](artifact-manifest.md)), the artifact-metadata
+contract this project already built for exactly this purpose. It has no
+`redistribution_status`, `update_policy`, or `contains_copyrighted_full_text`
+field, even though it does carry `license_name`, `sha256`,
+`size_bytes`/`expected_size_bytes`, and a source URL. The maintainer chose to
+approve download/default-model behavior as implemented rather than gate that
+approval on adding these fields first; this is recorded as a real,
+un-actioned gap rather than silently dropped, and is reasonable follow-up
+scope for M2 or M4.
 
 ## Milestone ladder
 
