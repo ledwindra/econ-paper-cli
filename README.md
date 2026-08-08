@@ -580,9 +580,12 @@ JEG, AER, Wiley, and Taylor & Francis layouts plus one further approved
 case) pass their section-boundary and contamination assertions, then
 round-trip through SQLite close/reopen, BM25 retrieval, and grounded
 generation with citation validation. The harness
-(`tests/evaluation/test_pdf_acceptance_harness.py`) is opt-in under
-`-m real_pdf` and runs against a private corpus, so it is deliberately not
-part of the default `pytest` run: the source PDFs are not redistributable.
+(`tests/evaluation/test_pdf_acceptance_harness.py`) runs against a private
+corpus, because the source PDFs are not redistributable. A default `pytest`
+run still *collects* it; without `ECONPAPERS_TEST_ACCEPTANCE_DIR` pointing at
+that corpus it skips deterministically, which is the skipped test in a normal
+run. Setting that variable is what enables execution; the `real_pdf` marker
+only selects the test (`-m real_pdf`) and supplies no corpus.
 
 On retrieval specifically, this is the canonical statement of index scope:
 a persisted or bundled retrieval index is **[planned]** and post-MVP. What
