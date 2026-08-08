@@ -14,11 +14,27 @@ fragment provenance in SQLite alongside research-question analysis records.
 
 Issue 12 implements a configurable local `llama.cpp` subprocess adapter and a
 model-independent synthetic generation benchmark. Issue 13 evaluated the two
-eligible candidates, but neither passed the first mechanical run; the initial
-default model is therefore explicitly deferred. The analyze command requires
-explicit runtime and model configuration, and the application does not download
-artifacts. The CLI also now includes a one-shot cited chat command over the
-stored local early-section library.
+eligible candidates from that benchmark and deferred a default at that time.
+
+That deferral no longer describes current behavior: `econpapers setup` now
+provisions both a pinned `llama.cpp` runtime and a pinned default GGUF model
+(Qwen2.5 1.5B Instruct; a 7B variant is available via `--model`) when their
+flags are omitted, checksum-verifying each download before installing it —
+see `domain/model_manifest.py`, `services/model_provisioning.py`, and
+`services/runtime_provisioning.py`. `analyze` and `chat` still accept
+explicit per-invocation runtime/model overrides, but no longer require them:
+omitting all five identity flags falls back to this durable, `setup`-written
+configuration. This makes automatic model downloads and a selected default
+model part of current behavior; `AGENTS.md`'s "decisions requiring
+maintainer approval" list still names both, and `docs/roadmap.md` does not
+yet have a written narrative section for this work the way it does for
+runtime provisioning (Issue 58) — reconciling that is tracked as Gate 0 in
+[`../MVP-PLAN.md`](../MVP-PLAN.md).
+
+The CLI also includes a one-shot cited `chat` command and a bare `econpapers`
+interactive shell (with follow-up resolution and `/show` evidence
+inspection) over the stored local early-section library — see
+[`../README.md`](../README.md) for current command syntax and behavior.
 
 ## Mission
 

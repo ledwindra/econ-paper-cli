@@ -64,6 +64,17 @@ which passages back the answer.
 can verify only that the values are well formed. It cannot prove that prose is
 correctly characterized as descriptive or causal.
 
+Because `finding_kinds` is answer-level rather than per-claim, it cannot
+survive claim-level withholding intact: if cross-paper grounding withholds
+one claim from a multi-claim response, the surviving answer may no longer
+match the original `finding_kinds` label (the withheld claim, not the
+surviving ones, could have been the causal one). `chat`/the interactive
+shell handle this conservatively — see `services/chat_command.py` and
+`services/interactive_shell.py` — by reporting no finding kind at all
+whenever any claim was withheld, rather than risk mislabeling the answer
+that is actually shown. Attributing `finding_kinds` per claim instead of per
+response would require a schema change and is not implemented.
+
 Direct construction requires tuple fields and enum objects. Mapping parsing
 accepts JSON lists and enum strings, then normalizes them to immutable tuples
 and enums. Canonical mapping output emits lists and enum string values, so the

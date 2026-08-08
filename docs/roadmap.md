@@ -92,10 +92,13 @@ Completed:
 - Exact metadata for three Issue 13 evaluation candidates
 
 Not yet implemented:
-- Real-model semantic and resource evaluation
-- Initial default-model selection
-- Claim-level citation association or inline rendering
-- Artifact download or update behavior
+- Real-model semantic and resource evaluation of the Issue 13 candidate set
+  specifically (the mechanical benchmark below); a default model has since
+  been selected outside that benchmark — see §10
+- Artifact update behavior (`econpapers update` remains a placeholder)
+
+Claim-level citation association/rendering and artifact download are now
+implemented; see §10.
 
 ## 7. Real-model evaluation and default decision (Issue 13)
 
@@ -109,8 +112,12 @@ Completed:
   scheduled runs `not_run`
 - Recorded the limited observational resource measurements available from the
   portable runner
-- Explicitly deferred the initial default because neither candidate passed the
-  mechanical gate; no semantic scoring was applicable
+- At the time of this benchmark, explicitly deferred the initial default
+  because neither candidate passed the mechanical gate; no semantic scoring
+  was applicable. A default (Qwen2.5 1.5B Instruct, 7B opt-in) was later
+  selected outside this benchmark and is now provisioned by `econpapers
+  setup` — see §10. This section is kept as the historical record of the
+  Issue 13 benchmark run, not as a statement of current default-model status.
 
 ## 8. Local library storage foundation (Issue 24 implemented)
 
@@ -166,13 +173,30 @@ Not yet implemented:
   resolved from configuration when omitted (Issue 54 implemented)
 - Bare `econpapers` interactive cited-chat shell reusing the durable library,
   retrieval, generation, citation, and configuration boundaries, with a
-  lazily constructed and reused generator and no conversation memory yet
-  (Issue 56 implemented)
+  lazily constructed and reused generator (Issue 56 implemented)
 - Managed `llama.cpp` runtime provisioning during `econpapers setup` — pinned
   per-platform manifest, checksum-verified download, safe extraction, atomic
   content-addressed install, and an install receipt independent of model
   acquisition (Issue 58 implemented)
-- Connect update, follow-up, and evidence inspection
+- Managed default GGUF model provisioning during `econpapers setup`,
+  independent of runtime acquisition — a pinned model manifest
+  (`domain/model_manifest.py`), checksum-verified download, and a default
+  model (Qwen2.5 1.5B Instruct, with a 7B variant opt-in via `--model`)
+  selected for the analyze/chat/shell path (implemented, but not yet written
+  up in this roadmap as its own numbered issue section — see
+  [`product-requirements.md`](product-requirements.md)'s Gate-0 note)
+- Claim-level citation association and per-source answer rendering: the
+  generator emits per-claim citations, and claims whose wording is
+  distinctive to a paper they do not cite are detected and withheld rather
+  than shown misattributed (`domain/claim_grounding.py`, implemented)
+- Follow-up question resolution in the interactive shell: a question
+  referring to an earlier turn is rewritten into a standalone question
+  before retrieval, shown to the user as `Interpreted as:`
+  (`domain/conversation.py`, implemented)
+- Evidence inspection: `/show` in the shell and `--show-evidence` on
+  one-shot `chat` render the full stored passage text behind a citation
+  (implemented)
+- Connect `update` (still a deterministic placeholder)
 - Connect the approved library, ingestion, retrieval, and generation adapters
 - Verify offline operation, privacy, restart safety, and cross-platform behavior
 - Document artifact licenses and release procedures

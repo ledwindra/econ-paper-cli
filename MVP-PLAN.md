@@ -44,7 +44,7 @@ index. It does not silently redefine the README MVP requirements.
 | # | Milestone | Exit condition |
 | --- | --- | --- |
 | Gate 0 | Reconcile MVP contract | Requirements and status documentation agree on corpus, model, index, and finding-kind scope. |
-| M1 | Evidence inspection ✅ | A user can inspect the exact stored passage for a citation in both CLI surfaces. Implemented: `/show` in the shell, `--show-evidence` on one-shot `chat`, shared `format_evidence_detail` renderer, control-character/CRLF sanitization, reviewed adversarially (codex) and fixed. |
+| M1 | Evidence inspection ✅ | A user can inspect the full stored passage for a citation in both CLI surfaces, safely rendered (not byte-identical — see M1 section). Implemented: `/show` in the shell, `--show-evidence` on one-shot `chat`, shared `format_evidence_detail` renderer, control-character/CRLF sanitization (both the evidence view and the default citation block), reviewed adversarially (codex, then an independent review) and fixed. |
 | M2 | Real `econpapers update` | Explicit update repairs approved managed artifacts without touching user data or silently changing versions. |
 | M3 | Real-PDF acceptance corpus | All six approved issue #59 cases pass their section-boundary and contamination assertions. |
 | M4 | Documentation truth pass | Current behavior, limitations, licenses, and commands are accurately documented. |
@@ -56,11 +56,11 @@ out of scope unless the maintainer explicitly changes the MVP contract.
 
 ---
 
-## M1 — Evidence inspection
+## M1 — Evidence inspection ✅ implemented
 
 ### Deliverable
 
-A reader can go from a claim to the exact stored passage behind it, without
+A reader can go from a claim to the full stored passage behind it, without
 knowing a passage ID or opening SQLite.
 
 - Interactive shell: `/show e1` prints that citation's stored passage and
@@ -68,10 +68,18 @@ knowing a passage ID or opening SQLite.
   evidence state.
 - One-shot chat: `econpapers chat "..." --show-evidence` prints each cited
   passage beneath the citation block.
-- Default output is byte-for-byte unchanged when `--show-evidence` is absent.
+- Adding `--show-evidence` is the only thing that changes chat output: with
+  the flag omitted, output is unchanged from whatever chat/shell already
+  rendered before M1 (including the pre-existing per-claim "Answer by
+  Source" breakdown and paper-grouped citation block, neither of which is
+  part of M1 — evidence inspection adds nothing when the flag is absent).
 
-“Exact” means the stored passage text and its existing provenance are shown. It
-does not claim that the passage semantically proves the model’s claim.
+The stored passage text is shown in full — nothing is truncated or
+summarized — but rendering is *safely normalized*, not byte-identical:
+CRLF/CR line endings become LF, terminal control characters are replaced
+with a placeholder glyph, and long lines are word-wrapped. Provenance
+(section, pages, rank, score, source path) is shown alongside it. This does
+not claim the passage semantically proves the model's claim.
 
 ### State semantics
 
