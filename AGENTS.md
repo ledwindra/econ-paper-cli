@@ -21,6 +21,34 @@ When instructions conflict, use this priority:
 
 Do not silently reinterpret product requirements. Ask for clarification when a requested change would alter product scope, architecture, legal posture, or user-facing behavior.
 
+## Commands
+
+Install (editable, with dev tools):
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+Before finishing any change, run all three:
+
+```bash
+ruff check .
+ruff format --check .
+pytest
+```
+
+Run a single test file or test:
+
+```bash
+pytest tests/domain/test_papers.py
+pytest tests/domain/test_papers.py::test_paper_rejects_empty_title
+```
+
+Model-dependent integration tests are opt-in and require a manually installed
+local runtime/model (see `integration_tests/`); the default `pytest` run does
+not need them. They are marked `model` (see `pyproject.toml`
+`[tool.pytest.ini_options]`).
+
 ## Required workflow
 
 For every issue:
@@ -67,6 +95,104 @@ A cloud backend may only be added later as an optional adapter. It must never be
 - Do not bind core logic directly to FAISS, a database, `llama.cpp`, or a specific embedding model.
 - Model downloads, corpus downloads, and index updates must eventually be resumable or safely restartable.
 - Every downloaded artifact must eventually have a manifest entry and checksum verification.
+
+### Repository map
+
+CLI entry point: `econpapers {setup,status,chat,update,analyze}`, plus bare
+`econpapers` (no subcommand) for the interactive shell. `setup` validates and
+durably persists local runtime/model config, and auto-provisions both the
+pinned `llama.cpp` runtime and a pinned GGUF model when their flags are
+omitted (`--model` selects from `domain/model_manifest.py`; the 1.5B is the
+default, the 7B is opt-in — see "Approved decisions" below). `status` is a
+read-only report of that config, runtime readiness, and library state.
+`analyze` ingests one PDF or a directory into the local library. `chat
+QUESTION` answers one question one-shot; bare `econpapers` opens a
+multi-question shell over the same library, with follow-up resolution
+(`domain/conversation.py`) and evidence inspection (`/show`, `--show-evidence`
+on `chat`). `analyze` and `chat` take the runtime/model flags
+(`--llama-cpp-path`, `--model-path`, `--model-id`, `--model-bytes`,
+`--model-checksum`) as *optional* per-invocation overrides — omit all five to
+fall back to durable config from `setup`; supplying some but not all five is
+a typed error. `update` is currently a deterministic placeholder — see
+`MVP-PLAN.md`'s M2 for its planned scope. See `--help` on each subcommand for
+the full current flag set; `main` is always current.
+
+Layered, adapter-oriented design. Dependency direction:
+
+```text
+CLI adapters -> application services -> domain types and protocols
+                                      <- infrastructure adapters
+```
+
+- **`domain/`** — pure, immutable types and validation (papers, passages,
+  evidence, citations, corpora, storage records, PDF conversion/quality/
+  sections, research questions, single-paper analysis, early-section
+  library, `claim_grounding.py` for cross-paper leakage detection,
+  `conversation.py` for follow-up detection, `model_manifest.py` /
+  `runtime_manifest.py` for pinned managed-artifact catalogs). No
+  filesystem, network, database, or model-runtime dependency.
+- **`protocols/`** — replaceable interfaces (`retrieval.Retriever`,
+  `generation` request/response + validation, `pdf_extraction.PDFExtractor`,
+  `storage.StorageBackend`, `runtime_provisioning.Downloader`/
+  `ArchiveExtractor`). Domain and application code depend on these
+  protocols, never on a concrete library.
+- **`services/`** — orchestration only (ingestion, PDF conversion/
+  extraction/quality/section-detection, research-question extraction,
+  single-paper analysis + storage, early-section library,
+  chat/batch-analysis/setup/status/interactive-shell CLI glue,
+  `config_resolution` for CLI-over-durable-config precedence,
+  `runtime_provisioning`/`model_provisioning` for managed-artifact
+  verify/repair/atomic-install). This is where multi-step workflows and
+  reuse/backfill decisions live; CLI handlers stay thin and call into here.
+- **`adapters/`** — concrete, swappable implementations: `bm25.py` (pure
+  in-memory BM25 retriever, `bm25-v1` tokenizer), `llama_cpp.py`
+  (`llama-completion` subprocess generation adapter, prompt `generation-v3`:
+  the model emits per-claim citations and the adapter derives the response
+  citation list from them), `pypdf_extractor.py`, `sqlite_storage.py` (stdlib
+  `sqlite3`, versioned schema + migrations, atomic per-record transactions),
+  `storage_paths.py` (cross-platform data/config dir resolution,
+  `ECONPAPERS_LIBRARY_DIR`/`ECONPAPERS_CONFIG_DIR` overrides),
+  `config_storage.py` (atomic JSON runtime/model config), `corpus.py`,
+  `filesystem.py` (checksum/size verification), `runtime_downloader.py` /
+  `runtime_extractor.py` (HTTPS-only downloader, safe archive extraction —
+  the only network access anywhere in the application, gated to explicit
+  `setup`/`update` invocation).
+- **`evaluation/`** — frozen benchmarks and structural (not semantic)
+  scoring for retrieval and generation; never gates on claims not backed by
+  the benchmark.
+
+Specific invariants worth naming explicitly, beyond the general rules above:
+
+- Evidence stays structured end-to-end (paper identity + passage
+  boundaries); don't collapse it into unstructured strings.
+- Generated citation identifiers must be validated against retrieved
+  evidence (`validate_generation_response`) before anything reaches the
+  user.
+- Retrieval results must pass `validate_retrieval_results` (contiguous
+  1-based ranks, non-increasing score order, ascending `passage_id`
+  tie-break, near-dup suppression already applied).
+- Ingestion/analysis never modifies or deletes source PDFs; SQLite writes
+  for one paper record happen inside a single transaction with full
+  rollback.
+- `econpapers analyze` decides exact-reuse vs. legacy-library-backfill vs.
+  fresh-generation *before* constructing the local model adapter — reuse and
+  backfill paths must not require accessible model artifacts.
+
+For the historical, issue-by-issue build order and exact behavioral
+contracts of each layer, see `docs/architecture.md` (long-form) and the
+topic docs it links out to (`docs/retrieval-contract.md`,
+`docs/generation-contract.md`, `docs/early-section-library-storage.md`,
+`docs/pdf-early-section-conversion.md`, `docs/pdf-quality-assessment.md`,
+`docs/local-generation-evaluation.md`, etc.).
+
+### Corpus, models, and papers/ directory
+
+`papers/`, `models/`, `runtimes/`, `artifacts/`, `generation-results/` in a
+local checkout hold local, gitignored working data (source PDFs, GGUF
+models, the pinned `llama.cpp` runtime, artifact manifests, evaluation
+outputs). None of this is committed or redistributed — see the corpus and
+licensing requirements above before adding anything under these paths or
+touching `.gitignore`.
 
 ## Python conventions
 

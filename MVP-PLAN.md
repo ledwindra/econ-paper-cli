@@ -63,11 +63,11 @@ scope for M2 or M4.
 
 | # | Milestone | Exit condition |
 | --- | --- | --- |
-| Gate 0 | Reconcile MVP contract | Requirements and status documentation agree on corpus, model, index, and finding-kind scope. |
-| M1 | Evidence inspection ✅ | A user can inspect the full stored passage for a citation in both CLI surfaces, safely rendered (not byte-identical — see M1 section). Implemented: `/show` in the shell, `--show-evidence` on one-shot `chat`, shared `format_evidence_detail` renderer, control-character/CRLF sanitization (both the evidence view and the default citation block), reviewed adversarially (codex, then an independent review) and fixed. |
-| M2 | Real `econpapers update` | Explicit update repairs approved managed artifacts without touching user data or silently changing versions. |
+| Gate 0 | Reconcile MVP contract | 2 of 4 items resolved (model download/default, 2026-08-08); index-scope and causal-classification-guarantee questions remain open — maintainer's call. |
+| M1 | Evidence inspection ✅ done | A user can inspect the full stored passage for a citation in both CLI surfaces. |
+| M2 | Real `econpapers update` | Explicit update repairs approved managed artifacts without touching user data or silently changing versions. **In progress — see design below.** |
 | M3 | Real-PDF acceptance corpus | All six approved issue #59 cases pass their section-boundary and contamination assertions. |
-| M4 | Documentation truth pass | Current behavior, limitations, licenses, and commands are accurately documented. |
+| M4 | Documentation truth pass | Mostly done as a side effect of M1's review cycle; a few items remain — see M4 section. |
 | M5 | Release-readiness verification | Offline, restart, privacy, artifact, and cross-platform checks pass in reproducible environments. |
 
 OCR, conversion beyond Abstract/Introduction, persisted retrieval indexes,
@@ -76,146 +76,27 @@ out of scope unless the maintainer explicitly changes the MVP contract.
 
 ---
 
-## M1 — Evidence inspection ✅ implemented
+## M1 — Evidence inspection ✅ done
 
-### Deliverable
+Shipped: `/show`/`/show ID` in the shell, `--show-evidence` on one-shot
+`chat`, one shared renderer (`format_evidence_detail` in
+`chat_command.py`), reusing the passage text `_resolve_citations` already
+validates rather than a new storage read. Evidence state tracks only the
+latest turn — cleared on any non-`answered` outcome and on `/reset` — and
+`/show` never re-reads storage. Passage text is shown in full but *safely
+normalized*, not byte-identical (CRLF→LF, control characters replaced,
+long lines wrapped).
 
-A reader can go from a claim to the full stored passage behind it, without
-knowing a passage ID or opening SQLite.
-
-- Interactive shell: `/show e1` prints that citation's stored passage and
-  provenance. Bare `/show` lists the citation IDs available for the current
-  evidence state.
-- One-shot chat: `econpapers chat "..." --show-evidence` prints each cited
-  passage beneath the citation block.
-- Adding `--show-evidence` is the only thing M1 changes about chat/shell
-  output. With the flag omitted, output is unaffected by evidence
-  inspection specifically.
-
-**On default output changing at all:** it did — but not because of M1.
-Commit `b71ae00` is where claim-level citations, the per-claim "Answer by
-Source" breakdown, and paper-grouped citation rendering first entered this
-repository's git history, in the same commit as M1's evidence-inspection
-work. That code was written and tested in an earlier session and left
-uncommitted; it landed in `b71ae00` because it was still sitting in the
-working tree when a plain "make a git commit" was requested, not because it
-is part of M1. There is no earlier commit that shows chat output before
-that change — git history alone cannot distinguish "M1 didn't touch this"
-from "this was already true," which is exactly why this note exists. The
-claim is verifiable independently of git history: M1's own diff (see
-`format_evidence_detail`/`--show-evidence`/`/show` in `chat_command.py` and
-`interactive_shell.py`) never touches `_render_citation_lines`'s grouping
-logic or the claim-rendering block in `format_chat_command_output`. Two
-tests pin this down directly:
-`test_default_chat_output_is_unchanged_without_show_evidence` (golden output
-for the paper-grouped citation block) and
-`test_default_output_shows_answer_by_source_without_show_evidence` (the
-per-claim breakdown renders with no flag at all, so `--show-evidence` is not
-what causes it to appear).
-
-The stored passage text is shown in full — nothing is truncated or
-summarized — but rendering is *safely normalized*, not byte-identical:
-CRLF/CR line endings become LF, terminal control characters are replaced
-with a placeholder glyph, and long lines are word-wrapped. Provenance
-(section, pages, rank, score, source path) is shown alongside it. This does
-not claim the passage semantically proves the model's claim.
-
-### State semantics
-
-Evidence state is explicitly defined as follows:
-
-- after an `answered` turn, it contains that turn’s surviving citations;
-- after `withheld`, `abstained`, `no_matches`, empty-library, typed-failure, or
-  internal-failure turns, it is empty;
-- `/reset` clears it as well as conversation history;
-- a citation ID is valid only for the current evidence state and is not a
-  durable identifier across turns.
-
-This “latest turn” rule avoids showing stale evidence after a failed or
-non-answering question. The shell must never reload passages from storage at
-`/show` time; it renders the immutable citation details already resolved by
-`ask()`.
-
-### Design
-
-The passage text is already available and validated during citation resolution.
-`_resolve_citations` looks up the durable passage and verifies equality with the
-retrieved passage before building each `ChatCitationDetail`.
-
-1. Add `passage_text: str` to `ChatCitationDetail`, populated from the
-   validated stored passage. Do not add a new storage protocol method or a
-   `/show`-time storage read.
-
-2. Add one shared renderer,
-   `format_evidence_detail(citations, *, citation_id=None)`, beside
-   `_render_citation_lines`. The renderer must:
-
-   - render the same evidence block for the shell and one-shot chat;
-   - preserve passage content, including meaningful line breaks and blank lines;
-   - wrap long lines without truncating text;
-   - work for passages longer than the default 1,200-character budget;
-   - render section, page, paper, source, rank, and score metadata; and
-   - define a safe policy for terminal control characters in source text.
-
-3. Shell state: store the latest turn’s citations on
-   `InteractiveShellSession`, replacing them after every `ask()` outcome and
-   clearing them on `/reset`. Dispatch `/show` beside the existing commands.
-   Handle empty state, malformed requests, unknown IDs, and IDs unavailable
-   because the latest turn was not answered with plain messages and keep the
-   loop alive.
-
-4. Chat: add `--show-evidence` to the chat parser, pass it through
-   `ChatCommandOptions` and `run_chat`, and consume it only in output
-   rendering. No retrieval, generation, prompt, or citation-validation logic
-   changes.
-
-### Files
-
-- `src/econ_paper_cli/services/chat_command.py`
-- `src/econ_paper_cli/services/interactive_shell.py`
-- `src/econ_paper_cli/cli.py`
-- `src/econ_paper_cli/services/commands.py`
-- `tests/services/test_chat_cli_service.py`
-- `tests/services/test_interactive_shell.py`
-- `tests/test_cli.py`
-- `README.md`, `docs/architecture.md`, and any citation-shape documentation
-
-### Tests
-
-- `passage_text` equals the validated stored passage text.
-- Default chat output is unchanged; opt-in output contains the full passage.
-- Shell and one-shot chat produce identical evidence blocks for identical
-  citation details.
-- `/show` and `/show e1` work after an answered turn.
-- `/show` behaves correctly before any turn and after every non-answered
-  outcome, including typed and internal failures.
-- A later answered turn replaces earlier evidence; `/reset` clears it.
-- Storage is not read after session open, including when `/show` is invoked.
-- Long, multiline, Unicode, blank-line, and control-character-containing text
-  follows the documented rendering policy.
-- Citation IDs from a previous turn are not accepted after the state is cleared
-  or replaced.
-
-### Verification
-
-Run the standard checks from an activated development environment:
-
-```bash
-ruff check .
-ruff format --check .
-pytest
-```
-
-Then run a deterministic smoke test against a temporary SQLite library and
-explicit local configuration/model fixtures. The smoke test must not depend on
-the developer’s home directory, an undocumented private corpus, or an
-unrecorded model installation. Manually confirm `/show e1`, `/show`, an
-unknown ID, `/reset`, and evidence output for a multiline passage.
-
-### Out of scope
-
-M2–M5. No new storage protocol method, persisted retrieval index, prompt
-version, or semantic claim-verification mechanism.
+Landed in `b71ae00`–`9b2e0fa`, reviewed adversarially three times (codex,
+then two independent passes) — findings included a blocking CRLF-rendering
+bug, unsanitized default citation output, and stale `finding_kinds` after
+claim withholding, all fixed with regression tests. Also folded in and
+reconciled docs for claim-level grounding, follow-up resolution, and
+default-model provisioning — pre-existing work from an earlier session that
+had never been committed. See commit messages for full detail; the
+implementation-planning detail that used to live in this section (file
+lists, step-by-step design, verification checklist) is gone now that the
+code and its tests are the source of truth.
 
 ---
 
@@ -229,30 +110,225 @@ artifacts, but it must not overwrite explicitly user-supplied runtime/model
 paths, source PDFs, the SQLite library, or generated user data.
 
 The command must state whether it is repairing the currently pinned version or
-installing a newer approved version. It must not use “update” to conceal a
+installing a newer approved version. It must not use "update" to conceal a
 version change.
 
-### Required behavior
+### Design: almost entirely reuse, not new machinery
+
+`econpapers setup` already implements everything M2 needs at the
+verify/repair/atomic-promote layer:
+
+- `services/runtime_provisioning.ensure_managed_runtime(*, runtime_dir,
+  downloader, extractor, allow_download, ...)` — reuse-if-functional via
+  `verify_managed_install` (receipt + every declared-member checksum), else
+  stage into a sibling temp dir, download, verify, and `os.replace` onto a
+  content-addressed path. A lost promotion race adopts the winner instead of
+  failing (`runtime_provisioning.py:265`-ish `_reuse_if_functional` re-check
+  after `OSError`). This *is* "interrupted/failed updates leave the prior
+  valid artifact usable" and "concurrent updates converge on one verified
+  artifact" — no new code needed for either requirement.
+- `services/model_provisioning.ensure_managed_model(*, model_dir,
+  downloader, model_id, allow_download, ...)` — same shape, single file
+  (`model_dir / artifact.filename`), no archive/extraction step.
+- `adapters/runtime_downloader.UrllibDownloader` /
+  `adapters/runtime_extractor.SafeArchiveExtractor` — HTTPS-only, bounded
+  redirects, incremental size cap, partial-file cleanup on any failure.
+
+M2's real work is orchestration `setup` doesn't need: deciding *which*
+already-configured artifacts are safe to touch, without a fresh CLI-supplied
+identity to lean on the way `setup` has.
+
+1. **Load durable config only** (`ConfigBackend.load()` via the same
+   `JSONConfigStorage`/`--config-path` pattern as `status`). `update` takes
+   no per-invocation runtime/model identity flags — accepting
+   `--model-path`/`--model-id`/etc. would mean "bypass managed provisioning
+   for this call," which is the opposite of what a repair command does.
+   **If no durable config exists, `update` does not create one** — it
+   reports both artifacts `NOT_CONFIGURED` and tells the user to run
+   `econpapers setup` first, exit code 1. This keeps `update` strictly a
+   repair command, never a silent alternate path to initial setup.
+
+2. **Classify runtime as managed or external before touching it**, reusing
+   `runtime_provisioning.locate_managed_install_root(config.executable_path,
+   get_default_runtime_dir())` (public, lexical containment — same function
+   `status`'s `_classify_runtime` uses). `None` → external → skip, report
+   `EXTERNAL_SKIPPED`, never call `ensure_managed_runtime`. Non-`None` →
+   call `ensure_managed_runtime(allow_download=not offline)` for the
+   platform's pinned artifact (there is no user-facing runtime *version*
+   choice the way there is for models, so no version-selection logic is
+   needed here).
+
+3. **Classify model as managed or external the same way**, but there is no
+   existing helper for this (unlike runtime, `status._classify_model` never
+   distinguishes managed/external — it only checks the configured path
+   against the configured checksum). Add one small, pure, testable function
+   next to `ensure_managed_model` in `model_provisioning.py`:
+
+   ```python
+   def locate_managed_model_artifact(
+       model_path: Path,
+       model_dir: Path,
+       catalog: ManagedModelCatalog = MANAGED_MODEL_CATALOG,
+   ) -> ManagedModelArtifact | None:
+       """Return the catalog artifact `model_path` is a managed install of, if any.
+
+       Mirrors `runtime_provisioning.locate_managed_install_root`: lexical
+       parent-directory containment (never resolving symlinks), so a managed
+       model replaced by a symlink to an outside file is not silently
+       reclassified as external and skipped.
+       """
+   ```
+
+   A path counts as managed only if it is lexically `model_dir /
+   <some catalog artifact's filename>` **and** `config.model_id` matches
+   that same artifact's `model_id` (mirroring `_classify_runtime`'s
+   belt-and-suspenders receipt-*and*-config-identity check) — this is what
+   stops `update` from ever switching a user from the 1.5B to the 7B or vice
+   versa: it repairs whichever `model_id` durable config already names, it
+   never defaults to the catalog default. If either check fails, treat as
+   external → skip, report `EXTERNAL_SKIPPED`. Otherwise call
+   `ensure_managed_model(model_id=config.model_id, allow_download=not offline)`.
+
+4. **Outcome enum**, one per artifact (matches the plan's "reused, repaired,
+   unavailable, and failed" requirement plus the not-configured/external
+   cases above):
+
+   ```python
+   class UpdateArtifactOutcome(str, Enum):
+       REUSED = "reused"  # already valid, no download
+       REPAIRED = "repaired"  # was missing/corrupt, now verified
+       EXTERNAL_SKIPPED = "external_skipped"  # user-supplied, not touched
+       NOT_CONFIGURED = "not_configured"  # no durable config at all
+       UNAVAILABLE_OFFLINE = "unavailable_offline"  # needed download, --offline set
+       FAILED = "failed"  # download/verification/IO error
+   ```
+
+   `ensure_managed_runtime`/`ensure_managed_model` don't currently report
+   "did this call actually download or reuse" as a return field for the
+   *runtime* side (the model side already has `ManagedModelInstall.downloaded:
+   bool` — reuse that directly). For runtime, distinguish reused vs. repaired
+   by checking whether `verify_managed_install` already succeeded *before*
+   calling `ensure_managed_runtime` (i.e., `update` does its own cheap
+   pre-check with `verify_managed_install`, catching `CorruptManagedInstallError`,
+   purely to classify the outcome — `ensure_managed_runtime` itself remains
+   the single source of truth for the actual repair).
+
+5. **Exit codes**: `0` if every configured, managed artifact ends `REUSED` or
+   `REPAIRED`; `1` if any is `EXTERNAL_SKIPPED`/`NOT_CONFIGURED`/
+   `UNAVAILABLE_OFFLINE` and nothing failed outright (mirrors `chat`'s
+   `NO_MATCHES`-is-1-not-an-error convention); `2` for a typed/config
+   failure before any provisioning was attempted; `3` if any artifact
+   ends `FAILED`.
+
+6. **CLI surface**: pull `update` out of the generic `command_definitions`
+   tuple in `cli.py` into its own subparser (matching how `setup` and
+   `chat` are already defined explicitly), with only `--offline` and
+   `--config-path` — deliberately not the five runtime/model identity flags,
+   for the reason in step 1.
+
+### Required behavior (unchanged from original scope)
 
 - explicit invocation is the only path that may use the network;
-- `--offline` refuses a required download with a typed, actionable failure;
-- existing valid artifacts are reused without downloading;
-- downloads are staged, size/checksum verified, and atomically promoted;
-- interrupted or failed updates leave the prior valid artifact usable;
-- concurrent updates converge on one verified artifact;
-- runtime and model status remain independently reportable; and
+- `--offline` refuses a required download with a typed, actionable failure —
+  reported per-artifact as `UNAVAILABLE_OFFLINE`, not a hard process failure,
+  since one artifact needing a network the user declined is not the same as
+  a broken update;
+- existing valid artifacts are reused without downloading (`REUSED`);
+- downloads are staged, size/checksum verified, and atomically promoted
+  (already true of `ensure_managed_runtime`/`ensure_managed_model`, reused
+  as-is);
+- interrupted or failed updates leave the prior valid artifact usable
+  (already true, reused as-is — sibling staging dir never touches the
+  existing install until full verification passes);
+- concurrent updates converge on one verified artifact (already true for
+  runtime via the race-adoption branch; for the model, `os.replace` onto a
+  non-preexisting target is safe because colliding installs are
+  checksum-identical by construction);
+- runtime and model status remain independently reportable (one outcome
+  per artifact, never conflated); and
 - output and exit codes distinguish reused, repaired, unavailable, and failed
-  artifacts.
+  artifacts (§4/§5 above; also distinguishes external-skipped and
+  not-configured, which the original scope note didn't anticipate but the
+  design requires to satisfy "must not overwrite explicitly user-supplied
+  runtime/model paths").
 
-### Tests and documentation
+### Files
 
-Add service, adapter, CLI, corruption, interruption, offline, and concurrency
-tests using injected downloaders and temporary directories. Document every
-downloaded artifact’s source, license, redistribution status, expected size,
-checksum, update policy, and whether it contains copyrighted full text.
+- `src/econ_paper_cli/services/update_command.py` (new) — orchestration,
+  outcome enum, `execute_update_command`/`run_update_command`, output
+  rendering. Mirrors `status_command.py`'s shape (read config, classify,
+  report) more than `setup_command.py`'s (which mutates config).
+- `src/econ_paper_cli/services/model_provisioning.py` — add
+  `locate_managed_model_artifact` (pure, no I/O beyond what callers already
+  do).
+- `src/econ_paper_cli/services/commands.py` — replace the placeholder
+  `run_update` with a thin CLI-args-to-options adapter calling
+  `run_update_command`, matching `run_status`/`run_chat`'s existing shape.
+- `src/econ_paper_cli/cli.py` — dedicated `update` subparser.
+- `tests/services/test_update_command.py` (new).
+- `tests/services/test_model_provisioning.py` — tests for
+  `locate_managed_model_artifact`.
+- `tests/test_cli.py` — parser/dispatch tests for the new flags.
+- `README.md`, `docs/roadmap.md`, `docs/managed-runtime-provisioning.md` —
+  replace "`update` remains a deterministic placeholder" language.
 
-Acceptance requires a clean temporary install in which `status` reports the
-repaired artifact and a second `update` performs no network operation.
+### Tests
+
+Reuse the exact patterns already in `tests/services/test_setup_command.py`
+(fake `Downloader`/`ArchiveExtractor` implementing the Protocols directly,
+`_fake_install`-style fixture builders) rather than inventing new doubles:
+
+- no durable config → both artifacts `NOT_CONFIGURED`, exit code 1, no
+  network call attempted;
+- valid managed runtime + valid managed model already installed → both
+  `REUSED`, zero downloader calls, exit code 0;
+- corrupt/missing managed runtime or model → `REPAIRED` after a real
+  `ensure_managed_runtime`/`ensure_managed_model` call with a fake
+  downloader, exit code 0, and a second `update` immediately after reports
+  `REUSED` with zero further downloader calls (this is the plan's stated
+  acceptance test);
+- externally-supplied runtime/model (`config.executable_path`/`model_path`
+  outside the managed directories, or `model_id` not in the catalog) →
+  `EXTERNAL_SKIPPED`, downloader never invoked for that artifact, file left
+  byte-identical (hash the file before/after);
+- `--offline` with something needing a download → `UNAVAILABLE_OFFLINE`,
+  no network call, prior valid artifact (if any) left untouched;
+- download interrupted (fake downloader raises partway) → prior valid
+  install, if one existed, still verifies afterward; if none existed,
+  `FAILED` and no partial file left in the managed directory;
+- concurrent-update race: two `ensure_managed_runtime`/`ensure_managed_model`
+  calls against the same target — this property lives in
+  `runtime_provisioning.py`/`model_provisioning.py` already; confirm (don't
+  re-derive) via `tests/services/test_runtime_provisioning.py` /
+  `test_model_provisioning.py`, adding a same-target-race test there only if
+  one doesn't already exist;
+- `locate_managed_model_artifact`: matches only when both filename
+  containment and `model_id` agree; a symlink at the managed path is not
+  lexically escaped (mirrors the existing
+  `locate_managed_install_root` symlink test on the runtime side).
+
+### Verification
+
+```bash
+ruff check .
+ruff format --check .
+pytest
+```
+
+Then a manual pass against a real (throwaway) config/library directory:
+`econpapers setup` (fresh install) → `econpapers update` (expect all
+`REUSED`, zero network) → deliberately corrupt the installed GGUF (truncate
+a byte) → `econpapers update` (expect `REPAIRED`, one download) →
+`econpapers update --offline` against a corrupted install (expect
+`UNAVAILABLE_OFFLINE`, no download, clear message).
+
+### Out of scope
+
+Re-analyzing the library against a newer section-detection/generation
+policy version (that's a different concern — reusing existing analysis
+records under a fingerprint — and not part of this plan). Adding an update
+*policy* field to the artifact manifests (tracked separately as the known
+gap noted under Gate 0 above).
 
 ---
 
@@ -281,21 +357,31 @@ the private acceptance run must be an explicit release check.
 
 ## M4 — Documentation truth pass
 
-Reconcile the status and requirements documents after Gate 0 and the completed
-milestones. At minimum, audit:
+Largely done as a side effect of the M1 review cycle, not as a standalone
+pass: **setup/model/runtime download behavior**, **default-model status**,
+**follow-up behavior and `/reset` semantics**, and **evidence-inspection
+syntax and output** are all now current across README/AGENTS.md/
+docs/product-requirements.md/docs/roadmap.md/docs/generation-contract.md/
+docs/managed-runtime-provisioning.md/docs/local-generation-evaluation.md
+(see commits `583eb1b`, `8f2f90c`, `9b2e0fa`).
 
-- supported corpus scope: Abstract/Introduction versus full-document ingestion;
-- whether a persisted or bundled retrieval index exists;
-- setup, model, and runtime download behavior;
-- default-model status and artifact licenses;
-- follow-up behavior and `/reset` semantics;
-- evidence-inspection syntax and output;
-- offline, privacy, restart, and cross-platform guarantees; and
-- the distinction between structural grounding checks and semantic truth.
+Still outstanding:
 
-Documentation must describe current behavior, not planned behavior. Add a
-reproducible quickstart that identifies the required local artifacts and
-temporary/configurable library paths.
+- supported corpus scope: Abstract/Introduction versus full-document
+  ingestion — accurate in places, not audited end-to-end;
+- whether a persisted or bundled retrieval index exists — mentioned
+  correctly in a few places, not swept for every stale reference the way
+  the default-model status was;
+- artifact licenses beyond the model/runtime manifests already documented;
+- the distinction between structural grounding checks and semantic truth —
+  partially covered by the `finding_kinds`/withholding notes added during
+  M1, not a dedicated pass;
+- offline, privacy, restart, and cross-platform guarantees — this is M5's
+  job, not a doc-pass item;
+- a reproducible quickstart identifying required local artifacts and
+  temporary/configurable library paths — not started.
+
+Documentation must describe current behavior, not planned behavior.
 
 ---
 
