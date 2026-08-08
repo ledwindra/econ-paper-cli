@@ -21,15 +21,13 @@ jobs:
           - macos-latest
           - windows-latest
         python-version:
-          # 3.10 itself is not used here: even with check-latest, some
-          # runner images (macOS, Windows) only have 3.10.11 available,
-          # which is below pyproject.toml's >=3.10.12 floor (safe
-          # tarfile extraction, PEP 706 filter="data", used by managed
-          # runtime provisioning, issue #58) and fails installation.
-          # 3.11+ is always above that floor on every OS, so it is used
-          # here for cross-platform coverage; the floor itself is
-          # pinned and explicitly tested by the separate `floor-check`
-          # job below (ubuntu-only, exact 3.10.12).
+          # 3.10 is not used in this matrix. The floor (pyproject.toml's
+          # >=3.10.12 — safe tarfile extraction, PEP 706 filter="data",
+          # used by managed runtime provisioning, issue #58) is pinned
+          # and tested by the exact-version `floor-check` jobs below,
+          # which cover the platforms where a 3.10.12+ build exists.
+          # 3.11+ is above the floor on every OS, so it is what this
+          # matrix uses for broad cross-platform coverage.
           - "3.11"
           - "3.14"
 
@@ -59,8 +57,26 @@ jobs:
         run: pytest
 
   floor-check:
-    name: ubuntu-latest / Python 3.10.12 (exact floor)
-    runs-on: ubuntu-latest
+    # Exact-floor coverage, on every platform where actions/python-versions
+    # publishes a 3.10.12+ build. Probed 2026-08-08 against
+    # actions/python-versions versions-manifest.json:
+    #
+    #   3.10.11        linux x64/arm64, darwin x64/arm64, win32 x64/x86
+    #   3.10.12-3.10.20  linux x64/arm64, darwin x64 only, win32 NONE
+    #
+    # So macOS floor coverage needs an x64 runner label (macos-latest is
+    # arm64, and no darwin/arm64 build exists at or above the floor), and
+    # Windows floor coverage is not available at all — recorded as a
+    # release limitation in docs/release-checklist.md. Re-run the probe
+    # before each release; if a win32 build appears, add it here.
+    name: ${{ matrix.os }} / Python 3.10.12 (exact floor)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-15-intel
     steps:
       - name: Check out repository
         uses: actions/checkout@v6

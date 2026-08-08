@@ -138,6 +138,99 @@ def test_a_download_failing_verification_is_discarded_not_promoted(
     assert list(tmp_path.iterdir()) == []
 
 
+class TransportFailureDownloader:
+    """Raise partway through a transfer, as a dropped connection would."""
+
+    def __init__(self) -> None:
+        self.urls: list[str] = []
+
+    def download(
+        self, url: str, destination: Path, *, expected_size_bytes: int
+    ) -> None:
+        self.urls.append(url)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(_PAYLOAD[:5])
+        raise ConnectionError("simulated transport failure mid-download")
+
+
+def test_interrupted_repair_leaves_the_prior_corrupt_file_exactly_as_it_was(
+    tmp_path: Path,
+) -> None:
+    """The guarantee for an interrupted repair is *no partial promotion*, not
+    "a good install survives" — by definition there was no good install, or
+    no repair would have been attempted. What must hold is that the bytes on
+    disk are unchanged, so the user still has whatever they had and a re-run
+    can still repair it."""
+    installed = tmp_path / ARTIFACT.filename
+    installed.write_bytes(b"corrupt")
+    downloader = TransportFailureDownloader()
+
+    with pytest.raises(ConnectionError):
+        ensure_managed_model(model_dir=tmp_path, downloader=downloader, catalog=CATALOG)
+
+    assert downloader.urls == [ARTIFACT.source_url]
+    assert installed.read_bytes() == b"corrupt"
+    # Nothing partial promoted, and no staging directory left behind.
+    assert [item.name for item in tmp_path.iterdir()] == [ARTIFACT.filename]
+
+
+def test_failed_staging_verification_leaves_the_prior_corrupt_file_intact(
+    tmp_path: Path,
+) -> None:
+    """Same guarantee at the other failure point: the download completed but
+    did not verify, so it must be discarded without disturbing what was
+    already installed."""
+    installed = tmp_path / ARTIFACT.filename
+    installed.write_bytes(b"corrupt")
+
+    with pytest.raises(StagedModelVerificationError, match="did not match"):
+        ensure_managed_model(
+            model_dir=tmp_path,
+            downloader=RecordingDownloader(payload=b"wrong content entirely"),
+            catalog=CATALOG,
+        )
+
+    assert installed.read_bytes() == b"corrupt"
+    assert [item.name for item in tmp_path.iterdir()] == [ARTIFACT.filename]
+
+
+def test_a_successful_repair_installs_the_new_bytes_over_the_corrupt_ones(
+    tmp_path: Path,
+) -> None:
+    """The third outcome, stated so it is not confused with the two above:
+    once staging verifies, ``os.replace`` overwrites the corrupt file. The
+    prior bytes are *supposed* to be gone here."""
+    installed = tmp_path / ARTIFACT.filename
+    installed.write_bytes(b"corrupt")
+
+    install = ensure_managed_model(
+        model_dir=tmp_path, downloader=RecordingDownloader(), catalog=CATALOG
+    )
+
+    assert install.downloaded is True
+    assert installed.read_bytes() == _PAYLOAD
+    assert [item.name for item in tmp_path.iterdir()] == [ARTIFACT.filename]
+
+
+def test_a_verified_model_is_reused_with_zero_downloader_calls(
+    tmp_path: Path,
+) -> None:
+    """The first outcome: no interrupt is even reachable over a valid install,
+    because no download is attempted. Asserted on a recording downloader so
+    the claim is "zero calls", not merely "did not raise"."""
+    installed = tmp_path / ARTIFACT.filename
+    installed.write_bytes(_PAYLOAD)
+    downloader = RecordingDownloader()
+
+    install = ensure_managed_model(
+        model_dir=tmp_path, downloader=downloader, catalog=CATALOG
+    )
+
+    assert downloader.urls == []
+    assert install.downloaded is False
+    assert installed.read_bytes() == _PAYLOAD
+
+
 def test_a_corrupt_existing_model_is_kept_when_offline_refuses_the_repair(
     tmp_path: Path,
 ) -> None:

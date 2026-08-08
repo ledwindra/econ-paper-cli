@@ -749,10 +749,23 @@ Pass conditions, required in both tiers:
     managed executable; **(3)** ask a second question. Only then does
     `generate()` skip readiness, reach `_start_process`, and produce
     `LlamaCppProcessError` → `INTERNAL_FAILURE`. Assert that outcome, an
-    actionable message, no wrong answer, and no unhandled exception — and
-    compare turn 1's rendered output and `/show` before and after step 3,
-    which step 1 now provides as a genuine prior turn rather than an empty
-    baseline. An explicit `check_readiness()` call in place of step 1 is
+    actionable message, no wrong answer, and no unhandled exception, with
+    turn 1's own rendered output still intact — step 1 provides that as a
+    genuine prior turn rather than an empty baseline.
+
+    `/show` is compared across step 3 too, but **not** for byte-identity, and
+    this is where an earlier draft of this plan was wrong. `/show` reads
+    `last_turn_citations`, which is scoped to the most recent turn and
+    deliberately cleared by any non-answered turn so evidence is never left
+    visible as though it belonged to the question just asked
+    (`services/interactive_shell.py`, `last_turn_citations`). After the failed
+    turn, `/show` therefore reports that no evidence is available — assert
+    *that*, since asserting byte-identity here would assert against the
+    product's intended behavior. Byte-identical `/show` is required in the
+    concurrency scenario, where the session is untouched and only an outside
+    writer changed; it is not required here, where the session itself moved on
+    to a turn that produced no evidence. An explicit `check_readiness()` call
+    in place of step 1 is
     acceptable only for a unit-level variant; the shell-level test wants the
     real first turn. That pins today's behavior so the follow-up issue — if
     taken — changes a test on purpose instead of discovering the mapping by
@@ -859,27 +872,32 @@ in-file rationale (`.github/workflows/ci.yml`:24-32) says the macOS and
 Windows runner images offer only 3.10.11, which is below `pyproject.toml`'s
 `requires-python = ">=3.10.12"` floor.
 
-That rationale is a point-in-time observation, not a standing fact, and M5
-must not restate it as one — `actions/python-versions` publishes a version
-manifest that changes over time and includes source-built macOS packages for
-some versions. So M5 requires a **contemporaneous availability probe**: query
-the `actions/python-versions` manifest for a 3.10.12-or-later 3.10.x build on
-`macos-latest` and `windows-latest`, and record the result with its date in
-the release checklist.
+That rationale was a point-in-time observation, not a standing fact, so M5
+requires a **contemporaneous availability probe** rather than restating it.
+The probe (and the command that reproduces it) is recorded in
+`docs/release-checklist.md` § 5 and must be re-run each release.
 
-- If a usable build **exists**, extend the matrix to cover the floor on those
-  platforms; the limitation disappears and the stale `ci.yml` comment is
+**Probe result, 2026-08-08.** Every 3.10.12–3.10.20 entry in the
+`actions/python-versions` manifest publishes `linux/x64`, `linux/arm64`, and
+`darwin/x64` — and **no `win32` build at all**. 3.10.11 is the last 3.10 with
+Windows installers, and it is below the floor. `darwin/arm64` also stops at
+3.10.11. So the two platforms resolve differently, which the original blanket
+assumption obscured:
+
+- **macOS floor coverage exists and has been added.** It needs an x64 runner
+  label, because `macos-latest` is arm64 and no `darwin/arm64` build exists at
+  or above the floor. `.github/workflows/ci.yml`'s `floor-check` job is now a
+  matrix over `ubuntu-latest` and `macos-15-intel`, and the stale comment was
   corrected in the same change.
-- If it **does not**, record the named limitation — *floor-version coverage is
-  Linux-only; on macOS and Windows the lowest tested interpreter is 3.11* —
-  citing the probe result and date, not a static assumption. Building 3.10.12
-  from source on those runners remains available at accepted cost and
-  flakiness if the maintainer wants the coverage.
+- **Windows floor coverage does not exist**, and is recorded as a named
+  limitation: *no `win32` build is published at or above the 3.10.12 floor; on
+  Windows the lowest tested interpreter is 3.11.* If a `win32` build appears,
+  the probe will show it and the job gains a third matrix entry.
 
-Either way, M5 certifies exactly `{ubuntu, macos, windows} × {3.11, 3.14}`
-plus `ubuntu × 3.10.12` — stated in those terms, never as "cross-platform
-support" in general — and the release report records the interpreter versions
-each job actually resolved, not the matrix strings.
+M5 therefore certifies exactly `{ubuntu, macos, windows} × {3.11, 3.14}` plus
+`{ubuntu, macos-15-intel} × 3.10.12` — stated in those terms, never as
+"cross-platform support" in general — and the release report records the
+interpreter versions each job actually resolved, not the matrix strings.
 
 ### Release checklist artifact
 

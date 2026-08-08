@@ -603,6 +603,25 @@ def test_subprocess_runner_rejects_output_above_capture_bound() -> None:
         )
 
 
+def test_launching_a_vanished_executable_raises_a_typed_process_error(
+    tmp_path: Path,
+) -> None:
+    """The first half of the mid-session runtime-repair chain.
+
+    If the executable disappears between readiness and launch — which is what
+    a concurrent ``update`` repairing the runtime directory does — ``Popen``
+    raises ``OSError`` and the adapter converts it to ``LlamaCppProcessError``.
+    The shell then maps *that* to ``INTERNAL_FAILURE``; see
+    ``tests/services/test_release_readiness.py`` for the second half.
+    """
+    missing = tmp_path / "runtime" / "llama-completion"
+
+    with pytest.raises(LlamaCppProcessError) as caught:
+        SubprocessRunner._start_process([str(missing)], environment={})
+
+    assert "Unable to start" in str(caught.value)
+
+
 @pytest.mark.parametrize("stream_name", ("stdout", "stderr"))
 def test_subprocess_runner_terminates_live_process_and_closes_pipes_on_overflow(
     tmp_path: Path,

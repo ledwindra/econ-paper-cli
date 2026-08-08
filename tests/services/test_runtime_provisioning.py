@@ -779,10 +779,13 @@ def test_pre_rmtree_recheck_adopts_valid_install_installed_during_preemption(
 
 
 def test_concurrent_repair_where_recheck_loses_race(tmp_path: Path) -> None:
-    """Test recoverability when finding-8 re-check itself loses the race.
-    A fake hook installs a valid dir *after* re-check reports corrupt but *before* rmtree runs.
-    With working downloader, ensure_managed_runtime returns a valid install.
-    With failing downloader, it raises and leaves target empty; later call repairs it."""
+    """Repairing over a corrupt install with a working downloader converges on
+    a valid install at the same content-addressed path.
+
+    The interrupted-repair half of this scenario is
+    ``test_interrupted_repair_of_corrupt_install_recovers_on_a_later_run``
+    below.
+    """
     manifest, archive_bytes = _manifest_and_bytes(tmp_path)
     runtime_dir = tmp_path / "runtime"
     artifact = manifest.artifacts[0]
@@ -801,6 +804,104 @@ def test_concurrent_repair_where_recheck_loses_race(tmp_path: Path) -> None:
     )
     assert result.install_dir == final_dir
     verify_managed_install(result.install_dir)
+
+
+def test_interrupted_repair_of_corrupt_install_recovers_on_a_later_run(
+    tmp_path: Path,
+) -> None:
+    """The honest recovery behavior for the case the plan does *not* claim is
+    atomic.
+
+    A directory cannot be replaced onto a non-empty destination the way
+    ``os.replace`` handles a single file, so repairing a corrupt runtime
+    removes it before restaging. An interrupt in that window therefore does
+    destroy the corrupt install — that is the accepted limitation. What must
+    still hold, and is asserted here, is that (a) no partially extracted tree
+    is ever promoted to the final path, (b) the target is absent rather than
+    a tree that would pass verification while being incomplete, and (c) a
+    later run converges on a verified install.
+    """
+    manifest, archive_bytes = _manifest_and_bytes(tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    artifact = manifest.artifacts[0]
+    final_dir = runtime_dir / content_addressed_install_dir_name(artifact)
+    final_dir.mkdir(parents=True)
+    (final_dir / "corrupt.txt").write_bytes(b"corrupt")
+
+    class _InterruptedDownloader:
+        def download(
+            self, url: str, destination: Path, *, expected_size_bytes: int
+        ) -> None:
+            raise ConnectionError("simulated interruption during repair")
+
+    with pytest.raises(ConnectionError):
+        ensure_managed_runtime(
+            runtime_dir=runtime_dir,
+            downloader=_InterruptedDownloader(),
+            extractor=_FakeExtractor(),
+            manifest=manifest,
+            detected=_DETECTED,
+            executable_readiness_checker=_noop_checker,
+        )
+
+    # (a) and (b): the corrupt tree is gone and nothing took its place; no
+    # staging directory survived either.
+    assert not final_dir.exists()
+    assert list(runtime_dir.iterdir()) == []
+
+    # (c): a later run with a working downloader repairs it.
+    recovered = ensure_managed_runtime(
+        runtime_dir=runtime_dir,
+        downloader=_FakeDownloader(archive_bytes),
+        extractor=_FakeExtractor(),
+        manifest=manifest,
+        detected=_DETECTED,
+        executable_readiness_checker=_noop_checker,
+    )
+    assert recovered.install_dir == final_dir
+    verify_managed_install(recovered.install_dir)
+
+
+def test_interrupted_reinstall_never_touches_an_already_valid_install(
+    tmp_path: Path,
+) -> None:
+    """Preservation *is* guaranteed when the existing install verifies: the
+    early reuse path returns before any download is attempted, so there is no
+    interrupt window at all. Asserted with a downloader that fails the test if
+    called, plus byte-level comparison of the whole tree."""
+    manifest, archive_bytes = _manifest_and_bytes(tmp_path)
+    runtime_dir = tmp_path / "runtime"
+
+    first = ensure_managed_runtime(
+        runtime_dir=runtime_dir,
+        downloader=_FakeDownloader(archive_bytes),
+        extractor=_FakeExtractor(),
+        manifest=manifest,
+        detected=_DETECTED,
+        executable_readiness_checker=_noop_checker,
+    )
+    before = {
+        path.relative_to(runtime_dir).as_posix(): path.read_bytes()
+        for path in sorted(runtime_dir.rglob("*"))
+        if path.is_file()
+    }
+
+    second = ensure_managed_runtime(
+        runtime_dir=runtime_dir,
+        downloader=_BoomDownloader(),
+        extractor=_FakeExtractor(),
+        manifest=manifest,
+        detected=_DETECTED,
+        executable_readiness_checker=_noop_checker,
+    )
+
+    after = {
+        path.relative_to(runtime_dir).as_posix(): path.read_bytes()
+        for path in sorted(runtime_dir.rglob("*"))
+        if path.is_file()
+    }
+    assert second.install_dir == first.install_dir
+    assert after == before
 
 
 def test_classify_runtime_origin_requires_declared_identity() -> None:

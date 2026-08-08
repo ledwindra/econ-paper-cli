@@ -246,7 +246,11 @@ Not yet implemented:
   to `setup`/`update`, SQLite close/reopen round-trips, cross-platform CI),
   but the consolidated release-readiness pass is M5 in
   [`../MVP-PLAN.md`](../MVP-PLAN.md)
-- Document artifact licenses and release procedures (M4 sweep 5 and M5)
+- Document artifact licenses and release procedures — artifact licenses are
+  recorded in [`artifact-licensing.md`](artifact-licensing.md) (M4 sweep 5)
+  and the release procedure in
+  [`release-checklist.md`](release-checklist.md) (M5); what remains is
+  executing the checklist and committing its run record
 
 "Connect the approved library, ingestion, retrieval, and generation adapters"
 was removed from this list as complete: the Completed items directly above
