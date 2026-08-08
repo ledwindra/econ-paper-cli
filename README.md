@@ -97,6 +97,42 @@ econpapers analyze TARGET_PATH [--max-passage-characters 1200]
 Bare `econpapers` (no command) opens the interactive shell described above;
 `econpapers --help` still prints normal CLI help and exits.
 
+### Quickstart
+
+From a clean checkout, this is the whole path to a cited answer:
+
+```bash
+python -m pip install -e .
+econpapers setup                          # downloads and verifies the pinned runtime + 1.5B model
+econpapers analyze /path/to/your/papers   # one PDF or a directory; safe to re-run
+econpapers                                # interactive shell over what you just analyzed
+```
+
+`setup` only needs to run once (it's idempotent and reuses whatever already
+verifies); `analyze` is safe to re-run over the same or a growing directory,
+since it skips PDFs it has already ingested. After that, `econpapers` (shell)
+or `econpapers chat QUESTION` both work offline.
+
+Everything `setup`/`analyze` write lands in per-user application directories,
+never inside the repository or working directory, each independently
+overridable:
+
+| What | Default location | Override |
+| --- | --- | --- |
+| SQLite library/database | Windows `%LOCALAPPDATA%\econpapers`; macOS `~/Library/Application Support/econpapers`; Linux `${XDG_DATA_HOME:-~/.local/share}/econpapers` | `ECONPAPERS_LIBRARY_DIR` |
+| Durable runtime/model configuration | Windows `%LOCALAPPDATA%\econpapers\config`; macOS `~/Library/Application Support/econpapers/config`; Linux `${XDG_CONFIG_HOME:-~/.config}/econpapers` | `ECONPAPERS_CONFIG_DIR` |
+| Managed `llama.cpp` runtime install | `<library dir>/runtime` | `ECONPAPERS_RUNTIME_DIR` |
+| Managed GGUF model install | `<library dir>/models` | `ECONPAPERS_MODEL_DIR` |
+
+The runtime and model directories nest under the library directory by
+default, so setting only `ECONPAPERS_LIBRARY_DIR` moves all three together;
+set `ECONPAPERS_RUNTIME_DIR`/`ECONPAPERS_MODEL_DIR` explicitly to pin either
+one somewhere else instead. `ECONPAPERS_CONFIG_DIR` is always independent of
+the other three. Source PDFs you point `analyze` at are always read in place
+and never moved, modified, or deleted. Run `econpapers status` at any point
+to see the resolved paths, artifact readiness, and stored paper/passage
+counts for your current environment.
+
 ### Choosing a model
 
 `econpapers setup` provisions a model for you: with no model flags at all it
@@ -118,6 +154,13 @@ special hardware, which is what "CPU-capable, no GPU required" has to mean for
 a first run. Move to the 7B when you want answers you would actually quote and
 have the disk and memory to spare. Nothing else changes: same command, same
 library, same citation and grounding checks.
+
+Both pinned GGUFs are Apache-2.0. The 1.5B is the Qwen2.5 1.5B Instruct GGUF
+published by Alibaba Cloud (Qwen); the 7B is a bartowski quantization of the
+same Qwen2.5 7B Instruct base weights. Neither this repository's MIT license
+nor its checksum pin changes the upstream model's license — see
+`domain/model_manifest.py`'s `license_name`/`attribution_text` fields for the
+exact recorded text per artifact.
 
 ```bash
 econpapers setup                                       # default 1.5B
