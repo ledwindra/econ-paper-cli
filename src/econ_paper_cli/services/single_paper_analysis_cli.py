@@ -415,6 +415,21 @@ def format_batch_result_output(result: BatchResult, db_path: Path | str) -> str:
     return "\n\n".join(sections)
 
 
+def _render_batch_progress(current: int, total: int, path: Path) -> None:
+    """Render live directory progress without contaminating the final report."""
+    stream = sys.stderr
+    if stream.isatty():
+        width = 30
+        filled = int(width * current / total) if total else width
+        bar = "#" * filled + "-" * (width - filled)
+        stream.write(f"\rAnalyzing [{bar}] {current}/{total}: {path.name}")
+        if current == total:
+            stream.write("\n")
+    else:
+        stream.write(f"Analyzing {current}/{total}: {path}\n")
+    stream.flush()
+
+
 def _build_settings(options: AnalyzeCommandOptions) -> SinglePaperAnalysisSettings:
     """Build and validate SinglePaperAnalysisSettings from CLI options."""
     q_settings = (
@@ -727,6 +742,7 @@ def run_batch_analysis(
     settings: SinglePaperAnalysisSettings,
     conversion_settings: PDFConversionSettings,
     file_inspector: Callable[[Path], FileInspectionResult] = inspect_local_file,
+    progress_callback: Callable[[int, int, Path], None] | None = None,
     timestamp_provider: Callable[[], str] = lambda: datetime.now(
         timezone.utc
     ).isoformat(),
@@ -747,7 +763,9 @@ def run_batch_analysis(
     typed_failures = 0
     unexpected_failures = 0
     seen_checksums: dict[str, Path] = {}
-    for pdf_path in pdf_paths:
+    for current, pdf_path in enumerate(pdf_paths, start=1):
+        if progress_callback is not None:
+            progress_callback(current, len(pdf_paths), pdf_path)
         try:
             preflight = run_ingestion_preflight(
                 pdf_path,
@@ -1006,6 +1024,7 @@ def run_single_paper_analysis_command(
                     settings,
                     conversion_settings,
                     file_inspector=file_inspector,
+                    progress_callback=_render_batch_progress,
                     timestamp_provider=timestamp_provider,
                 )
             except IngestionError as err:

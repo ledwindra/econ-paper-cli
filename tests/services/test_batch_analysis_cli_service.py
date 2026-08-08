@@ -310,6 +310,29 @@ def test_directory_ordering_is_deterministic_and_canonical(
     assert "Total discovered:    4" in out
 
 
+def test_directory_analysis_reports_progress_on_stderr(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    _write_pdf(papers_dir / "alpha.pdf")
+    _write_pdf(papers_dir / "beta.pdf", content=b"%PDF-1.4 second paper")
+
+    code = run_single_paper_analysis_command(
+        _make_opts(papers_dir, tmp_path),
+        extractor=FakePDFExtractor(),
+        generator=CountingFakeGenerator(),
+        storage=SQLiteStorage(":memory:"),
+    )
+
+    captured = capsys.readouterr()
+    assert code == CLIExitCode.SUCCESS
+    assert "Analyzing 1/2:" in captured.err
+    assert "Analyzing 2/2:" in captured.err
+    assert "Analyzing 1/2:" not in captured.out
+    assert "=== Batch Summary ===" in captured.out
+
+
 # ---------------------------------------------------------------------------
 # Within-batch duplicate detection
 # ---------------------------------------------------------------------------
