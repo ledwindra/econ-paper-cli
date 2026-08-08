@@ -55,13 +55,19 @@ The MVP must:
 - ground substantive claims in supplied evidence and abstain when evidence is
   insufficient;
 - report a backend-declared descriptive-versus-causal characterization *when
-  the model supplies one*, and retain uncertainty or disagreement. The MVP
-  does not undertake to classify findings itself: the **[current]**
-  implementation is a response-level `finding_kinds` label that the model
-  asserts and may legitimately omit, leaving an answered response with no
-  characterization at all. When present, the label is structurally validated
-  (legal enum values, no duplicates), and in the default `llama.cpp` adapter
-  it is additionally constrained by that adapter's grammar. It is **not**
+  it remains applicable to the answer shown* — that is, when the model
+  supplied one and no claim was withheld — and retain uncertainty or
+  disagreement. The MVP does not undertake to classify findings itself: the
+  **[current]** implementation is a response-level `finding_kinds` label that
+  the model asserts and may legitimately omit, leaving an answered response
+  with no characterization at all. Because the label describes the whole
+  original response rather than any single claim, `chat` and the interactive
+  shell also suppress a supplied label once cross-paper grounding has
+  withheld any claim, rather than risk mislabeling the surviving answer.
+  Whenever the model supplies a label — reported or later suppressed — it is
+  structurally validated (legal enum values, no duplicates), and in the
+  default `llama.cpp` adapter it is additionally constrained by that
+  adapter's grammar. It is **not**
   verified against the cited evidence, so nothing here determines whether a
   finding is causal; semantic validation of that characterization is
   **[planned]**. Retaining uncertainty and disagreement is prompt-level
