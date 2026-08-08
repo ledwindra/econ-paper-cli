@@ -58,8 +58,10 @@ Completed:
 Not yet implemented:
 - Additional retrieval-adapter implementation or broader comparison benchmark
 - Persisted retrieval index or index artifact — **[planned]**, post-MVP.
-  `BM25Retriever` is rebuilt in memory from `load_corpus()` on every
-  `chat`/shell/`analyze` invocation; there is still no on-disk index. The
+  `BM25Retriever` is built in memory from `load_corpus()` over the passages
+  `analyze` has persisted — once per `chat` invocation, and once per
+  interactive-shell session when the session opens. `analyze` itself
+  constructs no retriever, and there is still no on-disk index. The
   in-memory rebuild is the **[current]** behavior, not a stopgap that has
   replaced the bundled-index goal
 

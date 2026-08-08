@@ -226,13 +226,17 @@ conversion, storage, segmentation, and indexing were all unimplemented
 (**[historical]**). That is no longer current: retrieval orchestration, CLI
 integration (`chat`, bare `econpapers`), conversational state
 (`domain/conversation.py`), PDF
-ingestion/conversion/storage/segmentation/indexing (`analyze`, the
-early-section library), and model/runtime download (`econpapers setup`, see
+ingestion/conversion/storage/segmentation (`analyze`, the early-section
+library), indexing (see below), and model/runtime download (`econpapers
+setup`, see
 [`docs/managed-runtime-provisioning.md`](managed-runtime-provisioning.md)
 and `domain/model_manifest.py`) are all implemented — see
 [`docs/roadmap.md`](roadmap.md) for current status. "Indexing" in that list
-means **[current]** in-memory BM25 index construction at query time only — a
-persisted or bundled retrieval index is **[planned]** and does not ship. OCR
+means **[current]** in-memory BM25 index construction only: `chat` builds it
+once per invocation and the interactive shell builds it once when its
+session opens, over the passages `analyze` has persisted. `analyze` itself
+constructs no retriever and builds no index, and a persisted or bundled
+retrieval index is **[planned]** and does not ship. OCR
 and full-document conversion (beyond Abstract/Introduction) remain
 unimplemented. The
 `LlamaCppGenerator` adapter described above still performs no downloads
