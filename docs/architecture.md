@@ -262,6 +262,11 @@ or sentence-level citation support. No model adapter, runtime dependency,
 artifact, retrieval orchestration, CLI integration, or PDF ingestion is added.
 See [`docs/generation-contract.md`](generation-contract.md).
 
+Claim-level grounding was added later, and its exact scope and limits are
+stated once, in
+["Claim grounding"](generation-contract.md#claim-grounding). That section is
+authoritative; this document does not restate it.
+
 Issue 11 documents the approved automatic local PDF-ingestion workflow and
 hybrid paper-library architecture. Original PDFs are authoritative inputs,
 Markdown is an inspectable derived artifact, SQLite is the future structured

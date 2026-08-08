@@ -143,9 +143,16 @@ silently sorts adapter output.
 
 These checks prove only that cited passages were supplied to the generator and
 that their structured identities match. Response-level citations do not prove
-that a particular sentence is supported by a particular citation. Claim-level
-citation association, inline citation rendering, and semantic grounding
-evaluation remain later work.
+that a particular sentence is supported by a particular citation.
+
+Claim-level citation association and inline citation rendering have since
+shipped (**[current]**): under prompt `generation-v3` the model emits
+per-claim citations and the adapter derives the response citation list from
+them, and `chat`/the interactive shell render each claim with its own
+sources. Semantic grounding evaluation remains **[planned]**. For the full
+scope of what grounding does and does not establish, see
+[Claim grounding](#claim-grounding) below — that section is the single
+authoritative statement.
 
 ## Abstention
 
@@ -228,6 +235,37 @@ be read as "verified".
 answer. When every claim is withheld the outcome is `withheld`, which is
 deliberately distinct from `abstained`: the generator did produce an answer,
 and reporting an abstention would tell the user the library had nothing to say.
+
+### What grounding establishes
+
+- claim-to-citation identity: every `(citation_id, paper_id, passage_id)`
+  matches a passage actually supplied to the generator
+  (`validate_generation_response`);
+- citation ordering follows supplied-evidence rank;
+- for responses that carry per-claim attribution, on the `chat`/shell path
+  only: a token-level *distinctive-term heuristic*
+  (`domain/claim_grounding.py`) that flags a claim when it uses a term
+  appearing in the evidence of a paper the claim does not cite, after
+  excluding terms supported by the cited evidence or the question itself and
+  an ignore list — and withholds that claim from the answer.
+
+### What grounding does not establish
+
+- factual correctness of the claim;
+- semantic entailment of the claim by the cited passage;
+- causal validity of any relationship asserted;
+- sufficiency of the evidence for the question asked;
+- **any** leakage verdict for responses without per-claim attribution — v1/v2
+  backends and injected test generators produce no verdicts and pass through
+  unchanged (`chat_command.py`);
+- detection of cross-paper leakage in general — paraphrase that shares no
+  distinctive term is invisible to the heuristic, even under
+  `generation-v3`.
+
+Leakage detection is therefore a targeted heuristic, not a solved problem and
+not a property of every adapter. Semantic grounding evaluation is
+**[planned]**. Other documents must link to this section rather than restate
+it.
 
 ## Concrete adapter
 

@@ -127,7 +127,9 @@ CLI adapters -> application services -> domain types and protocols
 - **`domain/`** — pure, immutable types and validation (papers, passages,
   evidence, citations, corpora, storage records, PDF conversion/quality/
   sections, research questions, single-paper analysis, early-section
-  library, `claim_grounding.py` for cross-paper leakage detection,
+  library, `claim_grounding.py` for the distinctive-term cross-paper leakage
+  heuristic (a targeted check on claim-bearing responses, not general leakage
+  detection — see "Claim grounding" in `docs/generation-contract.md`),
   `conversation.py` for follow-up detection, `model_manifest.py` /
   `runtime_manifest.py` for pinned managed-artifact catalogs). No
   filesystem, network, database, or model-runtime dependency.

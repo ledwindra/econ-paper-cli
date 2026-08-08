@@ -570,6 +570,14 @@ backend-independent generation protocol with structured requests, responses,
 per-claim citations, explicit abstention validation, and cross-paper
 grounding checks.
 
+Grounding is structural, and its limits are specific: see
+["What grounding establishes" / "What grounding does not
+establish"](docs/generation-contract.md#claim-grounding) for the
+authoritative statement. In short, the cross-paper check is a targeted
+heuristic on the `chat`/shell path for responses that carry per-claim
+citations; it is not a general leakage detector and does not apply to every
+adapter.
+
 Not yet implemented: OCR, conversion beyond Abstract/Introduction, and a
 persisted or bundled retrieval index.
 
