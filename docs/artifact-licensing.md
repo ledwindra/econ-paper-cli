@@ -64,9 +64,13 @@ Cloud (Qwen) base weights.
 
 `econpapers setup` downloads exactly one of these four, selected by the
 detected platform and architecture. All four are pinned to `llama.cpp` release
-`b10199`, and all four are the CPU-only release asset — no GPU or accelerator
-variant — matching the "no GPU requirement" product guardrail. The catalog is
-`econ_paper_cli.domain.runtime_manifest_data`.
+`b10199`. Each is the standard upstream release asset for its platform: none
+is a CUDA, ROCm, or Vulkan build, and none requires a GPU, which is what the
+"no GPU requirement" product guardrail asks for. That is not the same as
+containing no accelerator support — the macOS arm64 asset bundles the Metal
+backend (`libggml-metal`), and both macOS assets bundle BLAS. The Linux and
+Windows assets are CPU-only, shipping many per-microarchitecture CPU backends
+instead. The catalog is `econ_paper_cli.domain.runtime_manifest_data`.
 
 These three facts are identical for all four archives:
 

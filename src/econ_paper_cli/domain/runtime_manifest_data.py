@@ -9,9 +9,13 @@ Pins ``llama.cpp`` release ``b10199`` (the same release
 already assume) for macOS arm64, macOS x86_64, Linux x86_64, and Windows
 x86_64 — the approved supported-platform matrix (macOS arm64 *and* x86_64,
 per the posted issue #58 plan, so an Intel Mac is covered too, not just the
-platforms this project's CI matrix happens to run). All entries are the
-CPU-only release asset for that platform (no GPU/accelerator variant),
-matching the "no GPU requirement" product guardrail. ``archive_size_bytes``/
+platforms this project's CI matrix happens to run). Each entry is the
+standard upstream release asset for its platform: no CUDA, ROCm, or Vulkan
+variant, and no GPU required, which is what the "no GPU requirement" product
+guardrail asks for. That is not the same as shipping no accelerator support
+-- the macOS arm64 asset bundles ``libggml-metal`` and both macOS assets
+bundle ``libggml-blas``; Linux and Windows are CPU-only. See
+``docs/artifact-licensing.md``. ``archive_size_bytes``/
 ``archive_sha256``/``bundle_member_checksums`` were computed directly from
 the real release assets downloaded from the URLs below — every file actually
 present in each archive is declared here, not merely computed at install

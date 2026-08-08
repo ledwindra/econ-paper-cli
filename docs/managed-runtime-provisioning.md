@@ -43,8 +43,11 @@ on `analyze`/`chat`.
 
 One `llama.cpp` release (`b10199`) is pinned, with one archive per approved
 platform/architecture — macOS arm64, macOS x86_64, Linux x86_64, and Windows
-x86_64 — each the CPU-only build (no GPU/accelerator variant, per the
-no-GPU-requirement product guardrail). macOS x86_64 (Intel) is included even
+x86_64 — each the standard upstream build for that platform. None is a CUDA,
+ROCm, or Vulkan variant and none requires a GPU, which is what the
+no-GPU-requirement product guardrail asks for; the macOS arm64 asset does
+bundle the Metal backend and both macOS assets bundle BLAS, while the Linux
+and Windows assets are CPU-only. macOS x86_64 (Intel) is included even
 though this project's own CI matrix only runs macOS arm64 today, so an Intel
 Mac user still gets managed provisioning rather than a forced manual
 `--llama-cpp-path`. The pinned data lives

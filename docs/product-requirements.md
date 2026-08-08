@@ -133,10 +133,13 @@ does not ship. **[current]**: `econpapers analyze` implements this workflow
 for the detected Abstract and Introduction only — it discovers PDFs, computes
 checksums, deduplicates, extracts, assesses quality, detects those two
 sections, converts them to Markdown, segments them into passages, and writes
-records transactionally. The remainder of each PDF is not read. Step 6 (OCR)
-is not implemented at all. Step 12 is only half met: retrieval state is built
-in memory when `chat` or a shell session starts, but there is no durable
-retrieval state for `analyze` to refresh.
+records transactionally. Extraction itself is full-document — `PyPDFExtractor`
+reads every page — but only the two detected sections are converted,
+persisted, and retrievable; the remaining page text is discarded after
+section detection. The limit is on persisted corpus scope, not on reading.
+Step 6 (OCR) is not implemented at all. Step 12 is only half met: retrieval
+state is built in memory when `chat` or a shell session starts, but there is
+no durable retrieval state for `analyze` to refresh.
 
 For ordinary use, a user should only need to place legally obtained PDF files
 in a folder, or select a PDF or folder, and invoke ingestion. The application

@@ -118,11 +118,16 @@ or `econpapers chat QUESTION` both work offline.
 What `analyze` ingests is the **Abstract and Introduction only** — that is the
 **[current]** supported corpus scope, and answers are drawn from those
 sections alone. Full-document ingestion is **[planned]** and does not ship:
-`analyze` detects those two sections, converts them to Markdown, and stores
-their passages; the rest of each PDF is left unread. A question whose answer
-lives only in a paper's results section will not be answerable from the
-library, and the tool will say so rather than guess. Your source PDFs are
-never modified or deleted.
+`analyze` extracts text from every page of the PDF, but only the detected
+Abstract and Introduction are converted to Markdown, stored, and made
+searchable. Text from the rest of the paper is read during extraction and
+then discarded — it never becomes a passage and can never be retrieved or
+cited. So a paper's results, methods, and conclusions are not available as
+evidence: a question that depends on them cannot be answered from the
+library. What you get instead is not guaranteed to be an explicit "I don't
+know" — depending on the question and the model, it may be an abstention, or
+an answer drawn from the early-section evidence that is available. Your
+source PDFs are never modified or deleted.
 
 Everything `setup`/`analyze` write lands in per-user application directories,
 never inside the repository or working directory, each independently
