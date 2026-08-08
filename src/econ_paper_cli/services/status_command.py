@@ -59,6 +59,7 @@ RuntimeReadinessChecker = Callable[[Path, str], None]
 ModelReadinessChecker = Callable[[LlamaCppConfig], None]
 
 
+@dataclass(frozen=True, slots=True)
 class StatusCommandOptions:
     """Parsed options for the ``econpapers status`` command."""
 

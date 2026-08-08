@@ -39,6 +39,26 @@ def test_status_command_dispatches_to_handler(monkeypatch: pytest.MonkeyPatch) -
     assert "args" in captured
 
 
+def test_status_command_real_handler_does_not_raise(tmp_path: Path) -> None:
+    """Regression test: the real ``commands.run_status`` (not monkeypatched)
+    must handle a genuine parsed argparse Namespace without raising. This
+    caught a real bug where ``StatusCommandOptions`` lost its ``@dataclass``
+    decorator during an unrelated refactor -- every dispatch test above
+    replaces ``commands.run_status`` with a fake, so none of them exercise
+    the real function's call into ``StatusCommandOptions(db_path=...)``."""
+    args = build_parser().parse_args(
+        [
+            "status",
+            "--db-path",
+            str(tmp_path / "library.db"),
+            "--config-path",
+            str(tmp_path / "config.json"),
+        ]
+    )
+    exit_code = commands.run_status(args)
+    assert isinstance(exit_code, int)
+
+
 def test_setup_command_dispatches_to_handler(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
