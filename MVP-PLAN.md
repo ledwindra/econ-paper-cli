@@ -492,21 +492,447 @@ This milestone is a verification matrix, not a single local smoke test.
 
 ### Required scenarios
 
-- clean setup using temporary configuration and library directories;
+- clean setup using temporary configuration and library directories, under the
+  no-network fixture strategy below;
 - chat, shell, analyze, and status with network access unavailable after
-  artifacts are installed;
+  artifacts are installed — same socket-guard harness as the no-upload
+  criterion below, asserting each path still succeeds;
 - restart after analysis and confirmation that stored passages and citations
   are identical;
 - corrupt or partially present runtime/model artifacts;
-- interrupted update/download with preservation of the previous valid install;
-- concurrent read-only shell use while analysis/update is attempted;
-- no query, PDF, answer, citation, or index upload by default; and
-- Windows, macOS, and Linux path, subprocess, line-ending, and exit-code checks.
+- interrupted update/download — split by artifact kind, see "Interruption
+  criterion" below;
+- concurrent read-only shell use while analysis/update is attempted — see
+  "Concurrency criterion" below for the pass conditions;
+- no query, PDF, answer, citation, or index upload by default — scope and
+  test shape defined under "No-upload criterion" below; and
+- Windows, macOS, and Linux path, subprocess, line-ending, and exit-code
+  checks, within the coverage actually achieved — see "Cross-platform
+  coverage" below.
 
-Use injected storage/config/download backends in unit tests and a CI matrix for
-platform coverage. The final release check must report exact Python versions,
-artifact manifests/checksums, test commands, private-corpus status, and any
-known platform limitations.
+Two rules apply across every scenario below. Dependency injection happens at
+the service layer, because the public CLI entry points do not expose those
+seams; a test that cannot inject must either drop to the service layer or move
+to the opt-in `integration_tests/` tier, and the plan says which for each
+scenario.
+Platform coverage comes from the CI matrix, within the limits recorded under
+"Cross-platform coverage".
+
+### Fixture strategy for "clean setup"
+
+No test in the default `pytest` run may download anything, and a literal
+first-run `setup` fetches multi-GB artifacts. Injection is *not* available at
+the public CLI boundary: `run_setup` and `run_update`
+(`services/commands.py`:51, 131) inject only a config backend and otherwise
+always construct the real provisioners, downloader, and extractor. Every
+injection point lives one layer down, in `run_setup_command`
+(`services/setup_command.py`:135-144) and `run_update_command`
+(`services/update_command.py`:331-345). M5 must therefore split the scenario
+into two tiers and must not describe the fake-backed tier as `econpapers
+setup` coverage.
+
+- **Tier 1 — service level, default suite, offline.** Call
+  `run_setup_command`/`run_update_command` directly with injected fake
+  `Downloader`/`ArchiveExtractor` (`protocols/runtime_provisioning`), an
+  injected `readiness_checker`/`runtime_readiness_checker`, and temporary
+  `runtime_dir`/`model_dir`/config backend. Artifacts come from *synthetic*
+  manifests built inside the test: the fixture writes a few hundred bytes and
+  computes their real size and SHA-256 into a `ManagedModelArtifact` /
+  `ManagedRuntimeArtifact`. The real pinned manifests
+  (`domain/model_manifest.py`, `domain/runtime_manifest.py`) are never used as
+  download targets; they are asserted as *data* — fields present, well-formed,
+  and consistent with `docs/artifact-licensing.md`. This tier covers
+  everything below argparse and nothing above it.
+- **Tier 1b — the argparse boundary.** A thin unit test asserts `run_setup` /
+  `run_update` map a `Namespace` onto the right `SetupCommandOptions` /
+  `UpdateCommandOptions` and config backend. That leaves exactly one untested
+  seam — the real provisioner/downloader wiring those functions hard-code —
+  and tier 2 is the only thing that covers it.
+- **Tier 2 — opt-in integration, real artifacts, release time.** Real
+  `econpapers setup`/`update`/`status` invocations against real local
+  artifacts with `ECONPAPERS_CONFIG_DIR`/`ECONPAPERS_LIBRARY_DIR` pointed at
+  temporary directories, executed as a recorded step in the release
+  checklist. This is the only tier permitted to touch the network, and only
+  for the artifact downloads `setup`/`update` are explicitly allowed to
+  perform.
+
+#### What "opt-in" requires mechanically
+
+The `model` marker alone does **not** make a test opt-in. `addopts` is
+`["--strict-config", "--strict-markers"]` with no marker deselection, so a
+`model`-marked test placed under `tests/` runs in the default suite
+(`pyproject.toml`:31-38). The existing opt-in test is skipped by two
+independent mechanisms, and every tier 2 test M5 adds must reproduce both:
+
+- **Location outside `testpaths`.** `testpaths = ["tests"]`, so
+  `integration_tests/` is never collected by a bare `pytest`
+  (`integration_tests/test_llama_cpp_model.py`).
+- **An explicit environment gate.** The test declares
+  `pytestmark = pytest.mark.model` and calls `pytest.skip(...)` when its
+  required environment variables are unset, so it also skips when someone
+  points pytest at the directory directly
+  (`integration_tests/test_llama_cpp_model.py`:18, 24-31).
+
+Tier 2 tests therefore live in `integration_tests/`, carry the `model` mark,
+and gate on their own required variables — the artifact/config variables above,
+plus `ECONPAPERS_TEST_ACCEPTANCE_DIR`/`ECONPAPERS_ACCEPTANCE_PAPER_DIR` where a
+real corpus is involved. The release checklist invokes them explicitly as
+`pytest integration_tests -m model` with those variables set, and records that
+the bare `pytest` run in the same session did not collect them.
+
+Tests in every tier set `ECONPAPERS_CONFIG_DIR`/`ECONPAPERS_LIBRARY_DIR`
+rather than relying on defaults that resolve to the developer's real home
+directory.
+
+### Interruption criterion
+
+The blanket "preservation of the previous valid install" wording does not hold
+for both artifact kinds, and must not be asserted as if it did.
+
+- **Model file — three distinct outcomes, not one.** The final path is
+  *filename*-based, `model_dir / artifact.filename`
+  (`services/model_provisioning.py`:81), not content-addressed, and a
+  verified existing file returns before any staging happens (lines 83-85). So
+  "the previous install survives an interrupted download" is only meaningful
+  for a target that was already corrupt. Test all three:
+  - **Valid installed model.** `ensure_managed_model` must return
+    `downloaded=False` with **zero downloader calls** — assert the injected
+    downloader was never invoked and the file is byte-identical. No interrupt
+    is reachable here, because no download is attempted.
+  - **Corrupt installed model, staging fails.** With a downloader that raises
+    mid-transfer, and separately with staged bytes that fail
+    `_verify_local_model` (`StagedModelVerificationError`), assert the
+    pre-existing **corrupt** bytes at `final_path` are still present and
+    unmodified, nothing was promoted, and the `.staging-` directory is gone.
+    The guarantee is "no partial promotion", not "a good install survives" —
+    there was no good install.
+  - **Corrupt installed model, staging succeeds.** After `os.replace`
+    (line 123), `final_path` must hold the **new verified** bytes; asserting
+    the old bytes or the old mtime survive would be asserting a bug.
+
+  Note for whoever implements this: the module docstring
+  (`services/model_provisioning.py`:8) claims promotion onto "a
+  content-addressed final path", which the code does not do — that is the
+  runtime module's scheme. Correcting that docstring is a one-line fix, but
+  it is a separate change from M5 and must not ride along in the release
+  verification diff.
+- **Runtime directory — preservation is required only for a valid install.**
+  `ensure_managed_runtime` returns early via `_reuse_if_functional` when the
+  existing install verifies (`services/runtime_provisioning.py`:174-177), so
+  an interrupted update over a *valid* runtime must never download or delete
+  anything. Assert exactly that: the injected downloader is never called and
+  the install tree is unchanged.
+- **Runtime directory — repair of a corrupt install has no preservation
+  guarantee, and M5 must report that rather than test around it.** Repair
+  `shutil.rmtree`s the corrupt target before restaging
+  (`services/runtime_provisioning.py`:190-198), which is the accepted
+  limitation already recorded under "Known limitation carried forward"
+  (M2 above): a directory cannot be atomically replaced onto a non-empty
+  destination the way `os.replace` handles a single file. M5 tests and
+  documents the honest recovery behavior instead: after an interrupt during
+  corrupt-install repair, (a) no partially extracted tree is ever promoted to
+  the final content-addressed path, (b) the target is absent or still
+  detectably corrupt — never a tree that passes verification while being
+  incomplete, and (c) re-running `setup`/`update` with network access
+  converges to a verified install. This limitation is named in the release
+  checklist; M5 does not claim atomic runtime replacement.
+
+### Concurrency criterion
+
+`SessionSnapshot` promises an immutable, restart-safe snapshot, and the shell
+touches storage exactly twice — once to build the snapshot at session open and
+once to `close()` (`services/interactive_shell.py`:145-162, 260). M5 must prove
+that with a real two-process test, not assert it.
+
+The writer cannot be a real `econpapers analyze` subprocess in the default
+suite: analyzing a *new* paper constructs a real `LlamaCppGenerator` and calls
+`check_readiness()` (`services/single_paper_analysis_cli.py`:964-985), and the
+CLI has no seam for injecting a fake one. The same is true of `econpapers
+update` (`services/commands.py`:131-143). So the scenario splits, and neither
+tier may be described as the other:
+
+- **Tier 1 — default suite, cross-process write against an idle reader, not
+  the real CLI.** The reader is the in-process shell session with an injected
+  `generator_provider` and a temporary `--db-path`. The writer is a real
+  `subprocess` running a small driver that writes a paper record through
+  `SQLiteStorage` — the same adapter `analyze` uses — while skipping PDF
+  extraction and generation. Name what this establishes precisely: the shell
+  holds an open connection but **no active read transaction** between turns,
+  so the writer meets no lock to contend for. The test certifies
+  *cross-process compatibility with an idle read-only shell*, which is the
+  state the product is actually ever in; it does not certify behavior under
+  lock contention, and must not be labelled as doing so.
+- **Lock contention is deliberately out of scope.** Exercising it would mean
+  holding a read transaction open across turns — something the shell never
+  does, since it touches storage exactly twice per session. Manufacturing that
+  state would certify a configuration the product cannot reach. If the shell
+  ever gains a long-lived read transaction, this scenario must be upgraded to
+  a real contention test with a stated expected outcome; that dependency is
+  recorded here rather than left implicit.
+- **Tier 2 — opt-in integration, real CLI.** Real `econpapers analyze` and
+  real `econpapers update` subprocesses against real artifacts and a real
+  shell session, asserting the identical pass conditions end to end. Located
+  and gated per "What 'opt-in' requires mechanically" above, and run as a
+  recorded release-checklist step.
+
+Pass conditions, required in both tiers:
+
+- **Existing turns are byte-identical.** Capture the rendered turn output and
+  the `/show` evidence output before the writer runs and again after it
+  completes; both must compare equal string-for-string.
+- **No mixed snapshot.** The banner's `paper_count`/`passage_count` are
+  unchanged for the life of the session; a paper the writer adds is never
+  retrievable or citable in that session; and every citation the session
+  renders resolves from `snapshot.early_section_records`, never from a live
+  storage read.
+- **A specified outcome for each writer, not "either is fine".**
+  - The storage write must **succeed** — the tier 1 driver exits 0, and in
+    tier 2 `econpapers analyze` exits 0 — while the shell is open. The
+    shell's connection is idle between turns and `sqlite3` opens no read
+    transaction for a completed `SELECT`, so the writer's `BEGIN IMMEDIATE`
+    acquires. If it instead times out with a lock error, that is a defect to
+    fix, not an accepted outcome.
+  - `update` must **complete successfully, and a successful repair must leave
+    the next turn working.** Tier 1 asserts this at service level
+    (`run_update_command` with injected provisioners against a synthetic
+    managed install) while the shell session is open; tier 2 runs the real
+    `econpapers update`. `UpdateArtifactOutcome.REPAIRED` is reported only
+    after `ensure_managed_runtime` has downloaded, verified, readiness-checked
+    and promoted the install (`services/update_command.py`:207-221), and
+    `update` does not rewrite durable config — so the executable path the
+    shell resolves still points into a verified install. A shell turn that
+    constructs its generator for the first time after a successful update must
+    therefore **succeed** (`ANSWERED`, or a withheld/no-answer outcome on the
+    merits) and must not be a `TYPED_FAILURE`. Accepting a typed failure here
+    would be accepting a regression with no mechanism behind it. A generator
+    already constructed this session is cached and unaffected either way.
+  - **Typed failure is required only where something is actually broken:** a
+    deliberately failed repair (`UpdateArtifactOutcome.FAILED` via an injected
+    downloader or extractor error) or corruption injected into the install
+    *after* `update` returns. Then the next unconstructed turn must fail as
+    `ShellTurnOutcome.TYPED_FAILURE` through `LlamaCppConfigurationError` or
+    `LlamaCppReadinessError` (`services/interactive_shell.py`:333-341) — never
+    a wrong answer, an unhandled exception, or damage to earlier turns.
+  - **Mid-flight repair: `INTERNAL_FAILURE` is the current behavior, and M5
+    records it rather than promising typed failure.** "It fails typed" is
+    false once a generator already exists. If the executable disappears
+    between construction and launch, `SubprocessRunner._start_process`
+    converts the `OSError` into `LlamaCppProcessError`
+    (`adapters/llama_cpp.py`:307-311), and the shell maps that to
+    `ShellTurnOutcome.INTERNAL_FAILURE`, not `TYPED_FAILURE`
+    (`services/interactive_shell.py`:476-490). Only the *unconstructed* case
+    is typed, because it fails at `check_readiness()` with
+    `LlamaCppReadinessError`/`LlamaCppConfigurationError`.
+
+    M5 does not change that classification. Reclassifying a user-visible
+    failure outcome is a behavior change with its own exit-code and
+    documentation consequences; it needs its own issue, and folding it into a
+    release-verification milestone would violate the "no unrelated changes"
+    rule this plan closes on. It is recorded as a known limitation in the
+    release checklist, next to runtime-repair non-atomicity, and flagged there
+    as a candidate follow-up.
+
+    What M5 *does* require is that the state be tested deterministically
+    rather than left as an unschedulable race. The race cannot be scheduled
+    reliably, but the state it produces can — provided the generator is
+    actually *ready*, which construction alone does not achieve.
+    `_build_llama_cpp_generator` returns an unverified generator
+    (`services/chat_command.py`:712-726); readiness is lazy, performed inside
+    `generate()` only when `not self._ready`, and `_ready` is set only after a
+    successful check (`adapters/llama_cpp.py`:434-441). "Construct, delete the
+    executable, ask a question" would therefore fail at `check_readiness()`
+    with `LlamaCppReadinessError` and report `TYPED_FAILURE` — the wrong path,
+    proving nothing about the one being pinned.
+
+    The sequence must be: **(1)** ask a question that completes successfully,
+    which sets `_ready = True` on the cached generator; **(2)** remove the
+    managed executable; **(3)** ask a second question. Only then does
+    `generate()` skip readiness, reach `_start_process`, and produce
+    `LlamaCppProcessError` → `INTERNAL_FAILURE`. Assert that outcome, an
+    actionable message, no wrong answer, and no unhandled exception — and
+    compare turn 1's rendered output and `/show` before and after step 3,
+    which step 1 now provides as a genuine prior turn rather than an empty
+    baseline. An explicit `check_readiness()` call in place of step 1 is
+    acceptable only for a unit-level variant; the shell-level test wants the
+    real first turn. That pins today's behavior so the follow-up issue — if
+    taken — changes a test on purpose instead of discovering the mapping by
+    accident. The interruption criterion above covers the on-disk half of the
+    same window.
+- **The writer actually wrote.** Restarting the shell after the writer
+  finishes must show the new paper — otherwise the test proves nothing.
+
+### No-upload criterion
+
+"No query, PDF, answer, citation, or index upload by default" is currently a
+slogan with no test behind it. M5 must make it a checkable claim, which means
+first stating its boundary:
+
+- **In scope — application-initiated network traffic on the four application
+  paths.** `chat`, the interactive shell, `analyze`, and `status` must make no
+  outbound network call at all, for any reason. There is no allowed-endpoint
+  list here; the assertion is zero.
+- **Explicitly out of scope — `setup` and `update` artifact downloads.** These
+  are the only code paths holding a `Downloader`/`ArchiveExtractor`
+  (`adapters/runtime_downloader.py`, `adapters/runtime_extractor.py`), they
+  are gated to explicit invocation, and their traffic is HTTPS fetches of
+  pinned, checksum-verified artifacts — downloads, never uploads. The
+  no-upload claim is not weakened by them and must not be written as though
+  they are exceptions to it.
+- **Explicitly out of scope — the user-supplied executable.** Generation runs
+  a `llama-completion` subprocess. Nothing in this project can constrain what
+  an arbitrary user-supplied binary does with a socket, and M5 must say so
+  rather than imply the guarantee extends into it. The claim covers what the
+  application itself initiates.
+
+Test shape, tier 1 — a `socket` guard fixture patching `socket.socket`,
+`socket.create_connection`, and `socket.getaddrinfo` to raise, installed
+around the four **service** entry points, which are the deepest layer that
+accepts fakes. Per the injection rule above, this is not `econpapers chat`
+coverage and must not be written as such:
+
+- `run_chat_command` (`services/chat_command.py`:444) — injected `storage`,
+  `config_backend`, `retriever_factory`, `generator_provider`;
+- `run_interactive_shell` (`services/interactive_shell.py`:774) — the same
+  four seams plus injected `stdin`/`stdout`;
+- `run_single_paper_analysis_command`
+  (`services/single_paper_analysis_cli.py`:885) — injected `extractor`,
+  `generator`, `storage`, `config_backend`;
+- `run_status_command` (`services/status_command.py`:325) — injected
+  `config_backend`, `storage`, and both readiness checkers.
+
+Each must produce its normal successful result with the guard installed. A
+negative control — one test asserting the guard actually fires on a deliberate
+connection attempt — is required, otherwise a guard that silently does nothing
+passes everything.
+
+Test shape, tier 2 — the real `econpapers chat`, bare `econpapers`, `analyze`,
+and `status` commands, which have no injection seams at all
+(`services/commands.py`:88 and its neighbours). The guard cannot be installed
+inside a subprocess, so tier 2's claim is only that each command completes
+successfully with the machine's network unavailable.
+
+**That claim is worthless without proof the machine was actually offline** — a
+command also succeeds when the isolation step silently failed. Tier 1 has a
+negative control; tier 2 needs one too, in the same session, or it is not
+evidence. The release checklist therefore prescribes, per platform:
+
+- **Isolation.** Linux: run the commands inside `unshare -rn` (no network
+  namespace). macOS: disable every interface, e.g. `networksetup
+  -setairportpower <device> off` plus any wired service set to off. Windows:
+  `Disable-NetAdapter -Name <name>` in an elevated shell. Record the exact
+  command used and whether elevation was required.
+- **Three-point control, starting with a preflight that must succeed.** Two
+  post-isolation failures prove nothing on their own: they look identical
+  whether the isolation command worked, the host was already offline, a
+  corporate policy blocks egress, or the probe endpoint is simply
+  unreachable. The probe is a raw-IP TCP connection that bypasses DNS —
+  `python -c "import socket; socket.create_connection(('1.1.1.1', 443),
+  timeout=5)"` — run three times, all recorded:
+  1. **Before isolation: must succeed.** This establishes that the probe can
+     detect connectivity on this host and that the endpoint is reachable. Any
+     other endpoint may be substituted if `1.1.1.1:443` is unreachable here;
+     record which was used.
+  2. **After isolation, before the command suite: must fail.** The
+     before/after transition — not the failure alone — is what demonstrates
+     the isolation step did the work.
+  3. **After the command suite: must fail.** Catches an interface that came
+     back up mid-run.
+
+  A DNS-only failure does not count as isolation, which is why the probe uses
+  a literal address.
+- **Downgrade rule.** If the preflight does not succeed, if either
+  post-isolation attempt does not fail, or if the control is skipped, the
+  tier 2 result is recorded as an observational manual check and **may not be
+  cited as evidence for the no-upload gate**. The gate then rests on tier 1's
+  guarded service-level tests alone, and the checklist says so explicitly.
+
+Even at its strongest, tier 2 shows the commands work offline; it does not
+instrument what they attempt. The no-upload assertion itself is tier 1's. That
+division, and the generation-subprocess boundary above, are recorded in the
+checklist rather than blurred into a combined claim neither tier supports.
+
+### Cross-platform coverage
+
+CI runs Python 3.11 and 3.14 on ubuntu, macOS, and Windows, and the exact
+supported floor 3.10.12 only on ubuntu (`.github/workflows/ci.yml`:61-80). The
+in-file rationale (`.github/workflows/ci.yml`:24-32) says the macOS and
+Windows runner images offer only 3.10.11, which is below `pyproject.toml`'s
+`requires-python = ">=3.10.12"` floor.
+
+That rationale is a point-in-time observation, not a standing fact, and M5
+must not restate it as one — `actions/python-versions` publishes a version
+manifest that changes over time and includes source-built macOS packages for
+some versions. So M5 requires a **contemporaneous availability probe**: query
+the `actions/python-versions` manifest for a 3.10.12-or-later 3.10.x build on
+`macos-latest` and `windows-latest`, and record the result with its date in
+the release checklist.
+
+- If a usable build **exists**, extend the matrix to cover the floor on those
+  platforms; the limitation disappears and the stale `ci.yml` comment is
+  corrected in the same change.
+- If it **does not**, record the named limitation — *floor-version coverage is
+  Linux-only; on macOS and Windows the lowest tested interpreter is 3.11* —
+  citing the probe result and date, not a static assumption. Building 3.10.12
+  from source on those runners remains available at accepted cost and
+  flakiness if the maintainer wants the coverage.
+
+Either way, M5 certifies exactly `{ubuntu, macos, windows} × {3.11, 3.14}`
+plus `ubuntu × 3.10.12` — stated in those terms, never as "cross-platform
+support" in general — and the release report records the interpreter versions
+each job actually resolved, not the matrix strings.
+
+### Release checklist artifact
+
+The exit condition below makes a recorded release procedure MVP-blocking, so
+"report the commands and versions" is not sufficient. M5 adds
+`docs/release-checklist.md`, a named and versioned artifact containing:
+
+- a checklist version, and the **release-candidate commit SHA** the run was
+  executed against (see "Which commit was tested" below);
+- environment prerequisites and the exact reproducible commands, each with its
+  expected outcome and exit code (`ruff check .`, `ruff format --check .`,
+  `pytest`, `pytest integration_tests -m model` with the gating variables set
+  (and confirmation that the bare `pytest` run did not collect them), the manual
+  real-network `setup` smoke run, and the M3 private-PDF harness);
+- artifact identities: every pinned model and runtime artifact by
+  `model_id`/`runtime_id`, version marker, expected size, and SHA-256,
+  cross-referenced to `docs/artifact-licensing.md`;
+- private-corpus handling — **the contract, not the corpus.** `AGENTS.md`'s
+  git discipline forbids committing personal paths, and M3 deliberately keeps
+  exact filenames, sizes, and checksums in the gitignored
+  `papers/ACCEPTANCE_CORPUS_RECORD.md` (M3 above). The committed checklist
+  therefore records only the environment-variable contract
+  (`ECONPAPERS_TEST_ACCEPTANCE_DIR`, `ECONPAPERS_ACCEPTANCE_PAPER_DIR`), the
+  per-case `case_a`–`case_f` pass/fail result, and a pointer to the gitignored
+  maintainer record. The actual directory path, filenames, and corpus
+  identities never enter the committed file;
+- the verification matrix results table (OS × Python × scenario); and
+- the network-isolation procedure actually used per platform, the probe
+  endpoint, all three negative-control results (preflight success plus both
+  post-isolation failures), and whether the downgrade rule was triggered;
+- known limitations, including at minimum the three named above:
+  runtime-repair non-atomicity; floor coverage as resolved by the availability
+  probe; and a shell turn hitting a removed executable after its generator was
+  constructed reporting `INTERNAL_FAILURE` rather than a typed failure, listed
+  as a candidate follow-up issue and not fixed inside M5.
+
+A filled-in run record for the release being cut is committed alongside the
+checklist; the blank checklist alone does not satisfy the exit condition.
+
+#### Which commit was tested
+
+Committing the run record necessarily moves `HEAD` past the commit the run
+tested, so "tested at `HEAD`" is never true and must not be written. The
+checklist resolves this explicitly:
+
+- the run record names the **release-candidate SHA** it attests to — the
+  commit that was actually checked out when the commands ran;
+- the follow-up commit that adds the record is **results-only**: it may touch
+  the checklist and run-record files and nothing else. Any source, test, or
+  configuration change invalidates the run and requires a fresh candidate SHA
+  and a fresh run;
+- the release tag points at the candidate SHA or at the results-only commit on
+  top of it, and the checklist states which convention was used.
 
 ### Exit condition
 
@@ -515,9 +941,10 @@ the MVP complete. Gate 0's decisions must also be *propagated* (M4 sweeps 1–2)
 not merely decided.
 
 MVP is complete only when Gate 0 is resolved, M1–M5 acceptance criteria pass,
-documentation is current, artifact licenses and release procedure are recorded,
-and the final diff contains no unrelated changes. M6 is explicitly **not** part
-of this gate.
+documentation is current, artifact licenses are recorded, the release procedure
+is recorded as `docs/release-checklist.md` with a filled-in run record, and the
+final diff contains no unrelated changes. M6 is explicitly **not** part of this
+gate.
 
 ---
 
