@@ -832,8 +832,13 @@ evidence. The release checklist therefore prescribes, per platform:
 - **Isolation.** Linux: run the commands inside `unshare -rn` (no network
   namespace). macOS: disable every interface, e.g. `networksetup
   -setairportpower <device> off` plus any wired service set to off. Windows:
-  `Disable-NetAdapter -Name <name>` in an elevated shell. Record the exact
-  command used and whether elevation was required.
+  for a manual run, use `Disable-NetAdapter -Name <name>` in an elevated
+  shell; on a hosted runner, keep the runner connected and install outbound
+  firewall rules for `python.exe`, `econpapers.exe`, and the configured
+  `llama-completion.exe`. Record the exact command used and whether elevation
+  was required. The hosted form proves process-tree isolation rather than
+  whole-machine isolation; all three executable rules and the guarded Python
+  negative control are required.
 - **Three-point control, starting with a preflight that must succeed.** Two
   post-isolation failures prove nothing on their own: they look identical
   whether the isolation command worked, the host was already offline, a

@@ -251,12 +251,16 @@ run, record the command used and whether it needed elevation:
 | --- | --- |
 | Linux | run the commands inside `unshare -rn` |
 | macOS | `networksetup -setairportpower <device> off`, plus any wired service set to off |
-| Windows | `Disable-NetAdapter -Name <name>` (elevated) |
+| Windows (manual) | `Disable-NetAdapter -Name <name>` (elevated) |
+| Windows (hosted) | outbound firewall rules for `python.exe`, `econpapers.exe`, and the configured `llama-completion.exe` |
 
 The automated workflow uses `sudo unshare --net` on Linux, temporarily brings
-the default route down with `sudo ifconfig` on macOS, and disables the active
-default adapter with PowerShell on Windows. It restores networking in cleanup
-before uploading its artifact.
+the default route down with `sudo ifconfig` on macOS, and installs
+program-scoped outbound firewall rules with PowerShell on Windows. Windows
+cannot disable the runner's adapter without also interrupting the job, so its
+hosted result proves that the tested process tree is offline rather than that
+the whole runner is offline. The workflow removes all temporary rules in
+cleanup before uploading its artifact.
 
 Then run, against an already-provisioned library, and expect each to complete:
 `econpapers status`, `econpapers chat "<question>"`, bare `econpapers`

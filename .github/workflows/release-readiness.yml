@@ -92,31 +92,51 @@ jobs:
           python .github/scripts/network_probe.py blocked
           exit "$command_status"
 
-      - name: Run offline CLI scenarios by disabling the default adapter (Windows)
+      - name: Run offline CLI scenarios behind outbound firewall rules (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $false
-          $adapter = Get-NetIPConfiguration |
-            Where-Object { $_.IPv4DefaultGateway -ne $null -and $_.NetAdapter.Status -eq 'Up' } |
-            Select-Object -First 1
-          if ($null -eq $adapter) {
-            throw 'Could not identify the active default network adapter.'
+          $config = Get-Content (Join-Path $env:ECONPAPERS_CONFIG_DIR 'config.json') |
+            ConvertFrom-Json
+          $programs = @{
+            python = (Get-Command python).Source
+            econpapers = (Get-Command econpapers).Source
+            llama = $config.executable_path
           }
-          $alias = $adapter.InterfaceAlias
-          Disable-NetAdapter -Name $alias -Confirm:$false
+          $rulePrefix = "econpapers-release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $rules = @()
           try {
+            foreach ($entry in $programs.GetEnumerator()) {
+              $ruleName = "$rulePrefix-$($entry.Key)"
+              New-NetFirewallRule `
+                -Name $ruleName `
+                -DisplayName $ruleName `
+                -Direction Outbound `
+                -Action Block `
+                -Program $entry.Value `
+                -Profile Any | Out-Null
+              $rules += $ruleName
+            }
             python .github/scripts/network_probe.py blocked
+            if ($LASTEXITCODE -ne 0) {
+              throw 'Python retained outbound network access after firewall isolation.'
+            }
             $offlineExit = 0
             $env:ECONPAPERS_RELEASE_OUTPUT = "$env:RUNNER_TEMP/offline-cli.txt"
             python .github/scripts/run_offline_cli.py "$env:RUNNER_TEMP/release-fixture.pdf"
             $offlineExit = $LASTEXITCODE
             python .github/scripts/network_probe.py blocked
-            if ($offlineExit -ne 0) { exit $offlineExit }
+            if ($LASTEXITCODE -ne 0) {
+              throw 'Python regained outbound network access during the command suite.'
+            }
           } finally {
-            Enable-NetAdapter -Name $alias -Confirm:$false
+            foreach ($ruleName in $rules) {
+              Remove-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue
+            }
           }
+          if ($offlineExit -ne 0) { exit $offlineExit }
 
       - name: Probe network after the command suite
         if: always()
