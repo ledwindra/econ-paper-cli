@@ -1,12 +1,12 @@
 """Safe archive extraction for managed runtime provisioning.
 
-Rejects absolute paths, parent-directory traversal, symlink/hardlink
-members, and duplicate member names before anything is written to disk.
-Uses ``tarfile``'s PEP 706 ``filter="data"`` extraction as defense in depth
-alongside this module's own explicit member validation (which runs first
-and is the primary defense, since it produces the specific
-``UnsafeArchiveMemberError`` these tests assert on rather than a generic
-``tarfile.FilterError``).
+Rejects absolute paths, parent-directory traversal, and duplicate member
+names before anything is written to disk. Relative symlink/hardlink members
+are validated and materialized as regular files, so installed bundles never
+contain links that could later be redirected outside the bundle.
+Validates every member before writing and extracts tar members explicitly;
+this avoids relying on platform-specific link handling and ensures the
+installed staging tree contains regular files rather than links.
 
 Duplicate-member and path-separator handling is Windows-safe *canonically*,
 not just by raw string comparison: two distinct-looking member names that
@@ -17,6 +17,8 @@ are all rejected, so this holds even when the extractor itself runs on a
 case-sensitive Linux CI host.
 """
 
+import posixpath
+import shutil
 import stat
 import tarfile
 import zipfile
@@ -62,17 +64,23 @@ class SafeArchiveExtractor:
                 seen_names: set[str] = set()
                 for member in members:
                     _validate_member_name(member.name, destination_dir, seen_names)
-                    if member.issym() or member.islnk():
-                        raise UnsafeArchiveMemberError(
-                            f"Archive member '{member.name}' is a symlink/hardlink, "
-                            "which is not allowed."
-                        )
-                    if not (member.isfile() or member.isdir()):
+                    if not (
+                        member.isfile()
+                        or member.isdir()
+                        or member.issym()
+                        or member.islnk()
+                    ):
                         raise UnsafeArchiveMemberError(
                             f"Archive member '{member.name}' is not a regular "
-                            "file or directory."
+                            "file, directory, symlink, or hardlink."
                         )
-                archive.extractall(destination_dir, members=members, filter="data")
+                normalized_members = {
+                    _normalized_member_name(member.name): member for member in members
+                }
+                _validate_tar_links(normalized_members)
+                _extract_tar_members(
+                    archive, members, normalized_members, destination_dir
+                )
         except tarfile.TarError as error:
             raise ExtractionError(
                 f"Failed to extract tar archive '{archive_path}': {error}."
@@ -148,6 +156,90 @@ def _validate_member_name(
         raise UnsafeArchiveMemberError(
             f"Archive member '{name}' resolves outside the destination directory."
         )
+
+
+def _normalized_member_name(name: str) -> str:
+    return PurePosixPath(name.replace("\\", "/")).as_posix()
+
+
+def _extract_tar_members(
+    archive: tarfile.TarFile,
+    members: list[tarfile.TarInfo],
+    normalized_members: dict[str, tarfile.TarInfo],
+    destination_dir: Path,
+) -> None:
+    for member in members:
+        target_path = destination_dir / _normalized_member_name(member.name)
+        if member.isdir():
+            target_path.mkdir(parents=True, exist_ok=True)
+            continue
+
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        source_member = member
+        if member.issym() or member.islnk():
+            source_name = _resolve_link_target(member, normalized_members)
+            source_member = normalized_members[source_name]
+        if not source_member.isfile():
+            raise UnsafeArchiveMemberError(
+                f"Archive link '{member.name}' does not resolve to a regular file."
+            )
+
+        extracted = archive.extractfile(source_member)
+        if extracted is None:
+            raise ExtractionError(
+                f"Archive member '{source_member.name}' has no readable content."
+            )
+        with extracted, target_path.open("wb") as output:
+            shutil.copyfileobj(extracted, output)
+        target_path.chmod(source_member.mode & 0o7777)
+
+
+def _validate_tar_links(
+    normalized_members: dict[str, tarfile.TarInfo],
+) -> None:
+    """Resolve every tar link before extraction can write any member."""
+    for member in normalized_members.values():
+        if member.issym() or member.islnk():
+            _resolve_link_target(member, normalized_members)
+
+
+def _resolve_link_target(
+    member: tarfile.TarInfo,
+    normalized_members: dict[str, tarfile.TarInfo],
+) -> str:
+    current_name = _normalized_member_name(member.name)
+    seen: set[str] = set()
+    while True:
+        if current_name in seen:
+            raise UnsafeArchiveMemberError(
+                f"Archive link '{member.name}' contains a link cycle."
+            )
+        seen.add(current_name)
+        current_member = normalized_members.get(current_name)
+        if current_member is None:
+            raise UnsafeArchiveMemberError(
+                f"Archive link '{member.name}' targets missing member '{current_name}'."
+            )
+        if current_member.isfile():
+            return current_name
+        if not (current_member.issym() or current_member.islnk()):
+            raise UnsafeArchiveMemberError(
+                f"Archive link '{member.name}' does not target a regular file."
+            )
+
+        link_name = current_member.linkname.replace("\\", "/")
+        if link_name.startswith("/") or (len(link_name) >= 2 and link_name[1] == ":"):
+            raise UnsafeArchiveMemberError(
+                f"Archive link '{member.name}' has an absolute target."
+            )
+        candidate = posixpath.normpath(
+            posixpath.join(posixpath.dirname(current_name), link_name)
+        )
+        if candidate == ".." or candidate.startswith("../"):
+            raise UnsafeArchiveMemberError(
+                f"Archive link '{member.name}' targets outside the archive."
+            )
+        current_name = candidate
 
 
 def _validate_portable_parts(name: str, parts: tuple[str, ...]) -> None:

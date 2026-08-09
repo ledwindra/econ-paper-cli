@@ -49,6 +49,13 @@ def _tar_symlink_member(name: str, target: str) -> tarfile.TarInfo:
     return info
 
 
+def _tar_hardlink_member(name: str, target: str) -> tarfile.TarInfo:
+    info = tarfile.TarInfo(name=name)
+    info.type = tarfile.LNKTYPE
+    info.linkname = target
+    return info
+
+
 def test_extract_valid_tar_gz_writes_expected_files(tmp_path: Path) -> None:
     archive_path = tmp_path / "archive.tar.gz"
     members = [_tar_file_member("bin/tool", b"hello")]
@@ -85,14 +92,80 @@ def test_tar_parent_traversal_member_rejected(tmp_path: Path) -> None:
         SafeArchiveExtractor().extract(archive_path, ArchiveFormat.TAR_GZ, destination)
 
 
-def test_tar_symlink_member_rejected(tmp_path: Path) -> None:
+def test_tar_internal_symlink_is_materialized_as_regular_file(tmp_path: Path) -> None:
     archive_path = tmp_path / "archive.tar.gz"
-    _make_tar_gz(archive_path, [_tar_symlink_member("link", "/etc/passwd")], {})
+    _make_tar_gz(
+        archive_path,
+        [
+            _tar_file_member("bin/target", b"safe"),
+            _tar_symlink_member("bin/link", "target"),
+        ],
+        {"bin/target": b"safe"},
+    )
+    destination = tmp_path / "dest"
+    destination.mkdir()
+
+    SafeArchiveExtractor().extract(archive_path, ArchiveFormat.TAR_GZ, destination)
+
+    link = destination / "bin" / "link"
+    assert link.read_bytes() == b"safe"
+    assert not link.is_symlink()
+
+
+def test_tar_hardlink_is_materialized_as_regular_file(tmp_path: Path) -> None:
+    archive_path = tmp_path / "archive.tar.gz"
+    _make_tar_gz(
+        archive_path,
+        [
+            _tar_file_member("bin/target", b"safe"),
+            _tar_hardlink_member("bin/link", "target"),
+        ],
+        {"bin/target": b"safe"},
+    )
+    destination = tmp_path / "dest"
+    destination.mkdir()
+
+    SafeArchiveExtractor().extract(archive_path, ArchiveFormat.TAR_GZ, destination)
+
+    link = destination / "bin" / "link"
+    assert link.read_bytes() == b"safe"
+    assert not link.is_symlink()
+
+
+@pytest.mark.parametrize("link_factory", [_tar_symlink_member, _tar_hardlink_member])
+def test_tar_link_escape_rejected(tmp_path: Path, link_factory) -> None:
+    archive_path = tmp_path / "archive.tar.gz"
+    _make_tar_gz(
+        archive_path,
+        [link_factory("bin/link", "../../etc/passwd")],
+        {},
+    )
     destination = tmp_path / "dest"
     destination.mkdir()
 
     with pytest.raises(UnsafeArchiveMemberError):
         SafeArchiveExtractor().extract(archive_path, ArchiveFormat.TAR_GZ, destination)
+
+
+def test_tar_invalid_later_link_does_not_partially_extract(
+    tmp_path: Path,
+) -> None:
+    archive_path = tmp_path / "archive.tar.gz"
+    _make_tar_gz(
+        archive_path,
+        [
+            _tar_file_member("bin/target", b"safe"),
+            _tar_symlink_member("bin/link", "../../etc/passwd"),
+        ],
+        {"bin/target": b"safe"},
+    )
+    destination = tmp_path / "dest"
+    destination.mkdir()
+
+    with pytest.raises(UnsafeArchiveMemberError):
+        SafeArchiveExtractor().extract(archive_path, ArchiveFormat.TAR_GZ, destination)
+
+    assert list(destination.iterdir()) == []
 
 
 def test_tar_duplicate_member_names_rejected(tmp_path: Path) -> None:

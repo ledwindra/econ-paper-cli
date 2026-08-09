@@ -77,8 +77,9 @@ error) rather than silently attempting an unpinned download.
 2. Verifies the whole archive's size and SHA-256 before any extraction.
 3. Extracts into a **sibling staging directory**
    (`adapters.runtime_extractor.SafeArchiveExtractor`: rejects absolute
-   paths, parent-directory traversal, symlink/hardlink members, and
-   duplicate member names).
+   paths, parent-directory traversal, unsafe link targets, and duplicate
+   member names; safe relative symlink/hardlink members are materialized as
+   regular files).
 4. Hashes every extracted file and runs the staged executable
    (`--version --offline`) to confirm it actually starts and reports the
    expected pinned version marker — all **while still staged**.

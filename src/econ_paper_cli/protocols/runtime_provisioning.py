@@ -57,8 +57,9 @@ class ExtractionError(Exception):
 class UnsafeArchiveMemberError(ExtractionError):
     """Raised for an archive member that is unsafe to extract.
 
-    Covers absolute paths, parent-directory traversal, symlink/hardlink
-    members, and duplicate member names.
+    Covers absolute paths, parent-directory traversal, unsafe link targets,
+    and duplicate member names. Relative symlink/hardlink members are
+    materialized as regular files.
     """
 
 
@@ -102,8 +103,9 @@ class ArchiveExtractor(Protocol):
         """Extract every member of ``archive_path`` into ``destination_dir``.
 
         Raises ``UnsafeArchiveMemberError`` for any member that is an
-        absolute path, attempts parent-directory traversal, is a
-        symlink/hardlink, or duplicates another member's name; raises
+        absolute path, attempts parent-directory traversal, contains an
+        unsafe link target, or duplicates another member's name; relative
+        symlink/hardlink members are materialized as regular files; raises
         ``UnsupportedArchiveFormatError`` for an unrecognized
         ``archive_format``; raises ``ExtractionError`` for any other
         malformed-archive failure.

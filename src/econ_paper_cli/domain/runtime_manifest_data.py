@@ -242,6 +242,78 @@ MANAGED_RUNTIME_MANIFEST = ManagedRuntimeManifest(
                     PurePosixPath("llama-b10199/llama-tts"),
                     "df35e0391d6cf2967f382631afdfdc77b96a40bd11cb3b3c87500691e2f9f8b8",
                 ),
+                (
+                    PurePosixPath("llama-b10199/libggml-rpc.0.dylib"),
+                    "54d592494eb1ead9c1529ef9fb3f37e63700047df7a6cadf295cd998b955ee80",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libllama.0.dylib"),
+                    "60de428ed59f460fd439e61e55e126ac4f52d77c1c09f7b60a9c38f314027485",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libmtmd.0.dylib"),
+                    "40ac5d79d7fdc0dc7a8cff5a66438e13ec520f7ef6260fb3b4c8873cb51f5b9d",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml.dylib"),
+                    "d58fb27af9f284730990c85e2b1bd6f8f134edc92348f43ebef645d51961dc74",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml.0.dylib"),
+                    "d58fb27af9f284730990c85e2b1bd6f8f134edc92348f43ebef645d51961dc74",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libmtmd.dylib"),
+                    "40ac5d79d7fdc0dc7a8cff5a66438e13ec520f7ef6260fb3b4c8873cb51f5b9d",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml-base.dylib"),
+                    "327a14d3290e581af06d7f7cf5d96ae525443e8c16cb87ecc5f03cfc1659baa4",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml-blas.dylib"),
+                    "2db17d144c48b9d128c751f8a9d6824c73e1dc403c947425f2089d01426c58d0",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml-metal.0.dylib"),
+                    "0b3eec457f1690c16536039ccb3077613c0dd71492314417d440b03550f9332d",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libllama-common.0.dylib"),
+                    "34d930b1704467a3e6711951e0730a9da2f5abac4923631eada62bd8ec56732f",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libllama.dylib"),
+                    "60de428ed59f460fd439e61e55e126ac4f52d77c1c09f7b60a9c38f314027485",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml-cpu.dylib"),
+                    "2c8e05bd80c4294a334023285f23b4ce88b73d507ef65f0732f5e20fa724ee66",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml-metal.dylib"),
+                    "0b3eec457f1690c16536039ccb3077613c0dd71492314417d440b03550f9332d",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libllama-common.dylib"),
+                    "34d930b1704467a3e6711951e0730a9da2f5abac4923631eada62bd8ec56732f",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml-base.0.dylib"),
+                    "327a14d3290e581af06d7f7cf5d96ae525443e8c16cb87ecc5f03cfc1659baa4",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml-blas.0.dylib"),
+                    "2db17d144c48b9d128c751f8a9d6824c73e1dc403c947425f2089d01426c58d0",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml-rpc.dylib"),
+                    "54d592494eb1ead9c1529ef9fb3f37e63700047df7a6cadf295cd998b955ee80",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml-cpu.0.dylib"),
+                    "2c8e05bd80c4294a334023285f23b4ce88b73d507ef65f0732f5e20fa724ee66",
+                ),
             ),
             license_name=_LLAMA_CPP_LICENSE,
             attribution_text=_LLAMA_CPP_ATTRIBUTION,
@@ -432,6 +504,70 @@ MANAGED_RUNTIME_MANIFEST = ManagedRuntimeManifest(
                 (
                     PurePosixPath("llama-b10199/llama-tts"),
                     "29cf47bb0a8b3ef38761d487232115bfb2f65a6fa8bcfa06e507486e2919b4cf",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml-rpc.0.dylib"),
+                    "737676bbf63c4a41a92102567bdd7a41c847a05626536b7b89736ab507b12115",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libllama.0.dylib"),
+                    "f45ba61f9c506e682e694dbeb46f3fee9fa08222db58d2b8550ea9eab4c82962",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libmtmd.0.dylib"),
+                    "5a51f8223fc06fff22b874f85718dad059198eee90612ceed5ed57217864edc4",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml.dylib"),
+                    "087671af1f9ea0056d350e26f924ed45eb25327f231f28299af1d1f41c0edc00",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml.0.dylib"),
+                    "087671af1f9ea0056d350e26f924ed45eb25327f231f28299af1d1f41c0edc00",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libmtmd.dylib"),
+                    "5a51f8223fc06fff22b874f85718dad059198eee90612ceed5ed57217864edc4",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml-base.dylib"),
+                    "ff6b8667b20f8bd04a593112a57c29774955f6a38c2eae3a431acdd368900470",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml-blas.dylib"),
+                    "f261f44bbed45297f0417a3cd2b1f78205062d7ea4a3a83bfef8ec45db58edea",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libllama-common.0.dylib"),
+                    "713edba2af0dc60e37bbbf66b1732d08b701411735ad01b4558a0c4b2cfeffb6",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libllama.dylib"),
+                    "f45ba61f9c506e682e694dbeb46f3fee9fa08222db58d2b8550ea9eab4c82962",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml-cpu.dylib"),
+                    "50f481faf591e5be7bf225b7e448bd1c0fc448676ba7253310d2ab625dc0ffcb",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libllama-common.dylib"),
+                    "713edba2af0dc60e37bbbf66b1732d08b701411735ad01b4558a0c4b2cfeffb6",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml-base.0.dylib"),
+                    "ff6b8667b20f8bd04a593112a57c29774955f6a38c2eae3a431acdd368900470",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml-blas.0.dylib"),
+                    "f261f44bbed45297f0417a3cd2b1f78205062d7ea4a3a83bfef8ec45db58edea",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml-rpc.dylib"),
+                    "737676bbf63c4a41a92102567bdd7a41c847a05626536b7b89736ab507b12115",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml-cpu.0.dylib"),
+                    "50f481faf591e5be7bf225b7e448bd1c0fc448676ba7253310d2ab625dc0ffcb",
                 ),
             ),
             license_name=_LLAMA_CPP_LICENSE,
@@ -663,6 +799,46 @@ MANAGED_RUNTIME_MANIFEST = ManagedRuntimeManifest(
                 (
                     PurePosixPath("llama-b10199/llama-tts"),
                     "21f7f29501e0195c09585d421961ee2af560455ef396f5b65f5db8a5d6a646c3",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libllama.so.0"),
+                    "63310289b1f5e8d1eacfa794ecd17da4147be91d1ea667a5e2385bee86f8fff5",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libllama.so"),
+                    "63310289b1f5e8d1eacfa794ecd17da4147be91d1ea667a5e2385bee86f8fff5",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml.so"),
+                    "ffd6a736ad58e2d9407ed427252520ffbd4bca8dd5de467ecb2bd446a7a3d75b",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml-base.so.0"),
+                    "10b878eaa31a10ad92adaaceec778649d20dc559be7ec9274cb0fc0327e2150a",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml-base.so"),
+                    "10b878eaa31a10ad92adaaceec778649d20dc559be7ec9274cb0fc0327e2150a",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libllama-common.so.0"),
+                    "f86fccda8cbdc93220509e377fa6cb0084efd81115bbffdd41425d6ad207fb72",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libmtmd.so.0"),
+                    "342bc44bce331320daeea4ab80dba2b6885b2f6a22924c098b67dfec79d3ffad",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libggml.so.0"),
+                    "ffd6a736ad58e2d9407ed427252520ffbd4bca8dd5de467ecb2bd446a7a3d75b",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libllama-common.so"),
+                    "f86fccda8cbdc93220509e377fa6cb0084efd81115bbffdd41425d6ad207fb72",
+                ),
+                (
+                    PurePosixPath("llama-b10199/libmtmd.so"),
+                    "342bc44bce331320daeea4ab80dba2b6885b2f6a22924c098b67dfec79d3ffad",
                 ),
             ),
             license_name=_LLAMA_CPP_LICENSE,
