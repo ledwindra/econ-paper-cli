@@ -23,6 +23,15 @@ def _run(
     transcript_path: Path | None = None,
 ) -> None:
     _emit(f"$ {' '.join(command)}\n", transcript_path)
+    creationflags = 0
+    if os.name == "nt":
+        # The managed Windows runtime can emit a console-control event while
+        # exiting. Keep that event inside the command process tree so it
+        # cannot interrupt this transcript controller before the CLI's return
+        # code and output have been captured.
+        creationflags = (
+            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+        )
     result = subprocess.run(
         command,
         input=input_text,
@@ -30,6 +39,7 @@ def _run(
         stderr=subprocess.STDOUT,
         text=True,
         timeout=900,
+        creationflags=creationflags,
     )
     _emit(result.stdout, transcript_path)
     if result.returncode != 0:
