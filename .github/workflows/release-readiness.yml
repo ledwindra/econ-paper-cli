@@ -42,7 +42,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/release-config" "$RUNNER_TEMP/release-library"
           econpapers setup --model qwen2.5-1.5b-instruct-q4-k-m
           python .github/scripts/create_release_fixture_pdf.py "$RUNNER_TEMP/release-fixture.pdf"
-          econpapers analyze "$RUNNER_TEMP/release-fixture.pdf"
+          python .github/scripts/prepare_release_library.py "$RUNNER_TEMP/release-fixture.pdf"
           econpapers status
 
       - name: Probe network before isolation
