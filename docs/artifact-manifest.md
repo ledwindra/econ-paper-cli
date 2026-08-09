@@ -76,9 +76,9 @@ described below, so the same field name means the same thing everywhere.
 
 `ManagedModelArtifact` (`domain/model_manifest.py`) and
 `ManagedRuntimeArtifact` (`domain/runtime_manifest.py`) describe the artifacts
-`econpapers setup` and `econpapers update` download. Since M6 they carry the
-same seven licensing facts this schema does, and they **share this module's
-vocabulary**: the `RedistributionStatus` enum, the `str` type for
+`econpapers setup` and `econpapers update` download. They carry the same seven
+licensing facts this schema does, and they **share this module's vocabulary**:
+the `RedistributionStatus` enum, the `str` type for
 `update_policy`, and the disclosure scope defined immediately above. All six
 pinned artifacts reference one `domain.artifacts.PINNED_UPDATE_POLICY`
 constant.
@@ -144,4 +144,3 @@ or redistribution claim is correct. In particular:
   exists.
 
 Filesystem adapters verify these claims locally. Network adapters and other integrations must preserve the repository's licensing and privacy guardrails before performing effects.
-

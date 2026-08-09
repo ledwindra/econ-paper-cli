@@ -78,7 +78,12 @@ CLI integration is implemented: `chat` and the interactive shell both
 construct `BM25Retriever` from the durable library and retrieve against it
 — see §10.
 
-## 5. Hybrid local-library requirements and architecture (Issue 11 documented)
+## 5. Hybrid local-library design (Issue 11, historical)
+
+This section records the design approved before the storage and ingestion
+layers were built. The storage protocol, SQLite schema, migrations, PDF
+ingestion, and early-section conversion have since shipped; §§8–10 describe
+their current status.
 
 Approved design:
 
@@ -96,13 +101,16 @@ Approved design:
 - Configurable library location, private user data, and offline ingestion
 - Separate recovery treatment for source-derived records and unique user state
 
-Not implemented:
+Not implemented when this design was approved:
 
 - Storage protocol, SQLite schema, migrations, or database files
 - PDF discovery, extraction, OCR, conversion, segmentation, or ingestion
 - Markdown export or retrieval-index persistence — retrieval-index persistence
   is **[planned]**
 - Ingestion CLI syntax
+
+Those historical gaps are now closed except for OCR, full-document conversion,
+and retrieval-index persistence.
 
 ## 6. Local inference adapter and evaluation framework (Issue 12)
 
@@ -126,8 +134,8 @@ Not yet implemented:
   specifically (the mechanical benchmark below); a default model has since
   been selected outside that benchmark — see §10
 
-Claim-level citation association/rendering, artifact download, and artifact update (`econpapers update`) are now
-implemented; see §10.
+Claim-level citation association/rendering, artifact download, and artifact
+update (`econpapers update`) are now implemented; see §10.
 
 ## 7. Real-model evaluation and default decision (Issue 13)
 
@@ -193,8 +201,10 @@ Not yet implemented:
 - Refresh rebuildable retrieval state after library changes — a shell session
   builds its retriever once at startup, so an `analyze` run during that
   session is not reflected until it is reopened
-- Verify offline, restart-safe, and cross-platform behavior systematically
-  (M5 in [`../MVP-PLAN.md`](../MVP-PLAN.md))
+- Extend release verification beyond the existing synthetic, private-corpus,
+  restart, concurrency, and hosted cross-platform scenarios as new failure
+  modes are identified; the current procedure is in
+  [`release-checklist.md`](release-checklist.md)
 
 Two items previously on this list have been removed as complete: preflight
 eligibility decisions and extraction-quality outcomes are both connected to
@@ -202,7 +212,7 @@ eligibility decisions and extraction-quality outcomes are both connected to
 `LIKELY_NEEDS_OCR`, and `UNUSABLE` all resolve to `NOT_ELIGIBLE` without
 reaching conversion. OCR itself remains genuinely unimplemented.
 
-## 10. End-to-end MVP orchestration
+## 10. End-to-end product orchestration
 
 Completed:
 
@@ -236,21 +246,20 @@ Completed:
   one-shot `chat` render the full stored passage text behind a citation
 - Managed artifact update command (`econpapers update` verifies and repairs
   managed runtime and model artifacts against their pinned manifests and
-  durable configuration, including the renamed-pin exception for the model
-  side — see M2 in [`../MVP-PLAN.md`](../MVP-PLAN.md))
+  durable configuration, including a renamed catalog pin for a model that
+  remains inside the managed directory)
+- Reproducible release-readiness checks: the default suite covers privacy,
+  restart, interruption, and concurrency contracts; the hosted workflow runs
+  the real offline CLI on Linux, macOS, and Windows; and
+  [`release-checklist.md`](release-checklist.md) defines the release record
+- Artifact licensing and typed metadata for both managed models and all four
+  managed runtime archives, documented in
+  [`artifact-licensing.md`](artifact-licensing.md)
 
 Not yet implemented:
 
-- Verify offline operation, privacy, restart safety, and cross-platform
-  behavior systematically — the pieces exist (`--offline`, network confined
-  to `setup`/`update`, SQLite close/reopen round-trips, cross-platform CI),
-  but the consolidated release-readiness pass is M5 in
-  [`../MVP-PLAN.md`](../MVP-PLAN.md)
-- Document artifact licenses and release procedures — artifact licenses are
-  recorded in [`artifact-licensing.md`](artifact-licensing.md) (M4 sweep 5)
-  and the release procedure in
-  [`release-checklist.md`](release-checklist.md) (M5); what remains is
-  executing the checklist and committing its run record
+- Complete and commit a release run record for each candidate before tagging
+  it; a prior candidate's record cannot attest to later source changes
 
 "Connect the approved library, ingestion, retrieval, and generation adapters"
 was removed from this list as complete: the Completed items directly above

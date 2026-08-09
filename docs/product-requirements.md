@@ -27,8 +27,9 @@ see `domain/model_manifest.py`, `services/model_provisioning.py`, and
 explicit per-invocation runtime/model overrides, but no longer require them:
 omitting all five identity flags falls back to this durable, `setup`-written
 configuration. Automatic model downloads and the selected default model were
-approved by the maintainer on 2026-08-08 — see `AGENTS.md`'s "Approved
-decisions" — closing that part of Gate 0 in [`../MVP-PLAN.md`](../MVP-PLAN.md).
+approved by the maintainer on 2026-08-08; see `AGENTS.md`'s "Approved
+decisions". The persistent-index decision remains future scope, while the
+default model and managed download behavior are current product behavior.
 
 The CLI also includes a one-shot cited `chat` command and a bare `econpapers`
 interactive shell (with follow-up resolution and `/show` evidence

@@ -1,6 +1,12 @@
 # Release checklist
 
-**Checklist version: 4**
+**Checklist version: 5**
+
+Version 5 (2026-08-09) makes this document self-contained after the completed
+MVP planning document was retired. It also records the hosted Windows
+isolation used by the passing release-readiness workflow: outbound firewall
+rules cover Python, the `econpapers` launcher, and the managed runtime while
+the Actions runner itself remains connected.
 
 Version 4 (2026-08-09) adds the manually triggered
 `.github/workflows/release-readiness.yml` workflow. It runs the real CLI
@@ -12,8 +18,8 @@ procedure below remains the fallback when the workflow cannot be used.
 
 Version 3 (2026-08-09) retires version 2's dated observation: the current CI
 configuration has now executed, all eight jobs green, at
-`8126fba` — see
-[`release-runs/2026-08-09-8126fba.md`](release-runs/2026-08-09-8126fba.md).
+`8126fba`; see
+[GitHub Actions run 31295765312](https://github.com/ledwindra/econ-paper-cli/actions/runs/31295765312).
 Limitation 3 keeps only its durable half. Limitation 2 narrows to the
 exact-floor gap. No procedural rule changed.
 
@@ -25,15 +31,10 @@ and a run record produced under it would have overstated its evidence. The
 dated observation has now been superseded by a successful run; the rule it
 rests on has not — see limitation 3.
 
-The recorded release procedure required by `MVP-PLAN.md`'s M5 exit condition.
-Working through it produces a *run record* — a filled-in copy of the
-"Run record" section at the bottom — which is what actually satisfies the
-gate. A blank checklist does not.
-
-Read `MVP-PLAN.md` § "M5 — Release-readiness verification" alongside this
-document. M5 defines what each check must establish and, just as importantly,
-what it must not be claimed to establish; this file is the operational form of
-that, not a second source of truth.
+This checklist is the source of truth for release-readiness verification.
+Working through it produces a *run record*, a filled-in copy of the "Run
+record" section at the bottom. A blank checklist, a green default test suite,
+or a workflow run against another commit does not satisfy the release gate.
 
 ---
 
@@ -55,11 +56,10 @@ tested, so "tested at `HEAD`" is never true and must not be written.
    configuration change invalidates the run — pick a new candidate SHA and
    start over.
 4. **Tag the candidate SHA**, never the results-only commit on top of it.
-   Settled 2026-08-08; see `MVP-PLAN.md` § "Which commit was tested". The tag
-   must name the commit whose behavior was tested, and the results-only
-   commit is by definition one the run did not test. The run record restates
-   the convention so a reader of the record alone can see it, but it is not a
-   per-release choice.
+   This convention was settled on 2026-08-08. The tag must name the commit
+   whose behavior was tested, and the results-only commit is by definition one
+   the run did not test. The run record restates the convention so a reader of
+   the record alone can see it, but it is not a per-release choice.
 
 ## 2. Environment prerequisites
 
@@ -298,8 +298,8 @@ operations. None of those bear on the no-upload claim, which is about what
    be replaced onto a non-empty destination the way `os.replace` handles a
    single file. An interrupt in that window destroys the corrupt install; no
    partial tree is ever promoted, and a later run converges. A valid install
-   is never touched. See `MVP-PLAN.md` § M2 "Known limitation carried
-   forward".
+   is never touched. The provisioning implementation and its regression tests
+   are authoritative for this recovery contract.
 2. **Floor-version coverage excludes Windows.** No `win32` build exists at or
    above the 3.10.12 floor (§ 5), so on Windows the lowest interpreter this
    project can test is 3.11. Windows 3.11 and 3.14 have now been *tested*
@@ -329,10 +329,11 @@ operations. None of those bear on the no-upload claim, which is about what
    Two consequences follow. The Intel-macOS floor gap is closed —
    `macos-15-intel` at exactly 3.10.12 passed. And the earlier claim that
    every commit from `945341e` onward was CI-unvalidated no longer describes
-   the present: M4, M5's own tier-1 suite, and M6 are all included in the
-   green run at `8126fba`. The first Windows execution under this
-   configuration also found a real Windows-only test defect (a POSIX path
-   literal asserted verbatim), fixed at that same SHA.
+   the present: the documentation truth pass, tier-1 release suite, and
+   artifact-metadata alignment are all included in the green run at
+   `8126fba`. The first Windows execution under this configuration also found
+   a real Windows-only test defect (a POSIX path literal asserted verbatim),
+   fixed at that same SHA.
 
    For history: the last green run before this, `977c7e26` (2026-08-02),
    executed a *different* workflow against a *different* floor —
@@ -348,8 +349,7 @@ operations. None of those bear on the no-upload claim, which is about what
    because it fails at `check_readiness()`. Pinned by
    `test_a_ready_generator_losing_its_executable_reports_internal_failure`.
    Reclassifying it is a behavior change with exit-code and documentation
-   consequences and is a **candidate follow-up issue**, deliberately not done
-   inside M5.
+   consequences and remains a **candidate follow-up issue**.
 5. **The no-upload guarantee covers application-initiated traffic.** It does
    not and cannot constrain what a user-supplied `llama-completion` binary
    does in its own process, and it excludes `setup`/`update` artifact

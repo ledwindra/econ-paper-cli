@@ -7,9 +7,9 @@ policy, and whether the artifact contains copyrighted full text.
 
 ## Where authority lives
 
-Until M6 this document called itself "the single authoritative record". That
-is no longer accurate, because the facts are now typed. Authority runs in
-three levels, and where they disagree the earlier one wins:
+An earlier version of this document called itself "the single authoritative
+record". That is no longer accurate, because the facts are now typed.
+Authority runs in three levels, and where they disagree the earlier one wins:
 
 1. **The catalogs** — `econ_paper_cli.domain.model_manifest` and
    `econ_paper_cli.domain.runtime_manifest_data` — are the source of truth.
@@ -45,16 +45,17 @@ their seven licensing facts, the update policy, and the generated declarations
 block all describe `main` today: these are the exact pins `econpapers setup`
 and `econpapers update` use. An earlier version of this section carried one
 **[planned]** exception, a "Residual schema gap" describing fields the
-catalogs did not yet have; M6 added those fields, so that section is gone and
-nothing here is [planned].
+catalogs did not yet have. Typed metadata alignment added those fields, so
+that section is gone and nothing here is [planned].
 
 ## Scope of this document
 
 **[current]**: this covers exactly the artifacts the application can download.
 It is not a corpus manifest. No paper corpus, converted paper text, or
-retrieval index is downloaded, shipped, or redistributed — see
-[Corpus policy](../README.md#corpus-policy) for the separate paper-content
-rules, which are stricter.
+retrieval index is downloaded, shipped, or redistributed. See the README's
+[evidence scope](../README.md#evidence-scope) and
+[local data and privacy](../README.md#local-data-and-privacy) sections for the
+separate paper-content rules, which are stricter.
 
 The `redistribution_status` values below use the vocabulary of
 [`docs/artifact-manifest.md`](artifact-manifest.md), whose safety boundary
@@ -172,9 +173,9 @@ at once.
 ## Typed representation
 
 `ManagedModelArtifact` and `ManagedRuntimeArtifact` carry all seven licensing
-facts as validated fields. The three that M6 added —
-`redistribution_status`, `update_policy`, and `contains_copyrighted_full_text`
-— share `domain.artifacts`' vocabulary with `ArtifactManifest`: the same
+facts as validated fields. The fields `redistribution_status`,
+`update_policy`, and `contains_copyrighted_full_text` share
+`domain.artifacts`' vocabulary with `ArtifactManifest`: the same
 `RedistributionStatus` enum, the same `str` type for the policy, the same
 boolean disclosure with the scope defined in
 [`artifact-manifest.md`](artifact-manifest.md).

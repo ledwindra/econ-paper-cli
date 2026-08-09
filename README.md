@@ -1,540 +1,309 @@
-# Econ Paper CLI
+# econpapers
 
-A free, open-source, local-first conversational literature search tool for economists.
+[![CI](https://github.com/ledwindra/econ-paper-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/ledwindra/econ-paper-cli/actions/workflows/ci.yml)
+[![Offline CLI](https://github.com/ledwindra/econ-paper-cli/actions/workflows/release-readiness.yml/badge.svg)](https://github.com/ledwindra/econ-paper-cli/actions/workflows/release-readiness.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-The goal is to let users ask research questions in natural language and receive synthesized answers backed by inspectable evidence. After one successful `econpapers setup` and `econpapers analyze`, running bare `econpapers` opens an interactive cited-chat shell over the durable local library:
+`econpapers` is a free, open-source literature search tool for economists. It
+turns a local collection of papers into a conversational library, retrieves
+relevant passages, and answers questions with citations that can be inspected
+in the terminal.
+
+The default workflow runs on CPU, requires no API key, and stays offline after
+setup. Your papers, questions, and library remain on your machine.
+
+## What it does
+
+The unit of evidence in `econpapers` is a stored passage from a paper's
+Abstract or Introduction. A question follows four steps:
+
+1. BM25 retrieves passages from the local SQLite library.
+2. By default, a local Qwen2.5 model receives the question and retrieved evidence.
+3. The model returns an answer with claim-level citation identifiers.
+4. `econpapers` validates those identifiers and withholds claims that appear
+   to attribute one paper's distinctive wording to another.
+
+This design makes the answer inspectable. It does not make the answer
+infallible. The grounding checks are structural, not a semantic proof that a
+claim is true or that a finding is causal. See the
+[generation contract](docs/generation-contract.md#claim-grounding) for the
+exact boundary.
+
+## Requirements
+
+- Python 3.10.12 or newer
+- Windows, macOS, or Linux
+- A CPU with enough memory for the selected model
+- Internet access during the first `setup`
+- Local PDF files that you are entitled to use
+
+A GPU is not required. Docker, cloud inference, paid APIs, and API keys are
+not part of the default workflow.
+
+## Install
+
+Clone the repository and install it into a virtual environment:
+
+```bash
+git clone https://github.com/ledwindra/econ-paper-cli.git
+cd econ-paper-cli
+python -m venv .venv
+```
+
+Activate the environment on macOS or Linux:
+
+```bash
+source .venv/bin/activate
+```
+
+On Windows PowerShell:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+Then install the package:
+
+```bash
+python -m pip install -e .
+```
+
+## Quickstart
+
+The shortest path from a directory of PDFs to a cited answer is:
+
+```bash
+econpapers setup
+econpapers analyze /path/to/papers
+econpapers
+```
+
+`setup` downloads and verifies a pinned `llama.cpp` runtime and the default
+1.5B GGUF model when they are absent. It is idempotent, so a verified
+installation is reused.
+
+`analyze` accepts one PDF or a directory. Directory runs show progress, reuse
+exact checksum matches, and print a batch summary. Source PDFs are read in
+place and are never modified, moved, or deleted.
+
+Bare `econpapers` opens the interactive shell:
 
 ```text
 $ econpapers
 === econpapers interactive shell ===
-Database Path: ...
-Paper Count: 12
-Passage Count: 34
+Paper Count: 1179
+Passage Count: 16940
 Evidence scope: stored Abstract and Introduction passages only.
-Commands: /help, /status, /show, /reset, /exit, /quit
-econpapers> Has anyone studied the effect of direct regional elections on infrastructure investment?
-Question: Has anyone studied the effect of direct regional elections on infrastructure investment?
-Outcome: answered
-Answer: ...
-
---- Citations ---
-[e1]
-  Paper Title: ...
-  ...
-
-econpapers> /show e1
-[e1] ...
-  Paper ID: ...
-  Source Path: ...
-  Section Heading: ...
-  Page Range: ...
-  Passage ID: ...
-  Retrieval Rank: ...
-  Retrieval Score: ...
-
-  <the full stored passage text>
-
-econpapers> /exit
+econpapers> Has land titling affected urban development in Indonesia?
 ```
 
-Each question is answered independently against the stored Abstract/Introduction corpus. The shell does resolve **follow-up questions**: a question that refers back to an earlier turn ("what about its effect on housing?") is rewritten into a standalone question first, and the rewrite is always printed as `Interpreted as:` so you can see — and correct — how it was read. Detection is conservative, so a self-contained question is never rewritten. `/reset` forgets earlier turns; only answered turns become context.
+Use `/show e1` to inspect the passage behind citation `e1`, `/reset` to clear
+conversation context, and `/exit` to leave the shell.
 
-`/show ID` prints the full stored passage text behind one citation from the most recent answered turn (safely normalized, not necessarily byte-identical — see "Evidence inspection" below) — so a claim can be checked against the source, not just the citation metadata. Bare `/show` lists the citation IDs currently available. Evidence is scoped to the latest turn only: a turn that does not answer (`no_matches`, `abstained`, `withheld`, or a failure) clears it, and `/reset` clears it along with conversation history. One-shot `econpapers chat QUESTION --show-evidence` prints the same evidence inline under each citation, for scripting or a single lookup without opening the shell.
-
-## Product principles
-
-- **Free by default:** no API keys, subscriptions, or per-token charges.
-- **Local-first:** retrieval and generation run on the user's machine.
-- **Cross-platform:** Windows, macOS, and Linux are first-class targets.
-- **CPU-capable:** a GPU may improve performance but must not be required.
-- **Evidence-driven:** substantive claims must be traceable to retrieved sources.
-- **Open source:** the codebase should remain auditable and extensible.
-- **Legally conservative:** copyrighted paper full text must not be redistributed without permission.
-
-## MVP
-
-The MVP should include:
-
-- a conversational command-line interface;
-- a local language model;
-- a bundled economics-paper metadata and retrieval index — **[planned]**,
-  post-MVP. Retrieval today is an in-memory BM25 index rebuilt on each run;
-  nothing is persisted to disk or shipped with the package;
-- literature synthesis;
-- follow-up questions;
-- evidence inspection;
-- local setup and status commands.
-
-The MVP should not require:
-
-- OpenAI;
-- Anthropic;
-- any paid cloud model;
-- API keys;
-- Docker;
-- a GPU;
-- internet access after required artifacts are installed.
-
-## CLI scaffold
-
-Install the project from the repository using Python 3.10 or newer:
+For one non-interactive question:
 
 ```bash
-python -m pip install -e .
+econpapers chat "What does the literature say about land informality?"
 ```
 
-The package currently exposes these commands:
+Add `--show-evidence` to print the full stored passages with the answer:
 
 ```bash
-econpapers                                                                    # interactive shell
-econpapers setup [--model MODEL_ID] [--llama-cpp-path EXECUTABLE_PATH] [--model-path MODEL_PATH --model-id MODEL_ID --model-bytes BYTES --model-checksum SHA256] [--offline] [--threads N] [--timeout SECONDS] [--db-path DB_PATH]
-econpapers status
-econpapers chat QUESTION [--show-evidence]
-econpapers update
-econpapers analyze TARGET_PATH [--max-passage-characters 1200]
+econpapers chat \
+  "What does the literature say about land informality?" \
+  --show-evidence
 ```
 
-`econpapers update` verifies and repairs managed local runtime and model artifacts.
+## Evidence scope
 
-Bare `econpapers` (no command) opens the interactive shell described above;
-`econpapers --help` still prints normal CLI help and exits.
+The searchable corpus contains detected Abstract and Introduction passages
+only. `analyze` extracts every page locally to locate those sections, but it
+persists only the detected early-section text. Results, methods, appendices,
+and conclusions are therefore not available unless their content also appears
+in an Abstract or Introduction.
 
-### Quickstart
+This scope has an economic consequence. A question about a paper's setting or
+research question may be answerable, while a question about a coefficient,
+standard error, welfare calculation, or robustness exercise may not be. When
+the available evidence is insufficient, the model may abstain or produce only
+the claims supported by the early sections.
 
-From a clean checkout, this is the whole path to a cited answer:
+Full-document ingestion and OCR are not implemented.
 
-```bash
-python -m pip install -e .
-econpapers setup                          # downloads and verifies the pinned runtime + 1.5B model
-econpapers analyze /path/to/your/papers   # one PDF or a directory; safe to re-run
-econpapers                                # interactive shell over what you just analyzed
-```
+## Commands
 
-`setup` only needs to run once (it's idempotent and reuses whatever already
-verifies); `analyze` is safe to re-run over the same or a growing directory,
-since it skips PDFs it has already ingested. After that, `econpapers` (shell)
-or `econpapers chat QUESTION` both work offline.
+| Command | Purpose |
+| --- | --- |
+| `econpapers setup` | Provision and persist a verified local runtime and model. |
+| `econpapers analyze TARGET` | Analyze one PDF or a directory and update the local library. |
+| `econpapers` | Open the interactive cited-chat shell. |
+| `econpapers chat QUESTION` | Ask one question without opening a shell. |
+| `econpapers status` | Report configuration, artifact readiness, and library counts. |
+| `econpapers update` | Verify and repair managed runtime and model artifacts. |
 
-What `analyze` ingests is the **Abstract and Introduction only** — that is the
-**[current]** supported corpus scope, and answers are drawn from those
-sections alone. Full-document ingestion is **[planned]** and does not ship:
-`analyze` extracts text from every page of the PDF, but only the detected
-Abstract and Introduction are converted to Markdown, stored, and made
-searchable. Text from the rest of the paper is read during extraction and
-then discarded — it never becomes a passage and can never be retrieved or
-cited. So a paper's results, methods, and conclusions are not available as
-evidence: a question that depends on them cannot be answered from the
-library. What you get instead is not guaranteed to be an explicit "I don't
-know" — depending on the question and the model, it may be an abstention, or
-an answer drawn from the early-section evidence that is available. Your
-source PDFs are never modified or deleted.
+Run `econpapers COMMAND --help` for the complete option list.
 
-Everything `setup`/`analyze` write lands in per-user application directories,
-never inside the repository or working directory, each independently
-overridable:
+### Follow-up questions
 
-| What | Default location | Override |
-| --- | --- | --- |
-| SQLite library/database | Windows `%LOCALAPPDATA%\econpapers`; macOS `~/Library/Application Support/econpapers`; Linux `${XDG_DATA_HOME:-~/.local/share}/econpapers` | `ECONPAPERS_LIBRARY_DIR` |
-| Durable runtime/model configuration | Windows `%LOCALAPPDATA%\econpapers\config`; macOS `~/Library/Application Support/econpapers/config`; Linux `${XDG_CONFIG_HOME:-~/.config}/econpapers` | `ECONPAPERS_CONFIG_DIR` |
-| Managed `llama.cpp` runtime install | `<library dir>/runtime` | `ECONPAPERS_RUNTIME_DIR` |
-| Managed GGUF model install | `<library dir>/models` | `ECONPAPERS_MODEL_DIR` |
+The interactive shell keeps the last two answered turns in memory. A question
+such as "what about its effect on housing?" may be rewritten into a standalone
+question before retrieval. The shell prints the rewrite as `Interpreted as:`
+so the interpretation remains visible.
 
-The runtime and model directories nest under the library directory by
-default, so setting only `ECONPAPERS_LIBRARY_DIR` moves all three together;
-set `ECONPAPERS_RUNTIME_DIR`/`ECONPAPERS_MODEL_DIR` explicitly to pin either
-one somewhere else instead. `ECONPAPERS_CONFIG_DIR` is always independent of
-the other three. Source PDFs you point `analyze` at are always read in place
-and never moved, modified, or deleted. Run `econpapers status` at any point
-to see the resolved paths, artifact readiness, and stored paper/passage
-counts for your current environment.
-
-### Choosing a model
-
-`econpapers setup` provisions a model for you: with no model flags at all it
-downloads, checksum-verifies, and installs a pinned GGUF, exactly as it already
-does for the `llama.cpp` runtime. A model already installed and matching its
-pinned checksum is reused, so re-running `setup` costs seconds, not another
-download.
-
-Two sizes are pinned. Both were measured against this tool's prompt on a real
-248-paper library:
-
-| Model | Size | Behavior |
-| --- | --- | --- |
-| Qwen2.5 **1.5B** Instruct Q4_K_M | ~1.0 GB | Runs anywhere. Answers are thin and sometimes repetitive, and it will occasionally reach past the best-matching paper for a weaker one. |
-| Qwen2.5 **7B** Instruct Q4_K_M | ~4.4 GB | Noticeably better answers: picks the right paper, states specific findings, and produced no withheld claims on the same questions. Wants roughly 8 GB of free RAM. |
-
-The 1.5B is the default deliberately: it is the smaller download and needs no
-special hardware, which is what "CPU-capable, no GPU required" has to mean for
-a first run. Move to the 7B when you want answers you would actually quote and
-have the disk and memory to spare. Nothing else changes: same command, same
-library, same citation and grounding checks.
-
-Both pinned GGUFs are Apache-2.0. The 1.5B is the Qwen2.5 1.5B Instruct GGUF
-published by Alibaba Cloud (Qwen); the 7B is a bartowski quantization of the
-same Qwen2.5 7B Instruct base weights. Neither this repository's MIT license
-nor its checksum pin changes the upstream model's license — see
-`domain/model_manifest.py`'s `license_name`/`attribution_text` fields for the
-exact recorded text per artifact.
-
-[`docs/artifact-licensing.md`](docs/artifact-licensing.md) is the
-authoritative record for every artifact `econpapers` downloads — both models
-and all four pinned `llama.cpp` archives — with source, license,
-redistribution status, size, checksum, update policy, and
-copyrighted-full-text status for each.
-
-```bash
-econpapers setup                                       # default 1.5B
-econpapers setup --model qwen2.5-7b-instruct-q4-k-m    # opt in to the 7B
-```
-
-Run `econpapers status` afterwards to confirm which model is active.
-
-To use a GGUF you supplied yourself, pass all four model-identity flags
-together — that bypasses provisioning entirely and never downloads anything:
-
-```bash
-econpapers setup \
-  --model-path /path/to/your-model.gguf \
-  --model-id your-model \
-  --model-bytes "$(stat -f%z /path/to/your-model.gguf)" \
-  --model-checksum "$(shasum -a 256 /path/to/your-model.gguf | cut -d' ' -f1)"
-```
-
-Supplying only some of the four is a typed error rather than a partial
-configuration. You can also try a model for a single question without changing
-your durable configuration by passing the same five flags to `chat` or
-`analyze`. `--offline` refuses every download, for the model as well as the
-runtime.
-
-Whichever model you pick, an answer that attributes one paper's findings to
-another is withheld rather than shown — see
-[`docs/generation-contract.md`](docs/generation-contract.md). A smaller model
-therefore fails by saying less, not by saying something false.
-
-`econpapers setup` validates a proposed local `llama.cpp` runtime and GGUF
-model (path, expected size, expected SHA-256 checksum, and optional thread
-count, timeout, and database-path defaults), verifies local readiness, and —
-only on success — durably and atomically persists that configuration to a
-canonical per-user configuration file. Runtime, model, and database paths are
-canonicalized to absolute paths before they become durable, so a relative
-path validated in one working directory resolves the same way from any later
-directory. On validation or readiness failure, the prior durable configuration
-is left unreplaced — though when managed runtime provisioning was involved, a
-verified managed runtime install may still remain on disk for reuse by a later
-`setup` attempt, since that install is validated independently of whether the
-overall command ultimately succeeds.
-
-`--llama-cpp-path` is optional (issue #58): a fresh user can run `econpapers
-setup --model-path ... --model-id ... --model-bytes ... --model-checksum
-...` with no `--llama-cpp-path` at all, and setup will reuse an
-already-verified managed `llama.cpp` install or download, checksum-verify,
-safely extract, and atomically install the one pinned release for the
-current platform/architecture into an application-managed directory — no
-manual `llama.cpp` build, `PATH` edit, or executable discovery required.
-Supplying `--llama-cpp-path` always bypasses managed provisioning entirely
-(no download is ever triggered) and takes precedence, exactly as before.
-`--offline` refuses any download, failing with a typed error unless an
-explicit path is given or a verified managed runtime is already installed.
-See [`docs/managed-runtime-provisioning.md`](docs/managed-runtime-provisioning.md)
-for the manifest/receipt schema, the pinned release's license and
-attribution, and recovery instructions. Model acquisition remains manual
-and out of scope for this issue.
-
-That last sentence is **[historical]** — it is scoped to the runtime
-provisioning issue and no longer describes the tool. **[current]**:
-`econpapers setup` provisions the model as well as the runtime. When
-`--model-path` and its companion flags are omitted, it downloads and
-checksum-verifies a pinned GGUF from `domain/model_manifest.py` — Qwen2.5
-1.5B Instruct Q4_K_M by default, the 7B available via `--model` — under the
-maintainer approval recorded in [`AGENTS.md`](AGENTS.md). Supplying the
-explicit model flags bypasses provisioning entirely, exactly as
-`--llama-cpp-path` does for the runtime.
-
-`econpapers status` is a read-only report of whether durable configuration
-exists and is valid, independent runtime-executable and model-artifact
-readiness (runtime is further classified as managed/external/unknown origin,
-and verified/missing/corrupt-or-mismatched/unsupported-platform/not-checked
-state — a missing or corrupt model is never conflated with a corrupt managed
-runtime, or vice versa), the resolved database path, schema version, and
-stored paper/passage counts. It never creates or modifies the configuration
-file or database, and never downloads anything.
-
-`econpapers analyze` and `econpapers chat` accept the same five runtime/model
-flags (`--llama-cpp-path`, `--model-path`, `--model-id`, `--model-bytes`,
-`--model-checksum`) as optional overrides for that invocation only. Omitting
-all five falls back to the durable configuration written by `econpapers
-setup`, resolved once per invocation and never mutated; supplying some but
-not all five is a typed configuration error, since a partial override can
-never reconstruct one coherent, previously verified identity. This
-resolution happens from any working directory. `econpapers analyze` is an
-offline command for one local PDF or a directory of PDFs. It recursively
-processes unique PDF content in deterministic path order, persists structured
-research-question evidence and provenance to SQLite, and resumes exact prior
-analyses when the checksum and canonical settings match. The command
-downloads nothing and never modifies source PDFs. Eligible analyses also
-persist deterministic Abstract/Introduction Markdown, passages, and exact
-source-fragment provenance. Exact analysis-plus-library reuse and
-library-only backfill are decided before the local model adapter is
-initialized, so those paths — and the `chat` `EMPTY_LIBRARY`/`NO_MATCHES`
-outcomes — do not need runtime/model configuration or accessible model
-artifacts.
-
-### Interactive shell (Issue 56 implemented)
-
-Bare `econpapers` opens a plain-text interactive shell instead of printing
-help. It resolves configuration and the database path the same way as
-`analyze`/`chat` (Issue #54 boundaries), opens the configured SQLite library
-read-only exactly once, and builds one session snapshot (strict early-section
-records, one validated `Corpus`, one in-memory `BM25Retriever`). The prompt
-is `econpapers> `, with standard line-editing, command history (Up/Down
-arrows), and word navigation shortcuts (Option/Alt + Left/Right arrows)
-enabled in interactive terminals.
-
-Each non-empty, non-command line is one independent cited question — exactly
-as `econpapers chat` — normalized, retrieved, and (only if evidence exists)
-generated and citation-validated the same way. The local generator is
-constructed lazily on the first matched question and reused for later matched
-questions in the same process; empty-library and no-match questions never
-construct it, and a typed generator failure is rendered for that question
-without corrupting the session, so the next question can retry.
-
-Built-in commands: `/help` (session help), `/status` (database path,
-paper/passage counts, and generator readiness, read-only), `/show` (list the
-citation IDs from the most recent answered turn, or `/show ID` to print that
-citation's full stored passage text and provenance — see "Evidence
-inspection" below), and `/exit`/`/quit` (terminate successfully). A blank
-line just redisplays the prompt.
-EOF exits successfully; `Ctrl-C` while waiting for input exits immediately
-with code 130 and no traceback. The session is strictly read-only: no
-database writes or migrations, no PDF reopening or reanalysis, no
-configuration mutation, and no persistence of questions, answers, or
-citations. The library is a fixed snapshot for the life of the process —
-papers analyzed after the shell opens become visible only after restarting
-`econpapers`. Conversation context is deliberately narrow: the shell keeps
-the last two *answered* turns in memory only, and uses them solely to rewrite a
-follow-up question into a standalone one before retrieval. Nothing is persisted,
-an abstained or withheld turn never becomes context, and the rewrite is always
-shown as `Interpreted as:`. One-shot `econpapers chat` has no context at all and
-answers exactly what it is given.
+Only answered turns enter this context. `/reset` clears it, and one-shot
+`econpapers chat` has no conversation history.
 
 ### Evidence inspection
 
-A citation identifies a paper and passage, but not what the passage actually
-says — `/show` in the shell and `--show-evidence` on one-shot `chat` render
-the full stored passage text so a claim can be checked against its source
-directly, without opening the database. Rendering is safe rather than
-byte-identical: CRLF/CR line endings are normalized to LF, terminal control
-characters are replaced with a placeholder glyph, and long lines are wrapped
-for readability — nothing is truncated or summarized.
+Citation identifiers such as `[e1]` refer to retrieved passages, not merely to
+paper titles. The following surfaces expose the underlying text:
 
-`/show` reads only the citations already resolved for the *most recent*
-answered turn — it never re-reads storage, so a concurrent `analyze` cannot
-change what it shows mid-session. A turn that does not answer
-(`no_matches`, `abstained`, `withheld`, or a failure) clears that evidence
-rather than leaving the previous turn's passages visible for a question they
-no longer correspond to; `/reset` clears it too, together with conversation
-history. `econpapers chat --show-evidence` has no such state: it always
-prints the evidence for the one question just asked.
+- `/show` lists citations from the latest answered shell turn.
+- `/show e1` prints one cited passage and its provenance.
+- `econpapers chat QUESTION --show-evidence` prints all cited passages.
 
-```bash
-econpapers chat "What is the effect of transit expansion on wages?" --show-evidence
-```
+Evidence is scoped to the latest shell turn. An abstention, withheld answer,
+failed turn, or `/reset` clears the previous citation set so stale evidence is
+not presented as support for a new question.
 
-Both surfaces call the same renderer, so the output is identical either way.
+## Choosing a model
 
-### Intended future workflow
+Two checksum-pinned CPU-capable models are available:
+
+| Model | Download | Suggested use |
+| --- | ---: | --- |
+| Qwen2.5 1.5B Instruct Q4_K_M | about 1.0 GB | Default. Lower memory use and faster CPU generation. |
+| Qwen2.5 7B Instruct Q4_K_M | about 4.4 GB | Larger model for users willing to trade memory and time for answer quality. |
+
+Install the default model:
 
 ```bash
-econpapers setup --llama-cpp-path EXECUTABLE_PATH --model-path MODEL_PATH --model-id MODEL_ID --model-bytes BYTES --model-checksum SHA256
-econpapers ingest /path/to/papers
-econpapers
+econpapers setup
 ```
 
-The `ingest` example illustrates the intended ordinary-user workflow. Its
-command name, syntax, and flags are not yet approved or implemented. The user
-should eventually be able to select a legally obtained PDF or directory and
-have the application derive checksums, metadata, Markdown, passages,
-provenance, database records, and retrieval state locally. Manual conversion,
-manifest creation, segmentation, identifier assignment, and database insertion
-should not be necessary.
+Select the 7B model:
 
-## Local inference adapter
+```bash
+econpapers setup --model qwen2.5-7b-instruct-q4-k-m
+```
 
-The repository implements a configurable `llama-completion` subprocess adapter
-for the existing backend-independent `Generator` protocol. It uses explicit
-local paths, offline mode, a versioned evidence-only prompt, a fingerprinted
-GBNF constraint derived from the authoritative JSON schema, authoritative
-citation resolution, and final response validation. This adapter itself does
-not download anything; network access anywhere in the application is limited
-to the explicit runtime and model provisioning steps inside `econpapers
-setup` (see "Choosing a model" above, and issue #58 for the runtime side) —
-`analyze`, `chat`, bare `econpapers`, and `status` remain unconditionally
-network-free. The `analyze` and `chat` commands construct this adapter only
-from local runtime and model paths — either explicit per-invocation CLI
-overrides or durable configuration written by `econpapers setup` — and only
-when a local generator is actually required.
+The 7B model may produce stronger synthesis, but CPU generation is much
+slower. It was selected outside the repository's frozen model benchmark, so
+the project does not claim a measured quality gain. Roughly 8 GB of free
+memory is a sensible minimum. The 1.5B model is the product default because
+the first run should work on ordinary computers, including machines without a
+GPU.
 
-`llama.cpp` b10199 is pinned for adapter compatibility. Issue 13's original
-mechanical benchmark evaluated three candidates for the initial comparison
-(SmolLM2 1.7B Instruct Q4_K_M, official Qwen3 0.6B Q8_0, and official Qwen2.5
-1.5B Instruct Q4_K_M) and, at that time, neither eligible Qwen candidate
-passed its first mechanical run, so no default was selected from that
-benchmark. A default was later chosen outside that benchmark and is what
-`econpapers setup` now provisions — see "Choosing a model" above. See
-[`docs/local-generation-evaluation.md`](docs/local-generation-evaluation.md)
-for the Issue 13 benchmark's exact revisions, checksums, licenses, and
-mechanical-failure evidence; that document is a historical record of the
-benchmark run, not a statement of current default-model status.
+You may also supply your own compatible GGUF and `llama.cpp` executable. The
+explicit model path, identifier, size, and checksum must be supplied together.
+See `econpapers setup --help` for the full contract.
 
-## Corpus policy
+Artifact sources, checksums, licenses, and redistribution decisions are
+recorded in [artifact licensing](docs/artifact-licensing.md).
 
-NBER working papers and many other economics papers are copyrighted. Converting them to Markdown does not remove copyright restrictions.
+## Performance
 
-The project may distribute:
+Retrieval and generation have different costs:
 
-- bibliographic metadata;
-- paper identifiers;
-- source URLs;
-- abstracts where redistribution is permitted;
-- topic labels;
-- derived indexes that do not reconstruct copyrighted full text — **[planned]**;
-  no index is distributed today;
-- code that helps users build a local corpus from authorized sources.
+- Retrieval uses an in-memory BM25 index built from passages already stored in
+  SQLite. No retrieval index is persisted or bundled.
+- Local generation starts `llama-completion` for the selected model. On CPU,
+  this usually dominates response time.
+- The interactive shell builds one retrieval snapshot when it opens. Papers
+  added by another `analyze` process become visible after the shell restarts.
 
-The project must not bundle converted full-text papers unless redistribution permission is established.
+If answers take several minutes, confirm the active model with
+`econpapers status`. Switching from 7B to 1.5B is the most direct available
+speed improvement without changing hardware:
 
-## Planned local paper library
+```bash
+econpapers setup --model qwen2.5-1.5b-instruct-q4-k-m
+```
 
-The approved future library uses four local layers:
+## Local data and privacy
 
-| Layer | Purpose |
+After setup, `status`, `analyze`, `chat`, and the interactive shell run without
+network access. Only explicit `setup` and `update` operations may download
+pinned artifacts. The release workflow verifies the offline CLI paths on
+Linux, macOS, and Windows.
+
+Default data locations are platform-specific application directories:
+
+| Data | Override |
 | --- | --- |
-| Original PDFs | Authoritative user-provided source documents |
-| Generated Markdown | Inspectable derived representation |
-| SQLite | Structured catalog, retrieval-ready passages, provenance, checksums, ingestion state, and other application state |
-| Retrieval index | Rebuildable search accelerator. **[current]** as an in-memory BM25 index rebuilt on each run (`adapters/bm25.py`); **[planned]** as a persisted on-disk layer |
+| SQLite library | `ECONPAPERS_LIBRARY_DIR` |
+| Runtime and model configuration | `ECONPAPERS_CONFIG_DIR` |
+| Managed runtime | `ECONPAPERS_RUNTIME_DIR` |
+| Managed models | `ECONPAPERS_MODEL_DIR` |
 
-Ingestion must never modify or delete a user's source PDFs. Whether the
-application later manages private PDF copies or registers files in place
-remains undecided. Recovery of derived records therefore depends on the
-authoritative PDFs remaining accessible, unless a later managed-copy policy
-preserves them.
+Run `econpapers status` to see the resolved paths on the current machine.
+Questions, answers, and conversation history are not persisted. The SQLite
+library contains derived records and passages from the PDFs you analyzed.
 
-Generated Markdown, source-derived SQLite records, passage text, provenance,
-and retrieval indexes should be rebuildable from accessible PDFs plus versioned
-conversion logic and configuration. For retrieval this invariant is
-**[current]** but trivially so — the BM25 index exists only in memory and is
-rebuilt from stored passages on every run, so there is nothing on disk that
-could go stale. It becomes a substantive guarantee only for the **[planned]**
-persisted index layer. Future annotations, metadata corrections,
-preferences, chat history, or similar unique user state may need separate
-backup or export behavior and is not assumed to be reconstructible.
+## Interpreting an answer
 
-The library location will be configurable and usable outside this repository.
-The ignored repository-root `/papers/` directory is only a convenience
-location, not a hard-coded application path. PDFs, converted copyrighted text,
-Markdown, databases, and indexes remain private user data and must not be
-committed or redistributed. **[current]** as a standing rule; it binds the
-in-memory BM25 index today and any **[planned]** persisted index later.
+Treat an `econpapers` response as a cited reading aid, not as an estimator or
+literature-review substitute. Before using a claim:
 
-Ordinary ingestion will run locally without network access. Future metadata
-enrichment would require separate approval and explicit opt-in. The MVP uses
-Python's standard-library `sqlite3` behind a replaceable storage boundary
-(`StorageBackend` protocol and `SQLiteStorage` adapter); it does not require
-PostgreSQL, a database server, Docker, a cloud database, or a vector database.
+1. Inspect its cited passage.
+2. Open the source PDF when the distinction depends on methods or results.
+3. Check whether the answer describes an association, a research design, or a
+   causal estimate.
+4. Verify magnitudes and uncertainty against the paper itself.
 
-### Local storage foundation (Issue 24 implemented)
+The optional `descriptive` or `causal` label is declared by the model. The
+application validates the label's form but does not compare it with the cited
+evidence. It is metadata, not an econometric judgment.
 
-The storage layer is implemented as a database-independent protocol (`StorageBackend`) with a standard-library `sqlite3` adapter (`SQLiteStorage`):
+## Troubleshooting
 
-- **Data persisted:** paper metadata, passages, source provenance, conversion settings, warnings, and completion metadata.
-- **Transactions & rollback:** all writes for a paper record execute within a single atomic SQLite transaction (`BEGIN IMMEDIATE`), with full rollback on failure.
-- **Deduplication & idempotency:** deterministic replacement and checksum-aware duplicate detection (`content_checksum`), raising `ChecksumConflictError` on conflicting paper identifiers.
-- **Versioning & migrations:** schema version tracking with forward migrations (`schema_migrations` table) and transaction rollback on migration failure.
-- **Early-section records:** schema version 4 stores generated Abstract/Introduction Markdown, stable passages, conversion identity, and ordered page-local provenance fragments without writing external Markdown files. `econpapers analyze` now populates this representation, reuses exact compatible records, and backfills legacy analysis-only records without rerunning research-question generation; see [`docs/early-section-library-storage.md`](docs/early-section-library-storage.md).
-- **Cross-platform paths:** automatic data directory and database path resolution for Windows (`%LOCALAPPDATA%`), macOS (`~/Library/Application Support`), and Linux (`${XDG_DATA_HOME:-~/.local/share}`), with `ECONPAPERS_LIBRARY_DIR` environment variable override.
+### Setup or update cannot download
 
-### Local runtime/model configuration (Issue 54 implemented)
+Check the network connection, then rerun the command. Downloads are verified
+before promotion, and verified artifacts are reused. `econpapers update`
+repairs managed artifacts that no longer match their pins.
 
-A separate, database-independent configuration boundary makes `analyze` and
-`chat` reusable across invocations without repeating runtime/model arguments:
+### A PDF is not stored in the library
 
-- **Domain contract:** immutable, versioned `LocalRuntimeModelConfig` (schema
-  version 1) — runtime executable path, model path, model id, expected model
-  size and SHA-256 checksum, and optional thread count, timeout, and
-  database-path defaults. Strictly validated; unknown or missing fields and
-  invalid values are rejected with actionable errors.
-- **Replaceable storage:** `ConfigBackend` protocol with a standard-library
-  JSON adapter (`JSONConfigStorage`) that writes atomically (temporary file,
-  flush, `os.replace`) with private file permissions where supported. A
-  failed write never destroys the previously durable configuration.
-- **Cross-platform, independent location:** automatic configuration directory
-  resolution for Windows (`%LOCALAPPDATA%\econpapers\config`), macOS
-  (`~/Library/Application Support/econpapers/config`), and Linux
-  (`${XDG_CONFIG_HOME:-~/.config}/econpapers`), with an
-  `ECONPAPERS_CONFIG_DIR` environment variable override independent of
-  `ECONPAPERS_LIBRARY_DIR`.
-- **Resolution precedence:** explicit CLI value, then durable configuration,
-  then a documented default; the five runtime/model identity fields resolve
-  as one unit so a partial CLI override can never silently combine with an
-  unrelated stored value. A partial override is rejected immediately, before
-  `analyze`/`chat` even determine whether a generator will be needed.
-- **Working-directory independence:** `econpapers setup` canonicalizes the
-  runtime, model, and configured database paths to absolute paths before
-  persisting them, so a relative path validated in one directory resolves
-  identically from any later invocation directory.
-- **Model-independence preserved:** durable configuration is loaded lazily
-  and at most once per invocation, and only when actually needed — for a
-  database-path fallback, or inside generator construction. Exact
-  analysis-plus-library reuse, generator-free library backfill, and the
-  `chat` `EMPTY_LIBRARY`/`NO_MATCHES` outcomes need neither configuration nor
-  accessible runtime/model artifacts, even when an explicit `--db-path` is
-  combined with a fully-specified runtime/model override.
+Read the batch summary. `Library no sections` means the detector did not find
+a usable Abstract or Introduction. Image-only papers may require OCR, which is
+not supported. Parser and layout improvements are tracked in
+[GitHub Issues](https://github.com/ledwindra/econ-paper-cli/issues).
 
-## Repository direction
+### Retrieval returns an unexpected paper
 
-The repository is growing toward this structure as later scoped issues add the
-remaining layers:
+BM25 is lexical. A passage can rank highly because it shares uncommon words
+with the question even when its setting differs. Ask a more specific question
+and inspect the retrieval scores and cited passages. Broader retrieval methods
+remain future work and should be adopted only after evaluation on economics
+questions.
 
-```text
-econ-paper-cli/
-├── README.md
-├── AGENTS.md
-├── LICENSE
-├── pyproject.toml
-├── docs/
-│   ├── product-requirements.md
-│   ├── architecture.md
-│   └── roadmap.md
-├── src/
-│   └── econ_paper_cli/
-├── tests/
-├── skills/
-└── .github/
-    └── workflows/
-```
+### The shell does not see a newly analyzed paper
 
-## Development workflow
+Restart the shell. Its library and retriever are fixed snapshots for the life
+of the process.
 
-Development is issue-driven:
+## Project documentation
 
-1. Define one narrowly scoped GitHub issue.
-2. Assign explicit acceptance criteria.
-3. Implement one issue per pull request.
-4. Add or update tests.
-5. Update documentation when behavior changes.
-6. Run linting and tests before merge.
+| Document | Contents |
+| --- | --- |
+| [Product requirements](docs/product-requirements.md) | Product scope and standing constraints |
+| [Architecture](docs/architecture.md) | Layers, protocols, and implementation history |
+| [Roadmap](docs/roadmap.md) | Completed work and future development |
+| [Generation contract](docs/generation-contract.md) | Citation, abstention, and grounding behavior |
+| [Retrieval contract](docs/retrieval-contract.md) | Ranking and evidence invariants |
+| [Release checklist](docs/release-checklist.md) | Reproducible release procedure and known limitations |
+| [Artifact licensing](docs/artifact-licensing.md) | Download sources, checksums, and licenses |
 
-Install the package and development tools in editable mode from an activated
-Python 3.10 or newer virtual environment:
+## Development
+
+Install development dependencies:
 
 ```bash
 python -m pip install -e ".[dev]"
 ```
 
-Run the required checks before opening a pull request:
+Run the required checks:
 
 ```bash
 ruff check .
@@ -542,96 +311,13 @@ ruff format --check .
 pytest
 ```
 
-## Architecture principles
+The default suite uses synthetic or redistributable fixtures and makes no
+network calls. Model-dependent and private real-PDF tests are opt-in.
 
-- Keep the CLI thin.
-- Put orchestration in application services.
-- Represent papers and evidence as typed domain objects.
-- Keep retrieval and generation behind replaceable interfaces.
-- Isolate filesystem, network, model, and index operations in adapters.
-  **[current]**; the BM25 index lives behind the `Retriever` protocol today.
-- Avoid unnecessary frameworks.
-- Prefer deterministic, offline tests.
-- Do not bind the core domain to a specific vector database or model runtime.
-
-## Current status
-
-The CLI works end-to-end over a local library: `econpapers setup` provisions
-a local `llama.cpp` runtime and a default GGUF model (or accepts an
-explicit, already-installed one); `econpapers analyze` discovers PDFs,
-extracts and quality-checks them, detects Abstract/Introduction sections,
-converts them to inspectable Markdown/passages, and persists everything to
-SQLite transactionally, with exact-reuse and legacy-backfill paths that
-never require accessible model artifacts; `econpapers chat QUESTION` and
-bare `econpapers` (an interactive multi-question shell with follow-up
-resolution) both run retrieval (BM25) and local generation
-(`llama-completion`) against that library, validate citations, and detect
-and withhold claims that misattribute wording from a paper they do not
-cite. `/show` and `--show-evidence` (see "Evidence inspection" above) let a
-user check a claim against the exact stored passage behind it. `econpapers
-status` reports durable configuration, runtime/model readiness, and library
-state read-only.
-
-Underlying building blocks: an installable package with cross-platform CI; a
-pure domain contract for validating artifact metadata; filesystem adapters
-for loading local manifests and verifying file checksums; pure domain
-contracts for papers, passages, retrieval evidence, citations, and corpora; a
-synthetic CC0 fixture corpus with a local corpus loader adapter; a
-backend-independent retrieval protocol (`Retriever`, `RetrievalRequest`,
-`validate_retrieval_results`); a pure-Python BM25 baseline adapter
-(`BM25Retriever`) selected as the initial replaceable retrieval backend; a
-database-independent local storage protocol (`StorageBackend`) with a
-standard-library `sqlite3` adapter (`SQLiteStorage`) supporting schema
-versioning, forward migrations, atomic transactions (`BEGIN IMMEDIATE`),
-case-insensitive checksum uniqueness, unique passage ordinals, full `Corpus`
-reconstruction (`load_corpus`), and cross-platform path resolution; the
-replaceable `PDFExtractor` boundary and fully local `PyPDFExtractor`; and a
-backend-independent generation protocol with structured requests, responses,
-per-claim citations, explicit abstention validation, and cross-paper
-grounding checks.
-
-Grounding is structural, and its limits are specific: see
-["What grounding establishes" / "What grounding does not
-establish"](docs/generation-contract.md#claim-grounding) for the
-authoritative statement. In short, the cross-paper check is a targeted
-heuristic on the `chat`/shell path for responses that carry per-claim
-citations; it is not a general leakage detector and does not apply to every
-adapter.
-
-Not yet implemented: OCR, conversion beyond Abstract/Introduction, and a
-persisted or bundled retrieval index.
-
-Validation of the ingestion pipeline against the journal layouts tracked by
-issue #59 was previously listed above as not implemented. It is complete
-(**[current]**). All six approved cases (`case_a` through `case_f`, covering the JUE,
-JEG, AER, Wiley, and Taylor & Francis layouts plus one further approved
-case) pass their section-boundary and contamination assertions, then
-round-trip through SQLite close/reopen, BM25 retrieval, and grounded
-generation with citation validation. The harness
-(`tests/evaluation/test_pdf_acceptance_harness.py`) runs against a private
-corpus, because the source PDFs are not redistributable. A default `pytest`
-run still *collects* it; without `ECONPAPERS_TEST_ACCEPTANCE_DIR` pointing at
-that corpus it skips deterministically, which is the skipped test in a normal
-run. Setting that variable is what enables execution; the `real_pdf` marker
-only selects the test (`-m real_pdf`) and supplies no corpus.
-
-On retrieval specifically, this is the canonical statement of index scope:
-a persisted or bundled retrieval index is **[planned]** and post-MVP. What
-ships today is **[current]**: `BM25Retriever` builds an in-memory index from
-the passages already stored in SQLite, on every run, and writes nothing to
-disk. The bundled index remains approved future scope — it has not been
-dropped, and no release ships one. See [`MVP-PLAN.md`](MVP-PLAN.md)
-for the current milestone ladder toward MVP.
-
-
-## Contributing
-
-Before making changes, read [`AGENTS.md`](AGENTS.md).
-
-Pull requests should be small, issue-linked, tested, and limited to one coherent change.
+Before contributing, read [AGENTS.md](AGENTS.md). Keep pull requests small,
+issue-linked, and limited to one coherent change.
 
 ## License
 
-The source code is released under the [MIT License](LICENSE). Models, corpora,
-indexes, and datasets retain their own licenses and terms. **[current]** as a
-standing rule; no index is distributed under any license today.
+The source code is released under the [MIT License](LICENSE). Models, papers,
+corpora, and datasets retain their own licenses and terms.

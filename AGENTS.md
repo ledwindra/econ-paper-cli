@@ -66,6 +66,74 @@ Work on one issue per pull request.
 
 Do not mix unrelated refactors, formatting changes, or cleanup into feature work.
 
+## Evidence discipline
+
+Green tests are necessary, but they do not establish that a prose claim, test
+plan, or release statement is true. Before writing or approving a behavioral
+claim:
+
+1. Trace the value or event through the full path that produces user-visible
+   behavior: producer, validator, service filtering, renderer, and exit-code
+   mapping.
+2. Read the complete guard chain, including early returns above the call site.
+   Do not infer "always", "when", or a shared condition from the construction
+   site alone.
+3. Confirm that the named injection seam exists on the callable the test uses.
+   A service-level fake does not test a hard-wired CLI entry point.
+4. Prove the described setup reaches the intended branch. State changes such
+   as "constructed", "ready", "corrupt", and "managed" are distinct and must
+   not be collapsed.
+5. Follow the exception to the final public outcome. Do not call a failure
+   typed, recoverable, or internal without checking the actual mapping.
+
+When changing a requirement sentence, reread its full paragraph. A corrected
+qualifier does not repair a false lead verb, and a closing summary can silently
+reintroduce the claim the preceding sentences just narrowed.
+
+For repository-wide documentation audits, search by claim type as well as by
+exact phrase. Status, platform support, network behavior, artifact authority,
+and words such as "always", "current", "tested", and "complete" can be stated
+many ways. Inspect every tracked Markdown file, including `docs/*.md`, and
+classify historical text explicitly when it remains useful.
+
+## Test design discipline
+
+- Every guard needs a negative control that fails when the guard is disabled.
+- Every generated or mirrored artifact needs both equality and coverage tests;
+  exact equality alone can miss a renderer that omits one record and duplicates
+  another in both outputs.
+- Test the real boundary named by the claim. If only a service function is
+  injected, describe it as service coverage, not CLI coverage.
+- Keep deterministic fixture preparation separate from the behavior under
+  test. Do not invoke a real model merely to create input state for a later
+  scenario.
+- On Windows, distinguish filesystem semantics, process-group behavior, and
+  hosted-runner connectivity from POSIX assumptions. A test that disables a
+  hosted runner's network adapter can interrupt the runner instead of testing
+  the application.
+- A marker name does not make a test opt-in. Verify collection rules,
+  `testpaths`, deselection, and environment-variable skips directly.
+
+Mutation tests must restore from explicit byte-for-byte backups and verify the
+restore. Never use `git checkout`, `git restore`, or another worktree-wide git
+operation as mutation cleanup: git cannot distinguish the mutation from the
+uncommitted work being tested.
+
+## CI and release evidence
+
+- "Configured" is not "tested". A matrix entry is evidence only after its
+  steps complete successfully at the candidate SHA.
+- A green run validates the workflow revision that ran. Any change to the
+  workflow, matrix, interpreter floor, source, tests, or release harness resets
+  the corresponding evidence.
+- Zero executed steps establish no failure cause. Diagnose runner allocation,
+  cancellation, billing, and service faults before naming one.
+- Release claims and tags follow [`docs/release-checklist.md`](docs/release-checklist.md).
+  The checklist is self-contained; do not revive milestone-plan dependencies.
+- Hosted offline checks must keep the runner control plane alive while denying
+  network access to the tested process tree, with before, during, and after
+  controls recorded.
+
 ## Product guardrails
 
 Do not:
@@ -204,7 +272,7 @@ metadata only — no weights, no paper text.
 
 ## Python conventions
 
-- Support Python 3.10 and newer unless the product requirements change.
+- Support Python 3.10.12 and newer unless the product requirements change.
 - Use type hints for public functions and methods.
 - Prefer the standard library when it is adequate.
 - Add dependencies only when they materially reduce risk or implementation complexity.
@@ -322,6 +390,7 @@ Before opening or updating a pull request, reread the issue's exact scope and be
 
 - Use small, descriptive commits.
 - Keep one issue per pull request.
+- In a dirty worktree, stage explicit paths only; never use `git add -A`.
 - Do not rewrite unrelated history.
 - Do not modify lockfiles unless dependencies changed.
 - Never commit secrets, tokens, cookies, or personal paths.
@@ -344,6 +413,12 @@ Update documentation when changing:
 - privacy or network behavior.
 
 Documentation should describe current behavior, not merely intended future behavior.
+
+The README is for users. Keep issue chronology, implementation archaeology,
+and review narratives in Git history, `docs/architecture.md`, or
+`docs/roadmap.md`, not in the quickstart. A public behavior claim should name
+its evidence scope and material limitation where a user could otherwise draw a
+stronger conclusion.
 
 ## Definition of done
 
@@ -388,6 +463,21 @@ Ask before:
   the "changing the default local-model family" and "introducing automatic
   model downloads" items above for this specific feature; both remain
   standing policy for any future change to either.
+
+- **2026-08-08 — retrieval-index scope.** The MVP and current release use an
+  in-memory BM25 index rebuilt from SQLite passages. A persisted or bundled
+  index remains approved future scope; it was deferred, not rejected.
+
+- **2026-08-08 — descriptive-versus-causal scope.** The application may report
+  a response-level label supplied by the model when it remains applicable to
+  the answer shown. It does not promise that every answer has a label and does
+  not verify the label against evidence. Semantic causal classification is
+  future scope.
+
+- **2026-08-09 — documentation authority.** Durable product rules live in
+  product requirements, topic contracts, the roadmap, this file, and the
+  release checklist. The completed milestone plan was retired; do not create
+  a new plan document as a second source of truth for current behavior.
 
 ## Agent responsibilities
 

@@ -5,8 +5,8 @@ guarantees:
 
 - Verify a *staged* download in full before promoting it, so a truncated or
   tampered file never becomes the installed model.
-- Promote only via ``os.replace`` onto a content-addressed final path, so a
-  concurrent ``setup`` cannot observe a half-written model.
+- Promote only via ``os.replace`` onto the manifest-controlled final filename,
+  so a concurrent ``setup`` cannot observe a half-written model.
 
 It is much smaller than the runtime equivalent because a GGUF is a single
 file: no archive extraction, no per-member safety checks, and no
@@ -183,9 +183,11 @@ def is_model_path_contained_in_dir(model_path: Path, model_dir: Path) -> bool:
     callers (including ``services.update_command``) must use this rather
     than duplicating the lexical containment walk or importing runtime's
     private ``_containment_candidates`` helper directly. It is deliberately
-    independent of catalog filename matching -- see MVP-PLAN.md's
-    "renamed-pin exception" for why `update`'s MANAGED/EXTERNAL
-    classification uses this instead of ``locate_managed_model_artifact``.
+    independent of catalog filename matching: a managed model remains managed
+    when a later catalog pin gives the same model identity a new filename.
+    ``update`` must establish managed origin from the durable provisioning flag
+    plus path containment before it compares the old and new catalog pins, so
+    it uses this function instead of ``locate_managed_model_artifact``.
     """
     from econ_paper_cli.services.runtime_provisioning import _containment_candidates
 

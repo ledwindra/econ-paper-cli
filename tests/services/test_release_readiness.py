@@ -1,4 +1,4 @@
-"""M5 release-readiness tier 1: the checks that must pass in the default suite.
+"""Release-readiness tier 1: checks that must pass in the default suite.
 
 These are service-level tests. The public CLI entry points
 (``services/commands.py``) expose no injection seams — they always construct
@@ -11,10 +11,10 @@ Covered here:
 
 - **No-upload.** A socket guard around each of the four application service
   entry points, plus a negative control proving the guard actually fires.
-  Scope and boundaries are stated in ``MVP-PLAN.md`` under "No-upload
-  criterion": ``setup``/``update`` artifact downloads are out of scope, and so
-  is whatever a user-supplied ``llama-completion`` binary does in its own
-  process — a guard installed here cannot see into a subprocess.
+  ``setup``/``update`` artifact downloads are out of scope, and so is whatever
+  a user-supplied ``llama-completion`` binary does in its own process: a guard
+  installed here cannot see into a subprocess. The operational counterpart is
+  the real-CLI offline procedure in ``docs/release-checklist.md``.
 - **Concurrency.** A real second process writing to the library while an
   interactive shell session is open, asserting the session's snapshot is
   immutable.
@@ -605,11 +605,10 @@ def test_a_ready_generator_losing_its_executable_reports_internal_failure(
     (``services/interactive_shell.py``). Only the *unconstructed* case is a
     typed failure, since that one fails at ``check_readiness()``.
 
-    M5 does not change this mapping — reclassifying a user-visible outcome is
-    a behavior change with its own exit-code and documentation consequences,
-    and belongs to its own issue. This test exists so that change, if taken,
-    updates an assertion deliberately instead of discovering the mapping by
-    accident. It is listed as a known limitation in
+    Reclassifying this user-visible outcome is a behavior change with its own
+    exit-code and documentation consequences, and belongs to its own issue.
+    This test exists so that change, if taken, updates an assertion deliberately
+    instead of discovering the mapping by accident. It is listed as a known limitation in
     ``docs/release-checklist.md``.
 
     The ordering matters and is the point: readiness is lazy, so removing the

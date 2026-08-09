@@ -1,4 +1,4 @@
-"""Deterministic library-record builder shared by M5 release-readiness tests.
+"""Deterministic library-record builder shared by release-readiness tests.
 
 Not named ``test_*``, so pytest does not collect it. It lives in its own
 module rather than inside a test file because the concurrency scenario needs
@@ -118,7 +118,7 @@ def library_record(
 
 # --- Managed runtime/model scaffolding ---------------------------------------
 #
-# Used by the M5 "update while a shell session is open" scenario. Synthetic
+# Used by the "update while a shell session is open" scenario. Synthetic
 # throughout: a few hundred bytes whose real size and SHA-256 the fixture
 # computes into a synthetic manifest, so nothing here resembles the multi-GB
 # pinned artifacts and no download is ever attempted.
