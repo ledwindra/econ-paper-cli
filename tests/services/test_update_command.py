@@ -848,10 +848,14 @@ def test_update_download_failure_reports_failed_and_exit_code_3(
 
 
 def test_format_update_report_rendering() -> None:
+    # Compare against ``str(config_path)``, not the POSIX literal: on Windows
+    # the same Path renders with backslashes, and asserting the literal would
+    # fail there for a reason that has nothing to do with the report format.
+    config_path = Path("/custom/config.json")
     report = execute_update_command(
         UpdateCommandOptions(),
-        config_backend=JSONConfigStorage(Path("/custom/config.json")),
+        config_backend=JSONConfigStorage(config_path),
     )
     text = format_update_report(report)
     assert "=== Local Update Result ===" in text
-    assert "Configuration Path: /custom/config.json" in text
+    assert f"Configuration Path: {config_path}" in text
