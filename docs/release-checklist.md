@@ -1,6 +1,14 @@
 # Release checklist
 
-**Checklist version: 1**
+**Checklist version: 2**
+
+Version 2 (2026-08-08) records that, as of that date, no job of the current
+CI configuration had completed a step; adds limitation 3; requires unexecuted
+CI rows to read "not run" rather than blank; and fixes the release tag to the
+candidate SHA. Version 1 assumed a green CI matrix was available, and a run
+record produced under it would have overstated its evidence. The dated
+observation will be superseded by the first successful run; the rule it rests
+on will not — see limitation 3.
 
 The recorded release procedure required by `MVP-PLAN.md`'s M5 exit condition.
 Working through it produces a *run record* — a filled-in copy of the
@@ -31,12 +39,16 @@ tested, so "tested at `HEAD`" is never true and must not be written.
    file and the run record and nothing else. Any source, test, or
    configuration change invalidates the run — pick a new candidate SHA and
    start over.
-4. State in the run record whether the release tag points at the candidate SHA
-   or at the results-only commit on top of it.
+4. **Tag the candidate SHA**, never the results-only commit on top of it.
+   Settled 2026-08-08; see `MVP-PLAN.md` § "Which commit was tested". The tag
+   must name the commit whose behavior was tested, and the results-only
+   commit is by definition one the run did not test. The run record restates
+   the convention so a reader of the record alone can see it, but it is not a
+   per-release choice.
 
 ## 2. Environment prerequisites
 
-- A supported Python (see § 5 for what is actually certified).
+- A supported Python (see § 5 for what CI covers and what actually ran).
 - A clean virtual environment; the install step below is run inside it.
 - For § 6 and § 7 only: the private acceptance corpus and real local
   artifacts. Neither is required for §§ 3–4.
@@ -86,7 +98,7 @@ record can state which scenarios were exercised and what they do *not* cover.
 
 ## 5. Cross-platform coverage
 
-CI (`.github/workflows/ci.yml`) certifies exactly:
+CI (`.github/workflows/ci.yml`) is *configured* to cover exactly:
 
 - `{ubuntu-latest, macos-latest, windows-latest}` × `{3.11, 3.14}`
 - `{ubuntu-latest, macos-15-intel}` × `3.10.12` (the exact `pyproject.toml`
@@ -94,6 +106,36 @@ CI (`.github/workflows/ci.yml`) certifies exactly:
 
 State it in those terms. Do not write "cross-platform support" without
 qualification.
+
+**Configured is not the same as executed — check before you claim either.**
+As of 2026-08-08 no job of the current CI configuration had completed a step
+at any SHA, and a green run of a superseded workflow never counts for the
+current one — see limitation 3 in § 8. The date is what expires here, not the
+rule, so re-establish the status with the commands below rather than trusting
+it. Before filling the run record, establish which jobs
+actually ran at the candidate SHA. Ask for `databaseId`, because the second
+command needs it:
+
+```bash
+gh run list --limit 20 \
+  --json databaseId,headSha,workflowName,status,conclusion,createdAt
+```
+
+```bash
+gh api repos/{owner}/{repo}/actions/runs/<run-id>/jobs \
+  --jq '.jobs[] | "\(.conclusion) steps=\(.steps|length) \(.name)"'
+```
+
+A job reporting **zero steps** and a two- to ten-second duration did not fail
+its tests — no step ran at all. That alone does **not** tell you why: runner
+allocation, cancellation, a billing or minutes limit, or another service
+fault all look identical here. If the cause matters for the release notes,
+get it from the repository's Actions billing or settings page and record what
+you saw; otherwise write "cause not established".
+
+Record those rows as **"not run"**. Never leave them blank, and never carry a
+pass forward from an earlier SHA — or from an earlier *workflow*: a green run
+of a superseded matrix says nothing about the current one.
 
 ### Floor-version availability probe (required, per release)
 
@@ -231,9 +273,44 @@ operations. None of those bear on the no-upload claim, which is about what
    is never touched. See `MVP-PLAN.md` § M2 "Known limitation carried
    forward".
 2. **Floor-version coverage excludes Windows.** No `win32` build exists at or
-   above the 3.10.12 floor (§ 5). On Windows the lowest tested interpreter is
-   3.11.
-3. **A ready generator that loses its executable reports
+   above the 3.10.12 floor (§ 5). On Windows the lowest **configured** matrix
+   interpreter is 3.11 — configured, not tested: limitation 3 records that no
+   job of the current configuration has run, so no Windows coverage *from the
+   current CI configuration* has actually been exercised. Windows did pass
+   under the superseded workflow; those passes do not carry over. The
+   *absence of a build* is a fact about `actions/python-versions`, not about
+   this project: it cannot be cleared here, only by upstream publishing one.
+3. **No job of the current CI configuration had completed a step as of
+   2026-08-08 — and a superseded workflow's passes never count.** The second
+   half is the durable rule: a green run validates the workflow *that ran*,
+   so when the matrix, interpreter list, or job set changes, prior passes
+   stop being evidence and coverage resets to nothing until the new
+   configuration runs. The first half is a dated observation, and one
+   successful run at the candidate SHA retires it. Re-check with the commands
+   in § 5 rather than trusting this date.
+
+   The last successful run, `977c7e26` (2026-08-02), executed a *different*
+   workflow against a *different* floor: `{ubuntu, macos, windows} ×
+   {3.10, 3.14}` with a floating `3.10`, and no `floor-check` job.
+   `requires-python` was `>=3.10` at that commit, which floating `3.10`
+   satisfies everywhere, so macOS and Windows really were tested there.
+   `945341e` then changed both halves together — it raised the floor to
+   `>=3.10.12` and switched the matrix to `{3.11, 3.14}` plus `floor-check`,
+   precisely because floating `3.10` resolves to 3.10.11 on macOS and
+   Windows, which the new floor excludes. Those earlier passes are therefore
+   superseded, not wrong. `945341e`'s own run is the first to fail with zero
+   steps; every run since did the same, and `7945e9a` onward has no run at
+   all. So `977c7e26`'s green tick attests to a workflow that no
+   longer exists, and every commit from `945341e` on — M4, M5 including its
+   own tier-1 suite, and M6 — is CI-unvalidated. **Why** the jobs failed is
+   not established: zero steps shows only that no step ran, and runner
+   allocation, cancellation, a billing or minutes limit, or another service
+   fault are all consistent with it. Unlike limitation 2, nothing here is an
+   upstream fact about published builds — one successful run at the candidate
+   SHA would clear this and the Intel-macOS gap together, with no change to
+   code or configuration. Until then the evidence behind a release is local
+   and single-platform, and must be labeled as such.
+4. **A ready generator that loses its executable reports
    `INTERNAL_FAILURE`, not a typed failure.** `LlamaCppProcessError` falls in
    the shell's internal-failure group. Only the not-yet-ready case is typed,
    because it fails at `check_readiness()`. Pinned by
@@ -241,7 +318,7 @@ operations. None of those bear on the no-upload claim, which is about what
    Reclassifying it is a behavior change with exit-code and documentation
    consequences and is a **candidate follow-up issue**, deliberately not done
    inside M5.
-4. **The no-upload guarantee covers application-initiated traffic.** It does
+5. **The no-upload guarantee covers application-initiated traffic.** It does
    not and cannot constrain what a user-supplied `llama-completion` binary
    does in its own process, and it excludes `setup`/`update` artifact
    downloads by design (those are downloads of pinned, checksum-verified
@@ -284,8 +361,8 @@ Copy this section, fill every field, and commit it as a results-only change.
 
 ```text
 Release candidate SHA:
-Checklist version:       1
-Tag points at:           candidate SHA | results-only commit
+Checklist version:       2
+Tag points at:           candidate SHA  (fixed convention — see § 1.4)
 Date:
 Operator:
 
@@ -301,7 +378,15 @@ Interpreter versions actually resolved (not matrix strings):
 OS x Python x scenario results
 ------------------------------
 Automated (CI). One row per job; PASS/FAIL per scenario group, from that
-job's `pytest` run. "n/a" only where the job does not exist in the matrix.
+job's `pytest` run at the candidate SHA. Three non-result entries, and they
+are not interchangeable:
+
+  n/a       the job does not exist in the matrix
+  not run   the job exists but did not execute at this SHA (§ 5) —
+            including a run that "failed" with zero steps
+  (blank)   never acceptable; a blank is an unanswered question
+
+A pass observed at any other SHA is not a pass here.
 
   OS               Python    lint  format  suite  no-upload  concurrency  interruption
   ubuntu-latest    3.11      ____  ____    ____   ____       ____         ____
@@ -313,6 +398,16 @@ job's `pytest` run. "n/a" only where the job does not exist in the matrix.
   windows-latest   3.11      ____  ____    ____   ____       ____         ____
   windows-latest   3.14      ____  ____    ____   ____       ____         ____
   windows-latest   3.10.12   ----- no build published; see limitation 2 -----
+
+  CI ran at the candidate SHA at all?  yes | no (see limitation 3)
+  If no, every row above reads "not run" and the release evidence is the
+  local run below, which is single-platform.
+
+Local (the operator's machine). This is what carries the release when CI has
+not run, so it is recorded, not assumed:
+
+  OS / arch: ____________   Python: ______   Commit: ______________
+  ruff check ___  ruff format ___  pytest ___ (passed: ____ skipped: ____)
 
 Manual tier (§7), per command, per OS actually exercised. "Integration tier:
 ran" is not an attestation; each cell is.

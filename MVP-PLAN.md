@@ -866,10 +866,18 @@ checklist rather than blurred into a combined claim neither tier supports.
 
 ### Cross-platform coverage
 
-CI runs Python 3.11 and 3.14 on ubuntu, macOS, and Windows, and the exact
-supported floor 3.10.12 only on ubuntu (`.github/workflows/ci.yml`:61-80). The
-in-file rationale (`.github/workflows/ci.yml`:24-32) says the macOS and
-Windows runner images offer only 3.10.11, which is below `pyproject.toml`'s
+CI is *configured* to run Python 3.11 and 3.14 on ubuntu, macOS, and Windows,
+plus the exact supported floor 3.10.12 on ubuntu and `macos-15-intel`
+(`.github/workflows/ci.yml`). Two corrections to an earlier version of this
+paragraph: it said "CI runs", which asserts execution — see "CI status, and
+the rule for reading it" below, which is the authority for what has actually
+run; and it said the floor was covered "only on ubuntu", which stopped being
+true when `7945e9a` made `floor-check` a two-platform matrix. The line
+references it carried are dropped, because line numbers in a file this
+milestone edits go stale on the next change.
+
+The in-file rationale says the macOS and Windows runner images offer only
+3.10.11, which is below `pyproject.toml`'s current
 `requires-python = ">=3.10.12"` floor.
 
 That rationale was a point-in-time observation, not a standing fact, so M5
@@ -884,20 +892,115 @@ Windows installers, and it is below the floor. `darwin/arm64` also stops at
 3.10.11. So the two platforms resolve differently, which the original blanket
 assumption obscured:
 
-- **macOS floor coverage exists and has been added.** It needs an x64 runner
-  label, because `macos-latest` is arm64 and no `darwin/arm64` build exists at
-  or above the floor. `.github/workflows/ci.yml`'s `floor-check` job is now a
-  matrix over `ubuntu-latest` and `macos-15-intel`, and the stale comment was
-  corrected in the same change.
-- **Windows floor coverage does not exist**, and is recorded as a named
-  limitation: *no `win32` build is published at or above the 3.10.12 floor; on
-  Windows the lowest tested interpreter is 3.11.* If a `win32` build appears,
-  the probe will show it and the job gains a third matrix entry.
+Both bullets below mix a durable configuration fact with a dated observation,
+and both observations expire — one on the next CI run, the other on the next
+availability probe. They are scoped accordingly; "CI status, and the rule for
+reading it" below is the authority for anything about what has run.
 
-M5 therefore certifies exactly `{ubuntu, macos, windows} × {3.11, 3.14}` plus
-`{ubuntu, macos-15-intel} × 3.10.12` — stated in those terms, never as
-"cross-platform support" in general — and the release report records the
-interpreter versions each job actually resolved, not the matrix strings.
+- **macOS floor coverage is configured; as of 2026-08-08 it had not executed.**
+  *Durable:* it needs an x64 runner label, because `macos-latest` is arm64 and
+  no `darwin/arm64` build exists at or above the floor, so
+  `.github/workflows/ci.yml`'s `floor-check` job is a matrix over
+  `ubuntu-latest` and `macos-15-intel`; the stale comment was corrected in the
+  same change. *Dated:* the matrix entry was committed in `7945e9a` and
+  pushed, and no workflow run had executed it as of that date — see the status
+  subsection below, which this bullet does not restate. An earlier version
+  said the coverage "exists and has been added"; that overstated it, and the
+  overstatement is withdrawn.
+- **Windows floor coverage does not exist, per the 2026-08-08 availability
+  probe.** *Durable:* whether it exists is decided by upstream, not by this
+  project, so the probe is re-run every release rather than trusted from this
+  file. *Dated:* that probe found no `win32` build published at or above the
+  3.10.12 floor, so on Windows the lowest **configured** matrix interpreter is
+  3.11, recorded as a named limitation. Configured, not tested: no Windows
+  coverage *from the current CI configuration* has been exercised, so calling
+  3.11 "the lowest tested interpreter" would contradict the status subsection
+  below. Windows was genuinely tested under the superseded workflow — see
+  that subsection for why those passes do not carry over. If a later probe
+  shows a `win32` build, the job gains a third matrix entry and the limitation
+  is dropped.
+
+Those two gaps are **not** of the same kind, and the release checklist records
+them as separate limitations for that reason. Windows depends on
+`actions/python-versions`: while no build is published there is nothing to
+run, and no amount of compute changes that. Intel macOS is a resource
+constraint: the build exists, the job exists, and a single successful CI run
+clears it with no code or configuration change at all.
+
+#### CI status, and the rule for reading it
+
+Investigating the macOS floor job surfaced something larger. An earlier
+version of this subsection got it wrong in the maintainer's favor by treating
+the last green run as partial validation of today's matrix; that reading is
+withdrawn, and the correction is the point of this subsection.
+
+Two things below, and they age differently. The **rule** is durable. The
+**status** is a dated observation that a single successful run will falsify,
+and it is written so that such a run obviously supersedes it rather than
+leaving the document quietly wrong.
+
+**The rule (durable).** A green run validates the workflow *that ran*, not
+the workflow now in the tree. When the matrix, the interpreter list, or the
+job set changes, prior passes stop being evidence for the new configuration
+and the coverage claim resets to nothing until the new configuration runs.
+This holds whatever CI's current state is, and it is the reason the status
+below matters at all.
+
+**The status (as of 2026-08-08).** The last successful CI run was
+`977c7e26` (2026-08-02) — but **it ran a different workflow, against a
+different floor.** At that commit the matrix was
+`{ubuntu, macos, windows} × {3.10, 3.14}`, with a *floating* `3.10`, and
+there was **no `floor-check` job at all**. That was legitimate then:
+`requires-python` was `>=3.10`, which floating `3.10` satisfies on every
+platform. Windows and macOS really were tested there.
+
+`945341e` changed both halves at once. It raised the floor to `>=3.10.12` —
+for PEP 706 `tarfile` extraction, needed by managed runtime provisioning —
+and in the same commit switched the matrix to `{3.11, 3.14}` and added
+`floor-check`, precisely *because* floating `3.10` resolves to 3.10.11 on
+macOS and Windows, which the new floor excludes. So `977c7e26`'s passes are
+superseded rather than wrong, and by the rule above they are not evidence for
+the configuration in the tree today.
+
+`945341e` is also the first run that failed with zero steps. So,
+**observed 2026-08-08** — the table is a snapshot, and a reader arriving at it
+directly should re-run the commands in the release checklist's § 5 rather than
+trust it:
+
+| SHA | CI | Workflow |
+| --- | --- | --- |
+| `977c7e26` (2026-08-02) | last success | old: `× {3.10, 3.14}`, no floor job |
+| `945341e` (PR #60 merge, in `main`) | failed, 0 steps | current: `× {3.11, 3.14}` + `floor-check` |
+| `682178be`, `a58418e7` | failed, 0 steps | current |
+| `50d18e3` (2026-08-08) | failed, 0 steps, all seven jobs | current |
+| `7945e9a`, `bfc7996`, `3e050cb` | **no run exists** | current |
+
+**As of 2026-08-08, no job of the current CI configuration has completed a
+step at any SHA.** Not the `{3.11, 3.14}` matrix, and not `floor-check` in
+either its ubuntu-only or its two-platform form. Applying the rule above,
+`977c7e26`'s green tick attests to a workflow that no longer exists — and one
+whose floating `3.10` does not satisfy the **current** `>=3.10.12` floor on
+two of three platforms. That is a statement about today's floor, not a defect
+in that run.
+
+Every commit from `945341e` onward is therefore CI-unvalidated as of that
+date: all of M4, all of M5 including its own tier-1 suite, and all of M6.
+**One successful run at a candidate SHA supersedes this paragraph**; re-read
+the rule, not this status, when that happens.
+
+Why the jobs failed is **not established**. Zero steps with a two- to
+ten-second duration shows only that no step ran; runner-allocation failure,
+cancellation, a billing or minutes limit, or another service fault would all
+look the same from the run metadata. Determining the cause needs the
+repository's Actions billing or settings page, which is outside what this
+document can assert.
+
+Consequences for what M5 may claim: nothing about the current matrix is
+certified, at any SHA. A run record may attest only to jobs the operator
+watched pass at the candidate SHA; where CI did not run, the entry is "not
+run", never a blank and never a pass inherited from another SHA or another
+workflow. Local `pytest` on one machine is real evidence and is recorded as
+such — single-platform, on the interpreter and OS named in the record.
 
 ### Release checklist artifact
 
@@ -949,8 +1052,13 @@ checklist resolves this explicitly:
   the checklist and run-record files and nothing else. Any source, test, or
   configuration change invalidates the run and requires a fresh candidate SHA
   and a fresh run;
-- the release tag points at the candidate SHA or at the results-only commit on
-  top of it, and the checklist states which convention was used.
+- **the release tag points at the candidate SHA**, never at the results-only
+  commit on top of it. An earlier version left this open ("states which
+  convention was used"); the maintainer settled it on 2026-08-08 and it is
+  pinned here rather than deferred to the run record, so the convention is
+  fixed before any record is produced. The reason: the tag must name the
+  commit whose behavior was tested, and the results-only commit is by
+  definition a commit the run did not test.
 
 ### Exit condition
 
@@ -963,6 +1071,60 @@ documentation is current, artifact licenses are recorded, the release procedure
 is recorded as `docs/release-checklist.md` with a filled-in run record, and the
 final diff contains no unrelated changes. M6 is explicitly **not** part of this
 gate.
+
+**CI remains a blocker. M5 is blocked, and the way out is a maintainer
+decision, not a documentation edit.**
+
+An earlier version of this section removed green CI from the gate and allowed
+a local-only release. That was a release-policy change made by implication,
+which `AGENTS.md` forbids the coding agent from doing, and it is **withdrawn**.
+Recording an outage is documentation; deciding that a release may ship without
+the cross-platform evidence the gate was built to require is a product
+decision.
+
+The factual position, from the subsection above: as of 2026-08-08 no job of
+the current CI configuration had completed a step, so M5 could not be passed
+as written. That is recorded here as a **blocked state**, not resolved into a
+softer gate — and it lifts on evidence, not on an edit: the first successful
+run at a candidate SHA ends the block.
+
+**Maintainer decision, 2026-08-08.** An earlier version of this paragraph
+recorded the outcome as "option 1" alone, which was ambiguous: the option list
+mixes a *policy* choice with an *action*, and the action currently being taken
+is option 3's. The three parts are separated here so they cannot be conflated
+again:
+
+| | |
+| --- | --- |
+| **Decision (policy)** | CI remains a blocker. Option 2 — accepting local, single-platform evidence — was put to the maintainer and **declined**. Revisiting it needs its own explicit approval, recorded here with a date. |
+| **Current state (action)** | Hold M5. No run record is produced, nothing claims MVP completion, and no attempt is made to diagnose or run CI. This is option 3's behavior, adopted because compute is unavailable — not because the gate was softened. |
+| **Future remediation** | On the maintainer's signal that compute is available, pursue **option 1**: diagnose why jobs are not starting, fix it, and run CI once at the candidate SHA. That clears the block and the Intel-macOS floor limitation together. |
+
+The distinction that matters: holding is a *consequence* of the resource
+constraint, not the decision itself. The decision is that the gate keeps its
+meaning, so M5 stays unpassable rather than becoming passable on weaker
+evidence.
+
+The three options as put to the maintainer:
+
+1. **Diagnose why the jobs are not starting, fix that, and run CI once** at
+   the candidate SHA. The cause is not established — see above — so this
+   begins with the repository's Actions billing and settings pages, not with
+   an assumption. One successful run clears the block completely, plus the
+   Intel-macOS floor limitation, with no change to code, configuration, or
+   policy. This is the only option that leaves the gate's meaning intact.
+2. **Amend the gate** to accept recorded local, single-platform evidence plus
+   the tier-2 manual checks, with every CI row marked "not run" and the gap
+   carried into the release notes. This genuinely weakens the release
+   evidence and needs explicit approval.
+3. **Hold M5 open** until option 1 is possible, and ship nothing that claims
+   MVP completion.
+
+M5's status is therefore *blocked on CI*, and no run record is to be produced
+— a record written now would either overstate its evidence or attest to a
+gate that has not been agreed. The next action on this milestone is the
+maintainer's signal that compute is available, not a further documentation
+change.
 
 ---
 
