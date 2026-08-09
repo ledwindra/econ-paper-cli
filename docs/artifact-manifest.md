@@ -1,10 +1,11 @@
 # Artifact manifest schema
 
-Artifact manifests describe metadata for one future corpus, index, or model
-artifact. The `index` kind is **[planned]**: the schema accepts it today, but
-no index artifact is built, shipped, or manifested. Schema version 1 is a
-domain contract only: it does not load files, access the network, calculate a
-checksum, or authorize downloading or redistributing an artifact.
+Artifact manifests describe metadata for one corpus, index, or model artifact.
+Committed corpus and model instances use the contract today. The `index` kind
+is **[planned]**: the schema accepts it, but no index artifact is built, shipped,
+or manifested. Schema version 1 is a domain contract only: it does not load
+files, access the network, calculate a checksum, or authorize downloading or
+redistributing an artifact.
 
 ## Schema version 1
 

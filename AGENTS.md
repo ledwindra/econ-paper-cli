@@ -414,6 +414,21 @@ Update documentation when changing:
 
 Documentation should describe current behavior, not merely intended future behavior.
 
+When updating documentation:
+
+- derive CLI syntax and defaults from the current parser or `--help`, not from
+  an older issue example;
+- compare inventories of enum values, warning codes, policy versions, and
+  downloadable artifacts against their defining source before calling a list
+  complete;
+- distinguish a migration that *introduced* schema version N from the current
+  overall schema version, whose source constant is authoritative;
+- label retained Issue-era statements as historical in the same paragraph and
+  add the current behavior there, so readers do not have to infer scope from a
+  distant heading; and
+- when a checklist carries a version in both its header and run-record
+  template, update and verify both together.
+
 The README is for users. Keep issue chronology, implementation archaeology,
 and review narratives in Git history, `docs/architecture.md`, or
 `docs/roadmap.md`, not in the quickstart. A public behavior claim should name

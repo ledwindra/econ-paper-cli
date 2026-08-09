@@ -51,7 +51,7 @@ The MVP must:
 - run retrieval and language-model inference locally in the default workflow;
 - require no paid service, API key, Docker installation, or GPU;
 - operate offline after the user has installed the required artifacts;
-- support Python 3.10 or newer on Windows, macOS, and Linux;
+- support Python 3.10.12 or newer on Windows, macOS, and Linux;
 - preserve paper identity and passage boundaries in evidence;
 - ground substantive claims in supplied evidence and abstain when evidence is
   insufficient;
@@ -76,14 +76,20 @@ The MVP must:
 - avoid telemetry and uploads of queries, documents, or indexes by default
   (**[current]** standing rule); and
 - distribute only metadata, permitted derived artifacts, and content with
+  documented redistribution permission.
+
 ## PDF analysis workflow
 
 The `econpapers analyze` command runs offline, local-first research-question
 analysis on one PDF or a recursively discovered directory of PDFs:
 
 ```text
-econpapers analyze TARGET_PATH --llama-cpp-path EXECUTABLE_PATH --model-path MODEL_PATH --model-id MODEL_ID --model-bytes BYTES --model-checksum SHA256 [OPTIONS]
+econpapers analyze TARGET_PATH [OPTIONS]
 ```
+
+Runtime and model identity options are optional per-invocation overrides. If
+they are omitted, the command uses durable configuration written by
+`econpapers setup`; supplying an override requires the complete identity set.
 
 For a file target, the command preserves the single-record output contract. For
 a directory, it discovers case-insensitive `.pdf` files recursively in
@@ -97,13 +103,15 @@ offline, and source PDFs are never modified. Candidate checksum/preflight and
 storage failures are isolated per path so successfully completed records and
 later candidates remain visible.
 
-Eligible candidates also populate the schema-v4 early-section library. Newly
-executed analysis reuses its extraction and section-detection results and writes
-both complete records in one transaction. Exact compatible repeats call neither
-the extractor nor generator. A legacy analysis-only record, or one whose
-conversion fingerprint changed, runs only extraction, quality assessment,
-section detection, conversion, and library persistence. Preflight, extraction,
-and unusable-quality outcomes remain analysis-only. Conversion uses
+Eligible candidates also populate the early-section tables introduced by the
+schema-v4 migration. The database's current overall schema version is defined
+by `adapters.sqlite_storage.CURRENT_SCHEMA_VERSION`. Newly executed analysis
+reuses its extraction and section-detection results and writes both complete
+records in one transaction. Exact compatible repeats call neither the extractor
+nor generator. A legacy analysis-only record, or one whose conversion
+fingerprint changed, runs only extraction, quality assessment, section
+detection, conversion, and library persistence. Preflight, extraction, and
+unusable-quality outcomes remain analysis-only. Conversion uses
 `early-section-markdown-v1` and a configurable passage budget (default 1,200).
 
 Process exit code semantics:
@@ -175,17 +183,20 @@ low-quality content.
 
 ## Hybrid local paper library
 
-The future local library has four storage layers:
+The library design has four storage layers. The current early-section workflow
+uses source PDFs registered in place, generated Markdown stored in SQLite,
+SQLite records, and an in-memory BM25 index. Managed PDF copies, standalone
+Markdown export, and a persisted retrieval index remain future work.
 
 - Original PDFs are authoritative user-provided source documents. Ingestion
-  must never modify or delete them. Whether the application later manages
-  private copies or registers files in place remains undecided.
+  must never modify or delete them. The current workflow registers files in
+  place. A future managed-copy policy remains undecided.
 - Generated Markdown is a human-readable, inspectable derived representation.
   It is not the sole structured datastore.
 - SQLite stores the structured catalog, retrieval-ready passage text,
   metadata, provenance, checksums, ingestion state, and other application
-  state. The MVP must use Python's standard-library `sqlite3` unless a later
-  issue demonstrates that another dependency is necessary.
+  state. The current adapter uses Python's standard-library `sqlite3`; changing
+  that dependency requires a separately approved design.
 - Retrieval indexes are rebuildable search accelerators. They must not be the
   only copy of paper or passage data. **[current]** for the in-memory BM25
   index, which holds no data SQLite does not already own; the requirement
@@ -222,9 +233,11 @@ filesystem, SQLite, and retrieval-index effects implemented by adapters.
 - Retrieval-ready passage text must be stored in SQLite so Markdown does not
   need to be reparsed on every run.
 
-The exact schema, migration mechanism, identifier derivation rules, file
-layout, and cross-resource recovery procedure remain later implementation
-decisions.
+The current early-section schema, migrations, identifier derivation, and
+transaction behavior are implemented and documented in
+[`early-section-library-storage.md`](early-section-library-storage.md). Future
+full-document conversion, OCR, Markdown export, and persisted indexing still
+require explicit layout and recovery decisions.
 
 ## Rebuild and recovery
 

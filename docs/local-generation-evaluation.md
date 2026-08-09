@@ -35,7 +35,7 @@ The adapter:
   marker;
 - passes the question and evidence through a permission-restricted temporary
   prompt file rather than command-line text;
-- keeps the packaged `generation-v1` JSON schema authoritative and supplies the
+- keeps the packaged `generation-v3` JSON schema authoritative and supplies the
   runtime a fingerprinted GBNF constraint derived from that schema;
 - assigns evidence identifiers from supplied ranks (`e1`, `e2`, and so on);
 - runs with `shell=False`, `--offline`, disabled prompt display, runtime logs
@@ -61,10 +61,10 @@ The model-facing JSON (`generation-v3`) contains only `claims`, `abstained`,
 sentence carrying the citation IDs supporting it alone, and `citations` is
 derived from those claims rather than emitted separately.
 
-Structural validation still cannot prove that a sentence is *true*. It can now
-detect one specific falsehood: `check_response_grounding()` flags a claim using
-a term distinctive to a paper it does not cite, which is the signature of two
-studies being merged into one description.
+Structural validation still cannot prove that a sentence is *true*.
+`check_response_grounding()` detects one specific structural risk: a claim
+using a term distinctive to a paper it does not cite. This is a targeted
+heuristic for cross-paper misattribution, not a semantic falsehood detector.
 
 Operational problems such as missing files, checksum mismatches, incompatible
 artifacts, process failures, timeouts, cancellation, invalid UTF-8, and invalid

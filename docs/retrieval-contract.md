@@ -24,7 +24,11 @@ Retrievers are configured with their target corpus or index during construction.
 concrete adapter conforming to this protocol and is selected by Issue 9 as the
 initial backend. The protocol remains strictly backend-independent; this is a
 replaceable MVP decision, not selection of a permanent or universally superior
-retrieval method. Issue 9 does not wire the selection into the CLI.
+retrieval method. Issue 9 did not wire the selection into the CLI
+(**[historical]**). The current `chat` command and interactive shell use
+`BM25Retriever` over their respective library snapshots when each command's
+own corpus-availability gate is satisfied; when a command's gate fails, that
+command does not construct a retriever.
 
 ## Components
 
@@ -61,7 +65,10 @@ A pure validation function (`econ_paper_cli.protocols.retrieval.validate_retriev
 - **Score Direction:** Results must be ordered by non-increasing score (`results[i].score >= results[i + 1].score`). Higher scores represent stronger matches.
 - **Deterministic Tie-Breaking:** When two results have equal scores (`results[i].score == results[i + 1].score`), they must be ordered by ascending `passage_id` string order (`results[i].passage.passage_id < results[i + 1].passage.passage_id`).
 - **Exact Duplicate Policy:** `passage_id` values across the returned tuple must be strictly unique. Submitting duplicate passage IDs raises `RetrievalResultValidationError`.
-- **Near-Duplicate Suppression:** Near-duplicate or semantic passage suppression is an adapter/evaluation responsibility and is deferred to concrete retrieval implementation testing.
+- **Near-Duplicate Suppression:** Near-duplicate or semantic passage suppression
+  is an adapter/evaluation responsibility rather than a generic validator rule.
+  The current BM25 adapter applies normalized lexical duplicate suppression,
+  with adapter tests; another retriever may use a different documented policy.
 - **Uniform Non-Empty Method:** Every returned `RetrievalEvidence` object must have a non-empty `retrieval_method` string (not `None` or whitespace-only), and all items in a single returned tuple must share the exact same `retrieval_method` string label.
 
 ## Determinism

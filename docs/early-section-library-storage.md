@@ -53,6 +53,10 @@ check against the supplied extraction pages.
 
 ## Schema version 4 and replacement
 
+This heading names the migration that introduced early-section storage, not
+the database's current overall schema version. The authoritative current value
+is `adapters.sqlite_storage.CURRENT_SCHEMA_VERSION`.
+
 The version-4 migration:
 
 - makes `source_provenance.markdown_path` nullable and adds parser version;

@@ -1,15 +1,12 @@
-# Managed runtime provisioning (issue #58)
+# Managed runtime provisioning
 
 `econpapers setup` can automatically install a pinned `llama.cpp` runtime so
 an ordinary user never has to build `llama.cpp`, edit `PATH`, or locate an
-executable manually. This issue provisions **only the runtime**; runtime and
-model provisioning are independent (staged and promoted separately, with
-independent status reporting in `econpapers status`) even though both are
-now implemented. Model provisioning (a pinned default GGUF, selection logic,
-and its own downloader) is documented separately in the README's "Choosing a
-model" section and `domain/model_manifest.py`/`services/model_provisioning.py`
-— it did not exist under issue #13, which only ran a mechanical benchmark
-and deferred a default; see `docs/roadmap.md` §7 and §10 for that history.
+executable manually. Runtime and model provisioning are independent: they are
+staged and promoted separately and have independent status reporting. Model
+provisioning is documented in the README's "Choosing a model" section and in
+`domain/model_manifest.py` and `services/model_provisioning.py`; the roadmap
+retains the implementation history.
 The explicit flags below remain available as an opt-in bypass, independently
 for each side: `--llama-cpp-path` alone bypasses runtime provisioning, and
 all four `--model-path`/`--model-id`/`--model-bytes`/`--model-checksum`
@@ -19,17 +16,18 @@ on `analyze`/`chat`.
 
 ## When provisioning runs
 
-- `econpapers setup --llama-cpp-path PATH ...` — unchanged: the explicit path
-  is validated and used directly. Managed provisioning is never invoked and
-  no download is ever triggered, regardless of whether a managed runtime
-  exists.
+- `econpapers setup --llama-cpp-path PATH ...` — the explicit path is validated
+  and used directly. Managed runtime provisioning is never invoked and no
+  runtime download occurs. Model provisioning remains independent and may
+  still download unless an explicit model identity is also supplied or
+  `--offline` is set.
 - `econpapers setup ...` (no `--llama-cpp-path`) — detects the current
   platform/architecture, reuses an already-installed and verified managed
   runtime if one exists, otherwise downloads, verifies, and installs the
   pinned release.
-- `econpapers setup --offline ...` (no `--llama-cpp-path`) — same reuse check,
-  but never downloads; fails with a typed, actionable error if no verified
-  managed runtime is already installed.
+- `econpapers setup --offline ...` (no `--llama-cpp-path`) — performs the same
+  reuse check but refuses both runtime and model downloads. It fails with a
+  typed, actionable error if either required managed artifact is unavailable.
 - `econpapers analyze`, `econpapers chat`, bare `econpapers`, and `econpapers
   status` never provision or download anything, unconditionally.
 - `econpapers status`'s runtime check is strictly read-only: it never
@@ -47,21 +45,20 @@ x86_64 — each the standard upstream build for that platform. None is a CUDA,
 ROCm, or Vulkan variant and none requires a GPU, which is what the
 no-GPU-requirement product guardrail asks for; the macOS arm64 asset does
 bundle the Metal backend and both macOS assets bundle BLAS, while the Linux
-and Windows assets are CPU-only. macOS x86_64 (Intel) is included even
-though this project's own CI matrix only runs macOS arm64 today, so an Intel
-Mac user still gets managed provisioning rather than a forced manual
-`--llama-cpp-path`. The pinned data lives
-in `econ_paper_cli.domain.runtime_manifest_data.MANAGED_RUNTIME_MANIFEST`, a
-plain Python module (not a JSON/data file) so it is always included in built
+and Windows assets are CPU-only. macOS x86_64 (Intel) is included in managed
+provisioning and in the exact-floor CI job on `macos-15-intel`. The pinned data
+lives in `econ_paper_cli.domain.runtime_manifest_data.MANAGED_RUNTIME_MANIFEST`,
+a plain Python module (not a JSON/data file) so it is always included in built
 wheels/sdists with no separate packaging configuration to forget.
 
 Each entry (`econ_paper_cli.domain.runtime_manifest.ManagedRuntimeArtifact`)
 records: `runtime_id`/`version_marker`, `platform`/`architecture`,
 `source_url` (HTTPS-only, enforced at construction), `archive_format`,
 `archive_size_bytes`, `archive_sha256`, the archive-relative
-`executable_relative_path`, and the upstream `license_name`/
-`attribution_text`. A platform/architecture combination with no matching
-entry is reported as unsupported (`econpapers status` shows
+`executable_relative_path`, per-member checksums, the upstream `license_name`/
+`attribution_text`, and the three licensing classifications shared with
+`domain.artifacts`. A platform/architecture combination with no matching entry
+is reported as unsupported (`econpapers status` shows
 `unsupported_platform`; `setup` without an explicit path fails with a typed
 error) rather than silently attempting an unpinned download.
 
@@ -93,11 +90,11 @@ error) rather than silently attempting an unpinned download.
    are byte-identical by definition, so losing the promotion race just means
    adopting the winner's already-verified result instead of overwriting it.
 7. Only after promotion succeeds does `setup` persist the resolved
-   executable path — **and** the installed `runtime_id`/`version_marker`
-   (optional additions to `LocalRuntimeModelConfig` schema version 1; a
-   config saved before they existed simply loads with both as `None`, and
-   `LlamaCppConfig`'s own defaults apply exactly as before) — through the
+   executable path and the installed `runtime_id`/`version_marker` through the
    existing durable configuration boundary (`ConfigBackend.save()`). This is
+   written as `LocalRuntimeModelConfig` schema version 3. Runtime identity was
+   introduced in schema version 2; a schema-version-1 config remains readable
+   with both values set to `None` and is upgraded when it is next saved. This is
    what makes the pinned identity survive a process restart: `analyze`,
    `chat`, and bare `econpapers` all resolve the same recorded identity
    through `config_resolution.build_llama_cpp_config_kwargs` rather than
@@ -149,20 +146,19 @@ never, by itself, sufficient to call an install "managed" or "verified."
 
 ## Recovery
 
-To force a completely clean reinstall, delete the managed runtime directory
-(or the specific content-addressed subdirectory reported by `econpapers
-status`) and re-run `econpapers setup` without `--llama-cpp-path`:
+Use `econpapers update` to verify and repair a configured managed runtime. It
+reuses a valid install and downloads only when repair is required:
 
 ```bash
-econpapers status                        # shows the configured executable path and runtime state
-rm -rf "<app-data-dir>/econpapers/runtime" # delete the whole managed runtime directory (all installs)
-econpapers setup --model-path ... --model-id ... --model-bytes ... --model-checksum ...
+econpapers status
+econpapers update
+econpapers status
 ```
 
-`<app-data-dir>` is the platform's per-user application-data directory (e.g.
-`~/Library/Application Support` on macOS, `~/.local/share` on Linux,
-`%LOCALAPPDATA%` on Windows) — the same base directory the SQLite library
-already uses, under a `runtime/` subdirectory.
+Manual deletion is a last resort because it removes every install under the
+selected runtime directory. If it is necessary, resolve the exact directory
+with `econpapers status`, remove only that explicit path, and rerun
+`econpapers setup` or `econpapers update`.
 
 The `ECONPAPERS_RUNTIME_DIR` environment variable overrides the install
 location, independent of the config directory (`ECONPAPERS_CONFIG_DIR`) and
@@ -176,8 +172,9 @@ Copyright (c) 2023–2026 The ggml authors, licensed under the MIT License. The
 full license text is bundled inside every downloaded release archive
 (`LICENSE`) and is not reproduced or redistributed by this repository —
 `econpapers` only downloads the official upstream release asset directly
-from GitHub at setup time, checksum-verifies it, and installs it locally; it
-is never vendored into this project's own source tree or packages.
+from GitHub during explicit `setup` or `update`, checksum-verifies it, and
+installs it locally; it is never vendored into this project's own source tree
+or packages.
 
 [`artifact-licensing.md`](artifact-licensing.md) records the remaining
 licensing facts for all four pinned archives — redistribution status, update

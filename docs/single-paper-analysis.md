@@ -6,8 +6,8 @@ structured, evidence-backed research question.
 
 ## Overview
 
-`analyze_single_paper` is a deterministic, offline orchestration service. It
-accepts exactly one local PDF file path and runs five stages in canonical order:
+`analyze_single_paper` accepts exactly one local PDF file path and runs five
+stages in a fixed canonical order:
 
 | Stage | Service |
 |---|---|
@@ -17,8 +17,9 @@ accepts exactly one local PDF file path and runs five stages in canonical order:
 | 4. Section detection | `detect_pdf_sections` |
 | 5. Research question extraction | `extract_research_question` |
 
-No network calls are made. All backends are replaceable through the
-`PDFExtractor` and `Generator` protocols.
+The service initiates no network calls. Effects available through an injected
+`PDFExtractor` or `Generator` depend on that implementation; the shipped
+adapters are local. Both backends remain replaceable through their protocols.
 
 The `econpapers analyze` command additionally projects eligible detected
 Abstract/Introduction content into the early-section library. This command-level
@@ -48,8 +49,9 @@ Each stage produces one of three outcomes:
 - **Skipped**: the stage was not attempted because a prior stage failed or halted;
   it is included in `skipped_stages`.
 
-The invariant `completed_stages + (failed_stage,) + skipped_stages` always
-equals the canonical five-stage tuple, in order.
+The invariant
+`completed_stages + ((failed_stage,) if failed_stage else ()) + skipped_stages`
+always equals the canonical five-stage tuple, in order.
 
 ## Terminal statuses
 
@@ -148,9 +150,9 @@ from econ_paper_cli.adapters.llama_cpp import LlamaCppConfig, LlamaCppGenerator
 # Replace the placeholder values below with your actual runtime paths and
 # artifact metadata before running.
 config = LlamaCppConfig(
-    executable_path=Path("/path/to/llama-cli"),  # llama.cpp binary
+    executable_path=Path("/path/to/llama-completion"),  # llama.cpp binary
     model_path=Path("/path/to/model.gguf"),  # local GGUF model file
-    model_id="your-model-id",  # e.g. "mistral-7b-instruct-q4-k-m"
+    model_id="your-model-id",  # e.g. a pinned Qwen2.5 model ID
     model_expected_size_bytes=4_000_000_000,  # expected file size in bytes
     model_sha256="0" * 64,  # 64-char SHA-256 hex digest
 )

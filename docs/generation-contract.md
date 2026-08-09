@@ -5,8 +5,10 @@
 The generation contract defines the narrow, backend-independent boundary by
 which application services can invoke a local language-model adapter. The
 contract does not select a model, runtime, prompt, artifact, or CLI workflow.
-Issue 12 implements one concrete adapter behind this unchanged boundary, while
-Issue 13 evaluated the eligible candidates and deferred default selection.
+Issue 12 implemented one concrete adapter behind this unchanged boundary, and
+Issue 13's benchmark deferred default selection at that time. The current
+managed model choices are documented in the README; they do not change this
+protocol.
 
 ```text
 Application Services -> Generator Protocol -> Replaceable Local Adapter
@@ -321,6 +323,6 @@ unimplemented. The
 `LlamaCppGenerator` adapter described above still performs no downloads
 itself; downloading is a separate, adapter-independent provisioning step.
 
-The repository-root `papers/` directory is private future ingestion input. It
-is ignored by Git and is not a public corpus, test fixture, package resource, or
-hard-coded application path.
+The repository-root `papers/` directory is an optional private input location
+for `econpapers analyze`. It is ignored by Git and is not a public corpus, test
+fixture, package resource, or hard-coded application path.

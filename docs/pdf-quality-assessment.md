@@ -58,5 +58,5 @@ and document measurements are validated against the ordered page observations.
 
 The defaults are intentionally conservative: warnings and statuses guide later
 orchestration, but assessment never discards, normalizes, or rewrites extracted
-text. OCR execution, parser retry, conversion, segmentation, persistence, and
-CLI behavior remain separate later work.
+text. Conversion, segmentation, persistence, and CLI orchestration are separate
+implemented stages. OCR execution and parser retry are not implemented.

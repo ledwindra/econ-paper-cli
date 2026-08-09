@@ -89,10 +89,11 @@ The last point is a real check, not a formality — it is what makes the opt-in
 tier opt-in. Confirm it explicitly:
 
 ```bash
-pytest --collect-only -q | grep -c integration_tests
+python -m pytest --collect-only -q | python -c "import sys; matches = [line for line in sys.stdin if 'integration_tests' in line]; print(len(matches)); raise SystemExit(bool(matches))"
 ```
 
-Expected: `0`.
+Expected: prints `0` and exits 0. Unlike `grep -c`, this command does not exit
+1 merely because the desired match count is zero.
 
 ## 4. Tier 1 release-readiness scenarios
 
@@ -390,10 +391,12 @@ python -c "from econ_paper_cli.domain.model_manifest import MANAGED_MODEL_CATALO
 ## Run record template
 
 Copy this section, fill every field, and commit it as a results-only change.
+The template's checklist version must match the version at the top of this
+document; update both in the same edit whenever the procedure changes.
 
 ```text
 Release candidate SHA:
-Checklist version:       2
+Checklist version:       5
 Tag points at:           candidate SHA  (fixed convention — see § 1.4)
 Date:
 Operator:

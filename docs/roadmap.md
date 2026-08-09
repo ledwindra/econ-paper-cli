@@ -5,8 +5,9 @@ features are available.
 
 ## 1. Repository foundation (implemented)
 
-- Installable Python 3.10+ package using a `src` layout
-- Thin `econpapers` CLI with setup, status, chat, and update placeholders
+- Installable Python 3.10.12+ package using a `src` layout
+- Initial thin `econpapers` CLI placeholders, since replaced by the implemented
+  workflows summarized in §10
 - Cross-platform lint and test automation
 - Initial product and architecture constraints
 
@@ -110,7 +111,7 @@ Not implemented when this design was approved:
 - Ingestion CLI syntax
 
 Those historical gaps are now closed except for OCR, full-document conversion,
-and retrieval-index persistence.
+standalone Markdown export, and retrieval-index persistence.
 
 ## 6. Local inference adapter and evaluation framework (Issue 12)
 
@@ -187,7 +188,7 @@ Completed:
   inspectable Markdown and stable passages with exact page-local provenance
 - Project successful early-section conversion into an immutable library record
   and persist Markdown, passages, parser/conversion identity, and exact fragment
-  provenance atomically in SQLite schema version 4
+  provenance atomically in tables introduced by SQLite schema version 4
 - Populate that library during single-file and directory analysis, with exact
   dual-record reuse, generator-free legacy backfill, configurable deterministic
   passage sizing, and coordinated analysis/library writes

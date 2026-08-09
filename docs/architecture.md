@@ -35,23 +35,15 @@ against retrieved evidence before display.
 
 ## Approved hybrid local-library architecture
 
-Issue 11 approves the following future architecture. It is documentation and
-design only. No storage protocol, SQLite schema, ingestion service, PDF
-processing, or production index is currently implemented.
-
-**[historical]** — the sentence above is Issue 11's scope statement, true when
-it was written, and is not a status claim about today. On the retrieval-index
-half specifically it still holds: no production or persisted index is
-implemented, and that remains **[planned]**. Retrieval today is the
-**[current]** in-memory BM25 index.
-
-That scope statement's other four items are no longer true. The storage protocol
+Issue 11 approved the design below before implementation began. The storage protocol
 (`protocols/storage.StorageBackend`), the versioned SQLite schema
 (`adapters/sqlite_storage.py`), the ingestion service
 (`services/ingestion.py`), and PDF processing (extraction, quality
 assessment, section detection, and early-section conversion under
-`services/`) have all shipped. What follows in this section is therefore the
-approved design as Issue 11 recorded it, not a list of missing components.
+`services/`) have all shipped. Retrieval uses the **[current]** in-memory BM25
+index; only the persisted index remains **[planned]**. What follows is the
+approved architecture with current implementation boundaries, not a list of
+missing components.
 
 ```text
 User-selected PDF or directory
@@ -90,14 +82,14 @@ need for another dependency.
 | SQLite | Catalog, retrieval-ready passage text, metadata, provenance, checksums, ingestion state, and other application state | Source-derived records are rebuildable from accessible PDFs and versioned conversion logic. Unique user state is not assumed to be reconstructible. |
 | Retrieval index | Query-time search optimization | Derived accelerator. It is rebuildable from stored passages and is never the only copy of paper or passage data. **[current]** as an in-memory BM25 index rebuilt per run; **[planned]** as a persisted on-disk layer. |
 
-Whether the application manages private copies of PDFs or registers source
-files in place remains deferred. Registration cannot preserve an externally
-stored PDF after a user moves or deletes it.
+The current application registers source files in place. Whether a later
+workflow also manages private copies remains deferred. Registration cannot
+preserve an externally stored PDF after a user moves or deletes it.
 
-SQLite is the structured operational store for the future application, but
-Markdown remains available for inspection and export. Markdown is not reparsed
-on every run, and SQLite is not exposed as the only means of accessing
-converted text.
+SQLite is now the structured operational store. Generated Markdown is retained
+in SQLite, and cited passage text is inspectable through `/show` and
+`--show-evidence`; standalone Markdown export is not implemented. Markdown is
+not reparsed on every run.
 
 ### Rebuildable records and unique user state
 
@@ -116,8 +108,8 @@ architecture does not classify all application state as rebuildable.
 
 ### Intended ingestion flow
 
-For ordinary use, a user selects a PDF or directory and invokes ingestion. A
-future application service will:
+For ordinary use, a user selects a PDF or directory and invokes ingestion. The
+approved full-document flow is:
 
 1. discover supported PDF files;
 2. calculate content checksums and identify duplicate or previously ingested
@@ -134,10 +126,14 @@ future application service will:
     and
 11. build or refresh rebuildable retrieval state and record its freshness.
 
-The workflow requires no manual conversion, manifest creation, metadata entry,
-segmentation, identifier assignment, or database insertion. It performs no
-network access. Any future metadata-enrichment service must be separately
-approved and explicitly enabled.
+The current `analyze` command implements this flow for detected Abstract and
+Introduction text, except OCR. Retrieval state is built later by `chat` or the
+interactive shell rather than refreshed by `analyze`. Full-document conversion,
+OCR, and persisted-index refresh remain future work. The implemented workflow
+requires no manual conversion, manifest creation, metadata entry, segmentation,
+identifier assignment, or database insertion and performs no network access.
+Any metadata-enrichment service must be separately approved and explicitly
+enabled.
 
 ### Transactions, re-ingestion, and recovery
 
@@ -159,8 +155,10 @@ can diverge, and index-freshness becomes a real concern only with the
 
 SQLite schemas require explicit versions and forward migrations. Migration
 failures must preserve existing user data or stop with an actionable error.
-The exact tables, migration machinery, identifier algorithm, and concurrency
-policy remain deferred.
+The current tables, migration machinery, identifier algorithms, and transaction
+policy are implemented in `adapters/sqlite_storage.py` and the domain storage
+contracts. New storage layers must make those decisions explicitly rather than
+assuming the Issue 11 placeholders still govern.
 
 ### Privacy, licensing, and portability
 
@@ -175,9 +173,9 @@ suitable for use outside a source checkout on Windows, macOS, and Linux.
 The MVP requires no PostgreSQL, database server, Docker service, cloud
 database, or vector database. Ordinary ingestion remains local and offline.
 
-### Deferred implementation decisions
+### Decisions deferred by Issue 11
 
-Later storage or ingestion issues must decide:
+Issue 11 originally left these questions open:
 
 - whether PDFs are copied into a managed library or registered in place;
 - the default library location and configuration precedence;
@@ -191,7 +189,13 @@ Later storage or ingestion issues must decide:
 - Markdown storage and export layout; and
 - ingestion command syntax and options.
 
-These choices must preserve the approved local, offline, licensing, privacy,
+Most have since been resolved by the storage and ingestion implementation:
+source PDFs are registered in place, application directories and configuration
+precedence are defined, SQLite migrations and locking are implemented, stable
+identities are versioned, and extraction through early-section conversion is
+wired to the CLI. Still open are managed PDF copies, OCR and password handling,
+standalone Markdown export, and persisted-index format and refresh behavior.
+Future choices must preserve the approved local, offline, licensing, privacy,
 portability, evidence, and failure-reporting requirements.
 
 ## Build history by Issue
@@ -200,8 +204,9 @@ portability, evidence, and failure-reporting requirements.
 numbered Issue implemented or explicitly left out *as of that Issue*, in its
 original wording. None of them is a status claim about `main` today, and a
 statement that something "remains unimplemented" means unimplemented at the
-time that Issue closed. For what ships today, see "Current status" in
-[`README.md`](../README.md).
+time that Issue closed. For what ships today, see the
+[`README.md`](../README.md) feature and command summary and the current sections
+of [`roadmap.md`](roadmap.md).
 
 On retrieval-index scope specifically, the `[historical]` "persisted index
 remains unimplemented" statements below happen to still be true: a persisted or

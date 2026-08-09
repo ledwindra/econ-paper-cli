@@ -42,14 +42,18 @@ Concatenating span text slices reproduces the section's exact extracted body tex
 Missing, ambiguous, or malformed section boundaries emit stable warning codes in canonical order:
 - `no_pages`: The extraction result contains zero pages.
 - `all_pages_empty`: No extractable text was found on any page.
-- `MISSING_ABSTRACT`: No Abstract heading candidate was detected.
-- `UNRESOLVED_ABSTRACT_BOUNDARY`: An Abstract heading candidate was detected, but no front-matter terminator or top-level section boundary was found to delimit its end.
-- `MISSING_INTRODUCTION`: No Introduction heading candidate was detected.
+- `missing_abstract`: No Abstract heading candidate was detected.
+- `unresolved_abstract_boundary`: An Abstract heading candidate was detected, but no front-matter terminator or top-level section boundary was found to delimit its end.
+- `empty_abstract_body`: An Abstract heading was detected, but its body was empty.
+- `missing_introduction`: No Introduction heading candidate was detected.
 - `missing_next_section_boundary`: Introduction heading was found, but no subsequent top-level section heading was detected. Introduction extends to the end of the extracted text.
+- `empty_introduction_body`: An Introduction heading was detected, but its body was empty.
 - `duplicate_abstract_candidates`: Multiple Abstract heading candidates were detected.
 - `duplicate_introduction_candidates`: Multiple Introduction heading candidates were detected.
 - `ambiguous_abstract_candidates`: Multiple equally plausible Abstract heading candidates were detected.
 - `ambiguous_introduction_candidates`: Multiple equally plausible Introduction heading candidates were detected.
+- `ambiguous_implicit_abstract_boundary`: An unheaded Abstract boundary could not be inferred with sufficient confidence.
+- `ambiguous_implicit_introduction_boundary`: An unheaded Introduction boundary could not be inferred with sufficient confidence.
 
 ## Policy versions
 
