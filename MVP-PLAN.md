@@ -1013,8 +1013,9 @@ The exit condition below makes a recorded release procedure MVP-blocking, so
 - environment prerequisites and the exact reproducible commands, each with its
   expected outcome and exit code (`ruff check .`, `ruff format --check .`,
   `pytest`, `pytest integration_tests -m model` with the gating variables set
-  (and confirmation that the bare `pytest` run did not collect them), the manual
-  real-network `setup` smoke run, and the M3 private-PDF harness);
+  (and confirmation that the bare `pytest` run did not collect them), the
+  manually triggered three-OS offline CLI workflow or its manual fallback,
+  the manual real-network `setup` smoke run, and the M3 private-PDF harness);
 - artifact identities: every pinned model and runtime artifact by
   `model_id`/`runtime_id`, version marker, expected size, and SHA-256,
   cross-referenced to `docs/artifact-licensing.md`;

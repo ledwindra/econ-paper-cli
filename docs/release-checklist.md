@@ -1,14 +1,29 @@
 # Release checklist
 
-**Checklist version: 2**
+**Checklist version: 4**
 
-Version 2 (2026-08-08) records that, as of that date, no job of the current
-CI configuration had completed a step; adds limitation 3; requires unexecuted
-CI rows to read "not run" rather than blank; and fixes the release tag to the
-candidate SHA. Version 1 assumed a green CI matrix was available, and a run
-record produced under it would have overstated its evidence. The dated
-observation will be superseded by the first successful run; the rule it rests
-on will not — see limitation 3.
+Version 4 (2026-08-09) adds the manually triggered
+`.github/workflows/release-readiness.yml` workflow. It runs the real CLI
+scenarios on hosted Linux, macOS, and Windows runners: artifacts and a
+synthetic library are prepared while online, the default network route is
+isolated, the commands run offline, and networking is restored before the job
+finishes. Its uploaded per-OS artifacts are release evidence; the local
+procedure below remains the fallback when the workflow cannot be used.
+
+Version 3 (2026-08-09) retires version 2's dated observation: the current CI
+configuration has now executed, all eight jobs green, at
+`8126fba` — see
+[`release-runs/2026-08-09-8126fba.md`](release-runs/2026-08-09-8126fba.md).
+Limitation 3 keeps only its durable half. Limitation 2 narrows to the
+exact-floor gap. No procedural rule changed.
+
+Version 2 (2026-08-08) recorded that, as of that date, no job of the current
+CI configuration had completed a step; added limitation 3; required
+unexecuted CI rows to read "not run" rather than blank; and fixed the release
+tag to the candidate SHA. Version 1 assumed a green CI matrix was available,
+and a run record produced under it would have overstated its evidence. The
+dated observation has now been superseded by a successful run; the rule it
+rests on has not — see limitation 3.
 
 The recorded release procedure required by `MVP-PLAN.md`'s M5 exit condition.
 Working through it produces a *run record* — a filled-in copy of the
@@ -108,11 +123,13 @@ State it in those terms. Do not write "cross-platform support" without
 qualification.
 
 **Configured is not the same as executed — check before you claim either.**
-As of 2026-08-08 no job of the current CI configuration had completed a step
-at any SHA, and a green run of a superseded workflow never counts for the
-current one — see limitation 3 in § 8. The date is what expires here, not the
-rule, so re-establish the status with the commands below rather than trusting
-it. Before filling the run record, establish which jobs
+As of 2026-08-09 all eight jobs of the current configuration have executed
+and passed at one SHA (`8126fba`), and a green run of a superseded workflow
+never counts for the current one — see limitation 3 in § 8. The date is what
+expires here, not the rule: a matrix change resets coverage to nothing again,
+and a pass at one SHA is not a pass at the candidate. Re-establish the status
+with the commands below rather than trusting this paragraph. Before filling
+the run record, establish which jobs
 actually ran at the candidate SHA. Ask for `databaseId`, because the second
 command needs it:
 
@@ -199,11 +216,13 @@ unset — that is a not-run, not a pass, and must be recorded as such.
 is.** `integration_tests/` currently holds one test:
 `test_llama_cpp_model.py`, a generation-contract smoke test against a manually
 installed runtime and model. Automated tier 2 coverage of the *CLI* scenarios
-— real `econpapers chat`/shell/`analyze`/`status` under network isolation —
-is **not yet implemented**; those are run manually, as § 7's isolation
-procedure below describes, and their results recorded by hand. Automating them
-is a follow-up, not a blocker for this checklist: the no-upload gate rests on
-the tier 1 guarded service tests either way (§ 4).
+— real `econpapers chat`/shell/`analyze`/`status` under network isolation — is
+implemented by the manually triggered release-readiness workflow on all three
+hosted operating systems. The workflow's network isolation is platform
+specific and restores the runner's route in cleanup; its uploaded artifacts
+record the three probe results and command output. If the workflow is not
+available, the manual isolation procedure below remains valid, and the
+no-upload gate still rests on tier 1's guarded service tests (§ 4).
 
 ### Network isolation and its control
 
@@ -225,14 +244,19 @@ A literal address is deliberate: a DNS-only failure is not isolation. If
 `1.1.1.1:443` is unreachable from this host even before isolation, substitute
 a reachable endpoint and record which.
 
-Isolation, by platform — record the exact command used and whether it needed
-elevation:
+Isolation, by platform — the workflow records its exact command; for a manual
+run, record the command used and whether it needed elevation:
 
 | Platform | Command |
 | --- | --- |
 | Linux | run the commands inside `unshare -rn` |
 | macOS | `networksetup -setairportpower <device> off`, plus any wired service set to off |
 | Windows | `Disable-NetAdapter -Name <name>` (elevated) |
+
+The automated workflow uses `sudo unshare --net` on Linux, temporarily brings
+the default route down with `sudo ifconfig` on macOS, and disables the active
+default adapter with PowerShell on Windows. It restores networking in cleanup
+before uploading its artifact.
 
 Then run, against an already-provisioned library, and expect each to complete:
 `econpapers status`, `econpapers chat "<question>"`, bare `econpapers`
@@ -273,43 +297,47 @@ operations. None of those bear on the no-upload claim, which is about what
    is never touched. See `MVP-PLAN.md` § M2 "Known limitation carried
    forward".
 2. **Floor-version coverage excludes Windows.** No `win32` build exists at or
-   above the 3.10.12 floor (§ 5). On Windows the lowest **configured** matrix
-   interpreter is 3.11 — configured, not tested: limitation 3 records that no
-   job of the current configuration has run, so no Windows coverage *from the
-   current CI configuration* has actually been exercised. Windows did pass
-   under the superseded workflow; those passes do not carry over. The
-   *absence of a build* is a fact about `actions/python-versions`, not about
-   this project: it cannot be cleared here, only by upstream publishing one.
-3. **No job of the current CI configuration had completed a step as of
-   2026-08-08 — and a superseded workflow's passes never count.** The second
-   half is the durable rule: a green run validates the workflow *that ran*,
-   so when the matrix, interpreter list, or job set changes, prior passes
-   stop being evidence and coverage resets to nothing until the new
-   configuration runs. The first half is a dated observation, and one
-   successful run at the candidate SHA retires it. Re-check with the commands
-   in § 5 rather than trusting this date.
+   above the 3.10.12 floor (§ 5), so on Windows the lowest interpreter this
+   project can test is 3.11. Windows 3.11 and 3.14 have now been *tested*
+   under the current configuration (2026-08-09, `8126fba`), not merely
+   configured; what remains open is only that nothing verifies Windows at the
+   declared floor itself. The *absence of a build* is a fact about
+   `actions/python-versions`, not about this project: it cannot be cleared
+   here, only by upstream publishing one.
+3. **A superseded workflow's passes never count.** This is the durable rule
+   and it does not expire: a green run validates the workflow *that ran*, so
+   when the matrix, interpreter list, or job set changes, prior passes stop
+   being evidence and coverage resets to nothing until the new configuration
+   runs. Re-check with the commands in § 5 rather than trusting any statement
+   of status, including this one.
 
-   The last successful run, `977c7e26` (2026-08-02), executed a *different*
-   workflow against a *different* floor: `{ubuntu, macos, windows} ×
-   {3.10, 3.14}` with a floating `3.10`, and no `floor-check` job.
-   `requires-python` was `>=3.10` at that commit, which floating `3.10`
-   satisfies everywhere, so macOS and Windows really were tested there.
-   `945341e` then changed both halves together — it raised the floor to
-   `>=3.10.12` and switched the matrix to `{3.11, 3.14}` plus `floor-check`,
-   precisely because floating `3.10` resolves to 3.10.11 on macOS and
-   Windows, which the new floor excludes. Those earlier passes are therefore
-   superseded, not wrong. `945341e`'s own run is the first to fail with zero
-   steps; every run since did the same, and `7945e9a` onward has no run at
-   all. So `977c7e26`'s green tick attests to a workflow that no
-   longer exists, and every commit from `945341e` on — M4, M5 including its
-   own tier-1 suite, and M6 — is CI-unvalidated. **Why** the jobs failed is
-   not established: zero steps shows only that no step ran, and runner
-   allocation, cancellation, a billing or minutes limit, or another service
-   fault are all consistent with it. Unlike limitation 2, nothing here is an
-   upstream fact about published builds — one successful run at the candidate
-   SHA would clear this and the Intel-macOS gap together, with no change to
-   code or configuration. Until then the evidence behind a release is local
-   and single-platform, and must be labeled as such.
+   Version 2 of this file paired that rule with a dated observation — that as
+   of 2026-08-08 no job of the current configuration had ever completed a
+   step, every run since `945341e` having failed at zero steps for reasons
+   never established. **That observation is retired.** On 2026-08-09 the
+   repository was made public and the very next push executed normally: all
+   eight jobs ran their steps at `8126fba`, and all eight passed. The
+   coincidence with the visibility change is suggestive of a private-repo
+   Actions-minutes limit, but that was never confirmed against the billing
+   page and is not asserted here. What is now on record is only that the
+   configuration executes.
+
+   Two consequences follow. The Intel-macOS floor gap is closed —
+   `macos-15-intel` at exactly 3.10.12 passed. And the earlier claim that
+   every commit from `945341e` onward was CI-unvalidated no longer describes
+   the present: M4, M5's own tier-1 suite, and M6 are all included in the
+   green run at `8126fba`. The first Windows execution under this
+   configuration also found a real Windows-only test defect (a POSIX path
+   literal asserted verbatim), fixed at that same SHA.
+
+   For history: the last green run before this, `977c7e26` (2026-08-02),
+   executed a *different* workflow against a *different* floor —
+   `{ubuntu, macos, windows} × {3.10, 3.14}` with a floating `3.10` and no
+   `floor-check` job. `requires-python` was `>=3.10` then, which floating
+   `3.10` satisfies everywhere, so those passes were valid for that workflow;
+   `945341e` raised the floor to `>=3.10.12` and reshaped the matrix
+   together, superseding them. Superseded, not wrong — which is the rule
+   above, stated as a worked example.
 4. **A ready generator that loses its executable reports
    `INTERNAL_FAILURE`, not a typed failure.** `LlamaCppProcessError` falls in
    the shell's internal-failure group. Only the not-yet-ready case is typed,
@@ -435,6 +463,6 @@ ran" is not an attestation; each cell is.
 §7 Real-network setup run:
 §9 Artifact identities regenerated and matched: yes | no
 
-Known limitations reviewed (§8, items 1-4):   yes
+Known limitations reviewed (§8, items 1-5):   yes
 Deviations from this checklist:
 ```

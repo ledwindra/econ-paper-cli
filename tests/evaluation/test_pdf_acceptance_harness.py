@@ -164,7 +164,7 @@ BENCHMARK_MANIFEST = (
     ),
     BenchmarkCaseManifest(
         case_id="case_e",
-        filename="Trade  gravity and cross-sectional dependence.pdf",
+        filename="05-Trade_ gravity and cross-sectional dependence.pdf",
         expected_abstract_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
         expected_intro_method=PDFSectionDetectionMethod.EXPLICIT_HEADING,
         expected_abstract_heading="ABSTRACT",
