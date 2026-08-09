@@ -556,6 +556,8 @@ class LlamaCppGenerator:
             "--grammar-file",
             str(grammar_path),
             "--offline",
+            "--device",
+            "none",
             "--no-display-prompt",
             "--log-file",
             os.devnull,

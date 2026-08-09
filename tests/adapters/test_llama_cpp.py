@@ -216,6 +216,7 @@ def test_command_keeps_private_text_out_of_arguments_and_forces_offline_mode(
     assert "--grammar-file" in command
     assert "--json-schema-file" not in command
     assert "--offline" in command
+    assert command[command.index("--device") + 1] == "none"
     assert "--no-display-prompt" in command
     assert "--log-file" in command
     assert command[command.index("--log-file") + 1] == os.devnull
