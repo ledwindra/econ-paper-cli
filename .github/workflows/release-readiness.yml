@@ -97,6 +97,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
           $adapter = Get-NetIPConfiguration |
             Where-Object { $_.IPv4DefaultGateway -ne $null -and $_.NetAdapter.Status -eq 'Up' } |
             Select-Object -First 1
@@ -108,8 +109,8 @@ jobs:
           try {
             python .github/scripts/network_probe.py blocked
             $offlineExit = 0
-            python .github/scripts/run_offline_cli.py "$env:RUNNER_TEMP/release-fixture.pdf" 2>&1 |
-              Tee-Object -FilePath "$env:RUNNER_TEMP/offline-cli.txt"
+            $env:ECONPAPERS_RELEASE_OUTPUT = "$env:RUNNER_TEMP/offline-cli.txt"
+            python .github/scripts/run_offline_cli.py "$env:RUNNER_TEMP/release-fixture.pdf"
             $offlineExit = $LASTEXITCODE
             python .github/scripts/network_probe.py blocked
             if ($offlineExit -ne 0) { exit $offlineExit }
