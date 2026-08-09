@@ -51,6 +51,19 @@ class RedistributionStatus(str, Enum):
     UNKNOWN = "unknown"
 
 
+#: The update policy shared by every artifact this application downloads.
+#:
+#: Both managed catalogs reference this single constant rather than repeating
+#: the text, which is what makes ``docs/artifact-licensing.md``'s claim that
+#: one policy governs all six artifacts an invariant of the code instead of
+#: prose. It is typed as ``str`` to match :attr:`ArtifactManifest.update_policy`
+#: exactly, so the vocabulary is genuinely shared and not merely similar.
+PINNED_UPDATE_POLICY = (
+    "Pinned to an exact URL, size, and SHA-256 in version-controlled data. "
+    "The application never tracks upstream releases or upgrades on its own; "
+    "changing a pin is a maintainer action verified against a real download."
+)
+
 _EnumT = TypeVar("_EnumT", ArtifactKind, RedistributionStatus)
 
 

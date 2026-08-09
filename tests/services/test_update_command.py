@@ -6,6 +6,10 @@ import tarfile
 from pathlib import Path, PurePosixPath
 
 from econ_paper_cli.adapters.config_storage import JSONConfigStorage
+from econ_paper_cli.domain.artifacts import (
+    PINNED_UPDATE_POLICY,
+    RedistributionStatus,
+)
 from econ_paper_cli.domain.local_config import LocalRuntimeModelConfig
 from econ_paper_cli.domain.model_manifest import (
     ManagedModelArtifact,
@@ -41,6 +45,9 @@ MODEL_ARTIFACT = ManagedModelArtifact(
     attribution_text="Test artifact.",
     summary="Synthetic test model.",
     minimum_free_ram_bytes=1024,
+    redistribution_status=RedistributionStatus.PERMITTED,
+    update_policy=PINNED_UPDATE_POLICY,
+    contains_copyrighted_full_text=False,
 )
 MODEL_CATALOG = ManagedModelCatalog(
     artifacts=(MODEL_ARTIFACT,), default_model_id=MODEL_ARTIFACT.model_id
@@ -84,6 +91,9 @@ def _make_runtime_manifest(
         ),
         license_name="MIT",
         attribution_text="Test runtime artifact.",
+        redistribution_status=RedistributionStatus.PERMITTED,
+        update_policy=PINNED_UPDATE_POLICY,
+        contains_copyrighted_full_text=False,
     )
     return ManagedRuntimeManifest(schema_version=1, artifacts=(artifact,))
 

@@ -98,7 +98,7 @@ aligns the type itself (post-MVP, outside the completion gate).
 | M3 | Real-PDF acceptance corpus ✅ done | All six approved issue #59 cases pass their section-boundary and contamination assertions. |
 | M4 | Documentation truth pass ✅ done | All five sweeps landed and passed their acceptance criteria; every audited claim carries an explicit classification. See M4's run record below. |
 | M5 | Release-readiness verification | Offline, restart, privacy, artifact, and cross-platform checks pass in reproducible environments. M5 is the last milestone before MVP, **not** the sole MVP-complete gate — see M5's exit condition. |
-| M6 | Artifact-metadata alignment (post-MVP) | `ManagedModelArtifact` **and `ManagedRuntimeArtifact`** carry `redistribution_status`, `update_policy`, and `contains_copyrighted_full_text` as validated fields sharing `domain.artifacts`' vocabulary, and `docs/artifact-licensing.md` carries a generated declarations block bound to them by test. Conformance to, and reuse of, `domain.ArtifactManifest` were both **considered and rejected** with reasons recorded in M6's section — an earlier version of this row required one of them. **Outside the MVP-complete gate** — M4 sweep 5 documents these facts in prose first, which is what `AGENTS.md` licensing actually requires. |
+| M6 | Artifact-metadata alignment ✅ done (post-MVP) | `ManagedModelArtifact` **and `ManagedRuntimeArtifact`** carry `redistribution_status`, `update_policy`, and `contains_copyrighted_full_text` as validated fields sharing `domain.artifacts`' vocabulary, and `docs/artifact-licensing.md` carries a generated declarations block bound to them by test. Conformance to, and reuse of, `domain.ArtifactManifest` were both **considered and rejected** with reasons recorded in M6's section — an earlier version of this row required one of them. **Outside the MVP-complete gate** — M4 sweep 5 documents these facts in prose first, which is what `AGENTS.md` licensing actually requires. |
 
 OCR, conversion beyond Abstract/Introduction, persisted retrieval indexes,
 semantic causal classification, and other features excluded by Gate 0 remain
@@ -1694,3 +1694,70 @@ Out of scope: the M5 remainder (tier 2 run, run record, tag),
 `ArtifactKind.RUNTIME` and the serialized-schema design question behind it,
 any projection function, any change to `receipt.json` or durable
 configuration, and the mutable `resolve/main` source URLs.
+
+### Run record — 2026-08-08
+
+Implemented as planned. `ruff check .` and `ruff format --check .` clean;
+**1518 passed, 1 skipped** (baseline before the change: 1467 passed,
+1 skipped — 51 new tests).
+
+All five mutations were applied one at a time and reverted, each required to
+fail the two new test files:
+
+| # | Mutation | Caught by |
+| --- | --- | --- |
+| 1 | Pinned checksum corrupted in code | 7 tests, including the block equality, the per-artifact narrative guard, both checksum sweeps, and the overlap identity test |
+| 2 | Pinned size corrupted in code | 5 tests |
+| 3 | `redistribution_status` → `UNKNOWN` in code | 5 tests, including `test_all_artifacts_are_permitted_and_carry_no_paper_text` |
+| 4 | A value changed *inside* the generated block | 3 tests — the document-drift direction |
+| 5 | Narrative says `prohibited` while the block stays correct | `test_narrative_uses_the_declared_licenses_and_statuses` |
+
+Mutation 5 is the one worth noting: it is the scenario that would have passed
+silently under the earlier draft of this plan, and it is caught by exactly the
+guard added in response to that finding, and by no other test.
+
+A sixth mutation was added during review, after a finding that the
+artifact-coverage test only asserted a record *count* and the model
+identifiers: a renderer that omitted one runtime while duplicating another
+would keep the count right, and regenerating the document would satisfy byte
+equality. Applied — the renderer patched to drop the first runtime and emit
+the second twice, then `--write` run so the document matched — the whole suite
+produced exactly one failure,
+`test_generated_block_covers_exactly_the_downloadable_artifacts`. That
+confirms both that the hole was real and that the strengthened test, which
+pins the exact set of six `(kind, identifier)` pairs and rejects duplicates,
+is the only thing standing in front of it.
+
+Four deviations from the plan as written, all small:
+
+1. The plan said validation tests would go in "the existing
+   `tests/domain/test_model_manifest.py`". That file did not exist — model
+   manifest validation was tested indirectly from
+   `tests/services/test_model_provisioning.py`. It was created, mirroring the
+   sibling `test_runtime_manifest.py`.
+2. The plan did not specify exit codes beyond "non-zero" for marker failures.
+   The script uses `1` for drift and `2` for a marker failure, with a test
+   pinning the distinction: collapsing them would tell a caller to run
+   `--write` when `--write` cannot help.
+3. `test_generated_block_covers_exactly_the_downloadable_artifacts` was added
+   beyond the planned set. Byte-exact equality alone cannot catch a renderer
+   that silently omits an artifact, because the document would be regenerated
+   to match the omission. It asserts the exact set of six
+   `(kind, identifier)` pairs — platform and architecture included, since all
+   four runtimes share one `runtime_id` — and rejects duplicates, because a
+   count alone is satisfied by omitting one record and duplicating another.
+4. `test_write_changes_only_the_marker_delimited_interior` compares raw
+   `bytes` slices rather than decoded text. The two are equivalent for valid
+   UTF-8, but the guarantee being claimed is about what lands on disk, and
+   only a byte comparison states it literally.
+
+**Process note.** The first attempt at the mutation run used
+`git checkout -- src docs` to revert each mutation. Heredoc redirection meant
+the mutation commands never ran, so the checkout reverted every `src/` and
+`docs/` change in the working tree instead — the implementation had to be
+redone from scratch. Nothing was lost permanently (tests, scripts, and the
+plan were outside the checkout paths), but the lesson is recorded here: a
+mutation harness must restore from a copy it made itself, never from git,
+which cannot distinguish the mutation from the work under test. The harness
+that produced the table above backs up each target file and restores from that
+backup, and asserts the restore is byte-identical.

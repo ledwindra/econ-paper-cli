@@ -5,6 +5,10 @@ from pathlib import Path
 
 import pytest
 
+from econ_paper_cli.domain.artifacts import (
+    PINNED_UPDATE_POLICY,
+    RedistributionStatus,
+)
 from econ_paper_cli.domain.model_manifest import (
     MANAGED_MODEL_CATALOG,
     ManagedModelArtifact,
@@ -32,6 +36,9 @@ ARTIFACT = ManagedModelArtifact(
     attribution_text="Synthetic test artifact.",
     summary="A synthetic model used only by tests.",
     minimum_free_ram_bytes=1024,
+    redistribution_status=RedistributionStatus.PERMITTED,
+    update_policy=PINNED_UPDATE_POLICY,
+    contains_copyrighted_full_text=False,
 )
 OTHER = ManagedModelArtifact(
     model_id="synthetic-large",
@@ -44,6 +51,9 @@ OTHER = ManagedModelArtifact(
     attribution_text="Synthetic test artifact.",
     summary="A second synthetic model used only by tests.",
     minimum_free_ram_bytes=2048,
+    redistribution_status=RedistributionStatus.PERMITTED,
+    update_policy=PINNED_UPDATE_POLICY,
+    contains_copyrighted_full_text=False,
 )
 CATALOG = ManagedModelCatalog(
     artifacts=(ARTIFACT, OTHER), default_model_id=ARTIFACT.model_id
@@ -346,6 +356,9 @@ def test_manifest_rejects_a_filename_that_could_escape_the_install_dir(
             attribution_text="Synthetic.",
             summary="Synthetic.",
             minimum_free_ram_bytes=1,
+            redistribution_status=RedistributionStatus.PERMITTED,
+            update_policy=PINNED_UPDATE_POLICY,
+            contains_copyrighted_full_text=False,
         )
 
 
@@ -362,6 +375,9 @@ def test_manifest_rejects_a_non_https_source_url() -> None:
             attribution_text="Synthetic.",
             summary="Synthetic.",
             minimum_free_ram_bytes=1,
+            redistribution_status=RedistributionStatus.PERMITTED,
+            update_policy=PINNED_UPDATE_POLICY,
+            contains_copyrighted_full_text=False,
         )
 
 

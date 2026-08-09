@@ -11,6 +11,14 @@ cross-checked against a locally computed digest of the downloaded file. A wrong
 pin would make provisioning fail for every user, so pins must never be added
 from documentation alone.
 
+``redistribution_status``, ``update_policy``, and
+``contains_copyrighted_full_text`` are different in kind from those verified
+values: they are maintainer-supplied *classifications*, not facts derived from
+downloaded bytes. Recording ``permitted`` states a reading of the upstream
+license; it does not create legal permission. See ``docs/artifact-manifest.md``
+for the vocabulary these three share with ``domain.artifacts``, including the
+scope of the copyrighted-full-text disclosure.
+
 No filesystem or network access here; see ``services.model_provisioning`` and
 ``adapters.runtime_downloader`` for that.
 """
@@ -18,6 +26,7 @@ No filesystem or network access here; see ``services.model_provisioning`` and
 import re
 from dataclasses import dataclass
 
+from econ_paper_cli.domain.artifacts import PINNED_UPDATE_POLICY, RedistributionStatus
 from econ_paper_cli.domain.errors import DomainError
 
 _MODEL_ID_PATTERN = re.compile(r"[a-z0-9]+(?:[._-][a-z0-9]+)*")
@@ -46,6 +55,12 @@ class ManagedModelArtifact:
     # not because it answers better.
     summary: str
     minimum_free_ram_bytes: int
+    # The three licensing disclosures, sharing ``domain.artifacts``'
+    # vocabulary. Deliberately without defaults: adding a pinned artifact must
+    # force its author to state all three rather than inherit a silent answer.
+    redistribution_status: RedistributionStatus
+    update_policy: str
+    contains_copyrighted_full_text: bool
 
     def __post_init__(self) -> None:
         """Validate every pinned field before it can be used for a download."""
@@ -56,10 +71,28 @@ class ManagedModelArtifact:
             raise ManagedModelManifestError(
                 "model_id must match [a-z0-9]+(?:[._-][a-z0-9]+)*."
             )
-        for field in ("display_name", "license_name", "attribution_text", "summary"):
+        for field in (
+            "display_name",
+            "license_name",
+            "attribution_text",
+            "summary",
+            "update_policy",
+        ):
             value = getattr(self, field)
             if not isinstance(value, str) or not value.strip():
                 raise ManagedModelManifestError(f"{field} must be a non-empty string.")
+        if not isinstance(self.redistribution_status, RedistributionStatus):
+            allowed = ", ".join(member.value for member in RedistributionStatus)
+            raise ManagedModelManifestError(
+                f"redistribution_status must be one of: {allowed}."
+            )
+        # ``isinstance(1, bool)`` is False, so this rejects 1/0 as well as
+        # non-numeric values: a licensing disclosure must be an explicit
+        # boolean, not something merely truthy.
+        if not isinstance(self.contains_copyrighted_full_text, bool):
+            raise ManagedModelManifestError(
+                "contains_copyrighted_full_text must be a boolean."
+            )
         if not isinstance(self.source_url, str) or not self.source_url.startswith(
             "https://"
         ):
@@ -153,6 +186,9 @@ QWEN2_5_1_5B_INSTRUCT_Q4_K_M = ManagedModelArtifact(
         "fails by saying less."
     ),
     minimum_free_ram_bytes=4 * 1024**3,
+    redistribution_status=RedistributionStatus.PERMITTED,
+    update_policy=PINNED_UPDATE_POLICY,
+    contains_copyrighted_full_text=False,
 )
 
 QWEN2_5_7B_INSTRUCT_Q4_K_M = ManagedModelArtifact(
@@ -176,6 +212,9 @@ QWEN2_5_7B_INSTRUCT_Q4_K_M = ManagedModelArtifact(
         "RAM."
     ),
     minimum_free_ram_bytes=8 * 1024**3,
+    redistribution_status=RedistributionStatus.PERMITTED,
+    update_policy=PINNED_UPDATE_POLICY,
+    contains_copyrighted_full_text=False,
 )
 
 MANAGED_MODEL_CATALOG = ManagedModelCatalog(

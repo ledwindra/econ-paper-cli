@@ -3,6 +3,15 @@
 Describes exactly which pinned ``llama.cpp`` release archive is installed for
 each supported platform/architecture. No filesystem or network access here;
 see ``adapters.runtime_downloader``/``adapters.runtime_extractor`` for that.
+
+``redistribution_status``, ``update_policy``, and
+``contains_copyrighted_full_text`` are maintainer-supplied *classifications*,
+unlike ``archive_sha256``, ``archive_size_bytes``, and
+``bundle_member_checksums``, which must be computed from a real download.
+Recording ``permitted`` states a reading of the upstream license; it does not
+create legal permission. See ``docs/artifact-manifest.md`` for the vocabulary
+these three share with ``domain.artifacts``, including the scope of the
+copyrighted-full-text disclosure.
 """
 
 import re
@@ -10,6 +19,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import PurePosixPath
 
+from econ_paper_cli.domain.artifacts import RedistributionStatus
 from econ_paper_cli.domain.errors import DomainError
 
 _RUNTIME_ID_PATTERN = re.compile(r"[a-z0-9]+(?:[._-][a-z0-9]+)*")
@@ -67,6 +77,12 @@ class ManagedRuntimeArtifact:
     bundle_member_checksums: tuple[tuple[PurePosixPath, str], ...]
     license_name: str
     attribution_text: str
+    # The three licensing disclosures, sharing ``domain.artifacts``'
+    # vocabulary. Deliberately without defaults: adding a pinned artifact must
+    # force its author to state all three rather than inherit a silent answer.
+    redistribution_status: RedistributionStatus
+    update_policy: str
+    contains_copyrighted_full_text: bool
 
     def __post_init__(self) -> None:
         _validate_runtime_id("runtime_id", self.runtime_id)
@@ -89,6 +105,19 @@ class ManagedRuntimeArtifact:
             )
         _validate_nonempty_text("license_name", self.license_name)
         _validate_nonempty_text("attribution_text", self.attribution_text)
+        _validate_enum(
+            "redistribution_status",
+            self.redistribution_status,
+            RedistributionStatus,
+        )
+        _validate_nonempty_text("update_policy", self.update_policy)
+        # ``isinstance(1, bool)`` is False, so this rejects 1/0 as well as
+        # non-numeric values: a licensing disclosure must be an explicit
+        # boolean, not something merely truthy.
+        if not isinstance(self.contains_copyrighted_full_text, bool):
+            raise ManagedRuntimeManifestError(
+                "contains_copyrighted_full_text must be a boolean."
+            )
 
 
 @dataclass(frozen=True, slots=True)

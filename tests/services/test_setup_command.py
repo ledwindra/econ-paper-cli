@@ -7,6 +7,10 @@ import pytest
 
 from econ_paper_cli.adapters.config_storage import JSONConfigStorage
 from econ_paper_cli.adapters.llama_cpp import LlamaCppConfig, LlamaCppReadinessError
+from econ_paper_cli.domain.artifacts import (
+    PINNED_UPDATE_POLICY,
+    RedistributionStatus,
+)
 from econ_paper_cli.domain.runtime_manifest import (
     SupportedArchitecture,
     SupportedPlatform,
@@ -457,6 +461,9 @@ def test_real_provisioning_checksum_mismatch_is_typed_failure_and_preserves_conf
         bundle_member_checksums=((PurePosixPath("pkg/tool"), "1" * 64),),
         license_name="MIT",
         attribution_text="test",
+        redistribution_status=RedistributionStatus.PERMITTED,
+        update_policy=PINNED_UPDATE_POLICY,
+        contains_copyrighted_full_text=False,
     )
     manifest = ManagedRuntimeManifest(schema_version=1, artifacts=(artifact,))
 

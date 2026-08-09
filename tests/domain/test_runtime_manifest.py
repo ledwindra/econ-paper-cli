@@ -14,6 +14,11 @@ from econ_paper_cli.domain import (
     SupportedPlatform,
     select_artifact_for_platform,
 )
+from econ_paper_cli.domain.artifacts import (
+    PINNED_UPDATE_POLICY,
+    ArtifactManifestError,
+    RedistributionStatus,
+)
 
 VALID_SHA256 = "a" * 64
 
@@ -33,6 +38,9 @@ def _artifact(**overrides: object) -> ManagedRuntimeArtifact:
         "bundle_member_checksums": ((exe_path, VALID_SHA256),),
         "license_name": "MIT",
         "attribution_text": "Some attribution.",
+        "redistribution_status": RedistributionStatus.PERMITTED,
+        "update_policy": PINNED_UPDATE_POLICY,
+        "contains_copyrighted_full_text": False,
     }
     base.update(overrides)
     return ManagedRuntimeArtifact(**base)
@@ -64,11 +72,47 @@ def test_valid_artifact_constructs() -> None:
         ("license_name", ""),
         ("license_name", "   "),
         ("attribution_text", ""),
+        ("redistribution_status", "permitted"),
+        ("redistribution_status", None),
+        ("update_policy", ""),
+        ("update_policy", "   "),
+        ("contains_copyrighted_full_text", "no"),
     ],
 )
 def test_invalid_field_rejected(field: str, value: object) -> None:
     with pytest.raises(ManagedRuntimeManifestError):
         _artifact(**{field: value})
+
+
+@pytest.mark.parametrize("value", [1, 0])
+def test_copyrighted_full_text_rejects_integers_not_just_non_numbers(
+    value: object,
+) -> None:
+    """``isinstance(1, bool)`` is False, and a disclosure must be explicit.
+
+    Pinned separately from the table above because a truthy ``1`` is the
+    plausible mistake: it would read as "yes" while never having been stated
+    as a boolean.
+    """
+    with pytest.raises(ManagedRuntimeManifestError):
+        _artifact(contains_copyrighted_full_text=value)
+
+
+def test_licensing_fields_raise_this_module_s_error_not_the_schema_s() -> None:
+    """The shared vocabulary must not drag in ``ArtifactManifestError``.
+
+    ``RedistributionStatus`` is imported from ``domain.artifacts``, but this
+    type keeps its own error contract; a caller catching
+    ``ManagedRuntimeManifestError`` must still see every validation failure.
+    """
+    for field, value in (
+        ("redistribution_status", "permitted"),
+        ("update_policy", ""),
+        ("contains_copyrighted_full_text", 1),
+    ):
+        with pytest.raises(ManagedRuntimeManifestError) as error:
+            _artifact(**{field: value})
+        assert not isinstance(error.value, ArtifactManifestError)
 
 
 def test_bundle_member_checksums_must_include_executable() -> None:

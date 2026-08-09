@@ -10,6 +10,10 @@ import pytest
 from econ_paper_cli.adapters.config_storage import JSONConfigStorage
 from econ_paper_cli.adapters.llama_cpp import LlamaCppConfig
 from econ_paper_cli.adapters.sqlite_storage import SQLiteStorage
+from econ_paper_cli.domain.artifacts import (
+    PINNED_UPDATE_POLICY,
+    RedistributionStatus,
+)
 from econ_paper_cli.domain.local_config import LocalRuntimeModelConfig
 from econ_paper_cli.domain.runtime_manifest import (
     SupportedArchitecture,
@@ -382,6 +386,9 @@ def _patch_manifest_to_match_receipt(
         bundle_member_checksums=receipt.member_checksums,
         license_name="MIT",
         attribution_text="test",
+        redistribution_status=RedistributionStatus.PERMITTED,
+        update_policy=PINNED_UPDATE_POLICY,
+        contains_copyrighted_full_text=False,
     )
     manifest = ManagedRuntimeManifest(schema_version=1, artifacts=(artifact,))
     monkeypatch.setattr(status_module, "MANAGED_RUNTIME_MANIFEST", manifest)
@@ -485,6 +492,9 @@ def test_status_classifies_managed_runtime_as_corrupt_when_receipt_mismatches_ma
         bundle_member_checksums=receipt.member_checksums,
         license_name="MIT",
         attribution_text="test",
+        redistribution_status=RedistributionStatus.PERMITTED,
+        update_policy=PINNED_UPDATE_POLICY,
+        contains_copyrighted_full_text=False,
     )
     monkeypatch.setattr(
         status_module,

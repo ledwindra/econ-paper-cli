@@ -43,7 +43,7 @@ Every field is required, and unknown fields are rejected.
 | `expected_size_bytes` | Positive integer expected file size. |
 | `sha256` | Exactly 64 lowercase hexadecimal characters. |
 | `update_policy` | Nonempty description of how and when the entry is updated. |
-| `contains_copyrighted_full_text` | Boolean disclosure. |
+| `contains_copyrighted_full_text` | Boolean disclosure — see the scope definition below. |
 | `local_path` | Portable relative path using `/`, with no parent traversal or components invalid on a supported platform. |
 
 ## Python contract
@@ -55,6 +55,72 @@ serialized form.
 
 Validation raises `ArtifactManifestError` with the affected field and expected
 format. The manifest is immutable after construction.
+
+## Scope of `contains_copyrighted_full_text`
+
+`contains_copyrighted_full_text` discloses **whether the artifact's
+distributed bytes contain copyrighted full text of research papers**. It is a
+corpus-content disclosure, which is why `AGENTS.md`'s corpus-and-licensing
+section requires it: the rule it serves is that this project must not
+redistribute copyrighted paper text.
+
+It is **not** a claim about a model's training data, which this project does
+not characterize. A quantized GGUF is `false` because the file itself carries
+no paper text, not because anything here establishes what the weights were
+trained on.
+
+This definition governs both `ArtifactManifest` and the managed catalogs
+described below, so the same field name means the same thing everywhere.
+
+## Relationship to the managed catalogs
+
+`ManagedModelArtifact` (`domain/model_manifest.py`) and
+`ManagedRuntimeArtifact` (`domain/runtime_manifest.py`) describe the artifacts
+`econpapers setup` and `econpapers update` download. Since M6 they carry the
+same seven licensing facts this schema does, and they **share this module's
+vocabulary**: the `RedistributionStatus` enum, the `str` type for
+`update_policy`, and the disclosure scope defined immediately above. All six
+pinned artifacts reference one `domain.artifacts.PINNED_UPDATE_POLICY`
+constant.
+
+They do **not** conform to or reuse `ArtifactManifest` itself. Three reasons,
+each checkable against the code:
+
+1. **`local_path` is required and cannot be pinned for the runtime.** The
+   runtime's install directory is content-addressed and computed at
+   provisioning time, and `runtime_manifest.py` has no path field at all. This
+   is weaker for models — the committed `artifacts/models/*.manifest.json`
+   records show a model `local_path` is perfectly expressible — but the two
+   managed types are treated together.
+2. **`ArtifactKind` has no `runtime` member, and adding one forces an
+   unanswered design question.** Widening the enum would itself be
+   backward-compatible; existing records stay valid. The real cost is deciding
+   whether runtime bundles belong in a serialized manifest at all, and if so
+   what `local_path` means for a content-addressed install directory and where
+   `bundle_member_checksums`, `archive_format`, and
+   `executable_relative_path` live. That is a schema design task, not a
+   metadata one.
+3. **The managed types carry fields this schema has no slot for**:
+   `archive_format`, `bundle_member_checksums`, `executable_relative_path`,
+   `platform`, `architecture`, `minimum_free_ram_bytes`, `display_name`,
+   `summary`, and `attribution_text`. Conformance would either drop them or
+   force a parallel type anyway.
+
+### Where this schema is actually used
+
+No module under `src/` consumes `ArtifactManifest`; the application's
+provisioning paths use the managed catalogs instead. It is exercised by
+`tests/adapters/test_filesystem.py`, `tests/adapters/test_corpus.py`,
+`tests/evaluation/test_generation_evaluation.py`, and
+`integration_tests/test_llama_cpp_model.py`, the last of which loads a
+manifest from a user-supplied `ECONPAPERS_MODEL_MANIFEST` path.
+
+Four instances are committed: the synthetic corpus fixture
+(`tests/fixtures/corpus/synthetic-economics-v1.manifest.json`) and three
+Issue-13 model evaluation candidates under `artifacts/models/`. One of those
+three describes the same bytes as the managed catalog's default model; see
+[`artifact-licensing.md`](artifact-licensing.md) for how the two records
+relate and which fields may legitimately differ.
 
 ## Filesystem adapters
 

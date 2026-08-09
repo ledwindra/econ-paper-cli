@@ -19,6 +19,10 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
+from econ_paper_cli.domain.artifacts import (
+    PINNED_UPDATE_POLICY,
+    RedistributionStatus,
+)
 from econ_paper_cli.domain.runtime_manifest import (
     ArchiveFormat,
     ManagedRuntimeArtifact,
@@ -94,6 +98,9 @@ def _artifact(
         ),
         license_name="MIT",
         attribution_text="test",
+        redistribution_status=RedistributionStatus.PERMITTED,
+        update_policy=PINNED_UPDATE_POLICY,
+        contains_copyrighted_full_text=False,
     )
 
 
@@ -429,6 +436,9 @@ def test_reuse_check_rejects_receipt_that_mismatches_current_manifest(
         bundle_member_checksums=changed_artifact.bundle_member_checksums,
         license_name=changed_artifact.license_name,
         attribution_text=changed_artifact.attribution_text,
+        redistribution_status=RedistributionStatus.PERMITTED,
+        update_policy=PINNED_UPDATE_POLICY,
+        contains_copyrighted_full_text=False,
     )
 
     with pytest.raises(CorruptManagedInstallError):

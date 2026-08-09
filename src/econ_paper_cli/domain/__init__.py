@@ -1,6 +1,7 @@
 """Domain types that are independent of infrastructure adapters."""
 
 from econ_paper_cli.domain.artifacts import (
+    PINNED_UPDATE_POLICY,
     ArtifactKind,
     ArtifactManifest,
     ArtifactManifestError,
@@ -241,6 +242,7 @@ __all__ = [
     "PDFSectionWarningCode",
     "get_canonical_section_label",
     "DEFAULT_PDF_SECTION_SETTINGS",
+    "PINNED_UPDATE_POLICY",
     "PreflightCandidate",
     "RedistributionStatus",
     "ResearchQuestionEvidence",

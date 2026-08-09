@@ -35,6 +35,7 @@ manifest states the same rule for the same reason.
 
 from pathlib import PurePosixPath
 
+from econ_paper_cli.domain.artifacts import PINNED_UPDATE_POLICY, RedistributionStatus
 from econ_paper_cli.domain.runtime_manifest import (
     ArchiveFormat,
     ManagedRuntimeArtifact,
@@ -244,6 +245,9 @@ MANAGED_RUNTIME_MANIFEST = ManagedRuntimeManifest(
             ),
             license_name=_LLAMA_CPP_LICENSE,
             attribution_text=_LLAMA_CPP_ATTRIBUTION,
+            redistribution_status=RedistributionStatus.PERMITTED,
+            update_policy=PINNED_UPDATE_POLICY,
+            contains_copyrighted_full_text=False,
         ),
         ManagedRuntimeArtifact(
             runtime_id="llama.cpp-b10199",
@@ -432,6 +436,9 @@ MANAGED_RUNTIME_MANIFEST = ManagedRuntimeManifest(
             ),
             license_name=_LLAMA_CPP_LICENSE,
             attribution_text=_LLAMA_CPP_ATTRIBUTION,
+            redistribution_status=RedistributionStatus.PERMITTED,
+            update_policy=PINNED_UPDATE_POLICY,
+            contains_copyrighted_full_text=False,
         ),
         ManagedRuntimeArtifact(
             runtime_id="llama.cpp-b10199",
@@ -660,6 +667,9 @@ MANAGED_RUNTIME_MANIFEST = ManagedRuntimeManifest(
             ),
             license_name=_LLAMA_CPP_LICENSE,
             attribution_text=_LLAMA_CPP_ATTRIBUTION,
+            redistribution_status=RedistributionStatus.PERMITTED,
+            update_policy=PINNED_UPDATE_POLICY,
+            contains_copyrighted_full_text=False,
         ),
         ManagedRuntimeArtifact(
             runtime_id="llama.cpp-b10199",
@@ -884,6 +894,9 @@ MANAGED_RUNTIME_MANIFEST = ManagedRuntimeManifest(
             ),
             license_name=_LLAMA_CPP_LICENSE,
             attribution_text=_LLAMA_CPP_ATTRIBUTION,
+            redistribution_status=RedistributionStatus.PERMITTED,
+            update_policy=PINNED_UPDATE_POLICY,
+            contains_copyrighted_full_text=False,
         ),
     ),
 )

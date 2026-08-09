@@ -28,6 +28,10 @@ from econ_paper_cli.domain import (
     PDFSectionKind,
     PDFSectionSpan,
 )
+from econ_paper_cli.domain.artifacts import (
+    PINNED_UPDATE_POLICY,
+    RedistributionStatus,
+)
 from econ_paper_cli.domain.local_config import LocalRuntimeModelConfig
 from econ_paper_cli.domain.model_manifest import (
     ManagedModelArtifact,
@@ -141,6 +145,9 @@ MODEL_ARTIFACT = ManagedModelArtifact(
     attribution_text="Test artifact.",
     summary="Synthetic test model.",
     minimum_free_ram_bytes=1024,
+    redistribution_status=RedistributionStatus.PERMITTED,
+    update_policy=PINNED_UPDATE_POLICY,
+    contains_copyrighted_full_text=False,
 )
 MODEL_CATALOG = ManagedModelCatalog(
     artifacts=(MODEL_ARTIFACT,), default_model_id=MODEL_ARTIFACT.model_id
@@ -207,6 +214,9 @@ def _runtime_manifest(archive_sha: str, archive_size: int) -> ManagedRuntimeMani
                 ),
                 license_name="MIT",
                 attribution_text="Test runtime artifact.",
+                redistribution_status=RedistributionStatus.PERMITTED,
+                update_policy=PINNED_UPDATE_POLICY,
+                contains_copyrighted_full_text=False,
             ),
         ),
     )

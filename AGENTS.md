@@ -189,12 +189,18 @@ topic docs it links out to (`docs/retrieval-contract.md`,
 
 ### Corpus, models, and papers/ directory
 
-`papers/`, `models/`, `runtimes/`, `artifacts/`, `generation-results/` in a
-local checkout hold local, gitignored working data (source PDFs, GGUF
-models, the pinned `llama.cpp` runtime, artifact manifests, evaluation
-outputs). None of this is committed or redistributed — see the corpus and
-licensing requirements above before adding anything under these paths or
-touching `.gitignore`.
+`papers/`, `models/`, `runtimes/`, `generation-results/` in a local checkout
+hold local, gitignored working data (source PDFs, GGUF models, the pinned
+`llama.cpp` runtime, evaluation outputs). None of that is committed or
+redistributed — see the corpus and licensing requirements above before adding
+anything under these paths or touching `.gitignore`.
+
+`artifacts/` is **not** gitignored, and an earlier version of this section
+wrongly listed it as such. `artifacts/models/*.manifest.json` are committed
+`ArtifactManifest` records for the Issue-13 evaluation candidates, and must
+stay committed: `tests/evaluation/test_generation_evaluation.py` asserts on
+the exact set of files there, so a fresh clone fails without them. They are
+metadata only — no weights, no paper text.
 
 ## Python conventions
 
@@ -251,13 +257,20 @@ Before adding a corpus, model, or index artifact, document (**[current]** rule; 
 - whether it contains copyrighted full text.
 
 For the artifacts the application already downloads — both pinned Qwen2.5
-GGUFs and all four pinned `llama.cpp` archives — all seven facts are recorded
-in [`docs/artifact-licensing.md`](docs/artifact-licensing.md). Add any new
-downloadable artifact there. `ManagedModelArtifact`/`ManagedRuntimeArtifact`
-do not yet carry `redistribution_status`, `update_policy`, or
-`contains_copyrighted_full_text` as typed fields; conforming them to
-`domain.ArtifactManifest` is tracked as M6 in `MVP-PLAN.md` (post-MVP), and
-until then that document is where those three facts live.
+GGUFs and all four pinned `llama.cpp` archives — all seven facts are carried
+as validated fields on `ManagedModelArtifact`/`ManagedRuntimeArtifact`,
+including `redistribution_status`, `update_policy`, and
+`contains_copyrighted_full_text`, which share `domain.artifacts`' vocabulary.
+The catalogs are the source of truth;
+[`docs/artifact-licensing.md`](docs/artifact-licensing.md) records the same
+facts for human readers, with a generated block bound to the catalogs by
+test. Adding a new downloadable artifact means declaring all three fields —
+they have no defaults, deliberately — and regenerating that block with
+`python scripts/render_artifact_declarations.py --write`.
+
+The two types do not conform to or reuse `domain.ArtifactManifest`; the
+reasons are in [`docs/artifact-manifest.md`](docs/artifact-manifest.md), which
+also defines the scope of the copyrighted-full-text disclosure.
 
 Do not commit:
 
