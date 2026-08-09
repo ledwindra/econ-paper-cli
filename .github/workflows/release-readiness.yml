@@ -35,6 +35,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          export ECONPAPERS_CONFIG_DIR="$RUNNER_TEMP/release-config"
+          export ECONPAPERS_LIBRARY_DIR="$RUNNER_TEMP/release-library"
           echo "ECONPAPERS_CONFIG_DIR=$RUNNER_TEMP/release-config" >> "$GITHUB_ENV"
           echo "ECONPAPERS_LIBRARY_DIR=$RUNNER_TEMP/release-library" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/release-config" "$RUNNER_TEMP/release-library"
