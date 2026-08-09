@@ -98,7 +98,7 @@ aligns the type itself (post-MVP, outside the completion gate).
 | M3 | Real-PDF acceptance corpus ✅ done | All six approved issue #59 cases pass their section-boundary and contamination assertions. |
 | M4 | Documentation truth pass ✅ done | All five sweeps landed and passed their acceptance criteria; every audited claim carries an explicit classification. See M4's run record below. |
 | M5 | Release-readiness verification | Offline, restart, privacy, artifact, and cross-platform checks pass in reproducible environments. M5 is the last milestone before MVP, **not** the sole MVP-complete gate — see M5's exit condition. |
-| M6 | Artifact-metadata alignment (post-MVP) | `ManagedModelArtifact` **and `ManagedRuntimeArtifact`** conform to or reuse `domain.ArtifactManifest`, carrying `redistribution_status`, `update_policy`, and `contains_copyrighted_full_text`. **Outside the MVP-complete gate** — M4 sweep 5 documents these facts in prose first, which is what `AGENTS.md` licensing actually requires. |
+| M6 | Artifact-metadata alignment (post-MVP) | `ManagedModelArtifact` **and `ManagedRuntimeArtifact`** carry `redistribution_status`, `update_policy`, and `contains_copyrighted_full_text` as validated fields sharing `domain.artifacts`' vocabulary, and `docs/artifact-licensing.md` carries a generated declarations block bound to them by test. Conformance to, and reuse of, `domain.ArtifactManifest` were both **considered and rejected** with reasons recorded in M6's section — an earlier version of this row required one of them. **Outside the MVP-complete gate** — M4 sweep 5 documents these facts in prose first, which is what `AGENTS.md` licensing actually requires. |
 
 OCR, conversion beyond Abstract/Introduction, persisted retrieval indexes,
 semantic causal classification, and other features excluded by Gate 0 remain
@@ -977,12 +977,720 @@ URL, but neither carries `redistribution_status`, `update_policy`, or
 `contains_copyrighted_full_text`.
 
 Scope: reconcile all three types — conform, reuse, or deliberately document
-why they stay separate — with the manifest schema bump, migration, and tests
-that implies. `ManagedRuntimeArtifact` is in scope explicitly, not optionally:
-it lacks the same three fields for the four pinned `llama.cpp` archives that
-`setup` downloads.
+why they stay separate. `ManagedRuntimeArtifact` is in scope explicitly, not
+optionally: it lacks the same three fields for the four pinned `llama.cpp`
+archives that `setup` downloads.
 
 Not in the MVP gate. M4 sweep 5 documents the licensing facts in prose, which
 is what `AGENTS.md`'s corpus-and-licensing section actually requires; M6 is
 about the type carrying them structurally so `update`/`status` could read them
 rather than a human reading a document.
+
+### Premise corrections found while planning
+
+Four assumptions in the paragraphs above do not survive contact with the
+code. They are recorded here rather than silently designed around. Item 1 is
+a correction to an earlier draft of this section, which stated the usage
+audit wrongly; the corrected audit changes the design.
+
+1. **`ArtifactManifest` is not unused, and it has committed instance data.**
+   An earlier draft said its two entry points were called from exactly one
+   place, `tests/adapters/test_filesystem.py`. That was false.
+   `load_manifest_from_file` is also called by `tests/adapters/test_corpus.py`,
+   `tests/evaluation/test_generation_evaluation.py`, and
+   `integration_tests/test_llama_cpp_model.py`; `verify_artifact` is also
+   called by `tests/adapters/test_corpus.py`. The integration-test call reads
+   a manifest path supplied by the user through `ECONPAPERS_MODEL_MANIFEST`,
+   which is the closest thing in the repository to production use.
+
+   More consequentially, **four `ArtifactManifest` JSON instances are
+   committed**: `tests/fixtures/corpus/synthetic-economics-v1.manifest.json`
+   and three `artifacts/models/*.manifest.json` Issue-13 evaluation
+   candidates. One of those three,
+   `artifacts/models/qwen2.5-1.5b-instruct-q4-k-m.manifest.json`, describes
+   **the same file as the managed catalog's default model** — identical
+   `sha256` and `expected_size_bytes` — under a divergent source URL (see
+   correction 4). The schema is therefore live, exercised, and populated; the
+   two representations of the default model are a duplication M6 has to
+   reconcile, and that reconciliation is now in scope.
+
+   Only the narrow form of the original claim survives: **no module under
+   `src/` consumes `ArtifactManifest`.** It is a serialization contract used
+   by tests, by the opt-in integration test, and by committed records — not
+   by application code.
+2. **No schema bump or migration is required.** An earlier draft of this
+   section said the work implies "the manifest schema bump, migration, and
+   tests that implies"; that clause has been removed above because it binds
+   nothing. Neither managed catalog is ever serialized — both are Python
+   literals.
+
+   An earlier draft justified this by saying `InstallReceipt`
+   (`domain/runtime_receipt.py`) is the only on-disk artifact derived from
+   the runtime manifest. That was false. `setup` also persists
+   manifest-derived identity into `LocalRuntimeModelConfig`
+   (`domain/local_config.py`): `runtime_id`, `runtime_version_marker`, and
+   the provisioned `executable_path`, plus `model_id`, `model_bytes`, and
+   `model_checksum` from the model install. The accurate premise is narrower:
+   **`InstallReceipt` is the only on-disk artifact that serializes the
+   runtime bundle's member metadata**, and *neither* on-disk form carries a
+   licensing field.
+
+   The conclusion survives the correction. Both serialized shapes have fixed,
+   explicitly enumerated field sets that this milestone does not touch, so
+   adding fields to the catalogs changes no byte of `receipt.json` or of the
+   durable configuration file. There is nothing to migrate, and
+   `ManagedRuntimeManifest.schema_version` therefore stays `1`: bumping it
+   would advertise a serialized-format change that does not exist.
+3. **Licensing fields with no runtime reader are the existing precedent.**
+   `license_name` and `attribution_text` already exist on both managed types
+   and are read by nothing under `src/` — only by documentation and by
+   humans. The three new fields joining them is consistent with the current
+   design rather than a new gap.
+4. **The two records of the default model disagree on its source URL.**
+   `domain/model_manifest.py` pins
+   `…/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf`,
+   a *mutable* Hugging Face ref, and `docs/artifact-licensing.md` records the
+   same URL. The committed
+   `artifacts/models/qwen2.5-1.5b-instruct-q4-k-m.manifest.json` pins
+   `…/resolve/dd26da440ef0330c47919d1ecae0966d24022222/…`, the immutable
+   revision, for a file with the identical `sha256` and size. The checksum
+   pin means users are never served different bytes silently — a changed
+   upstream file fails verification — but it does mean a legitimate upstream
+   update breaks provisioning for every user until a maintainer refreshes the
+   pin, and it makes "pinned" less true of the URL than of the bytes. The 7B
+   entry has the same `resolve/main` shape. **Reported, not fixed here**:
+   changing a pinned source URL is a maintainer action under
+   `docs/artifact-licensing.md`'s own update policy and belongs in its own
+   issue, not folded into a metadata milestone.
+
+### Chosen shape — reuse the vocabulary, not the dataclass
+
+Add the three fields to both live types, importing `RedistributionStatus`
+from `domain/artifacts.py` so the enum is literally shared rather than
+duplicated. Full conformance to `ArtifactManifest` is **rejected**, for three
+reasons that are each checkable in the code as it stands:
+
+1. **`local_path` is required and cannot be pinned for the runtime.** The
+   runtime's install directory is content-addressed and computed at
+   provisioning time, and `runtime_manifest.py` has no path field at all.
+   This reason is weaker for models than an earlier draft claimed: the
+   committed `artifacts/models/*.manifest.json` instances show a model
+   `local_path` is perfectly expressible (`models/qwen2.5-1.5b-instruct-q4_k_m.gguf`).
+   It disqualifies conformance for `ManagedRuntimeArtifact` specifically, and
+   the milestone requires the two types be treated together.
+2. **`ArtifactKind` has no `runtime` member, and adding one forces an
+   unanswered design question.** An earlier draft claimed adding the member
+   would itself mean a schema bump and a migration of the four committed
+   JSON files; that is too categorical and is withdrawn. Widening an enum is
+   backward-compatible, and every existing record stays valid. The real cost
+   is a decision this milestone is not the place to make: whether runtime
+   bundles belong in the serialized `ArtifactManifest` contract at all, and
+   if so what `local_path` means for a content-addressed install directory
+   and where `bundle_member_checksums`, `archive_format`, and
+   `executable_relative_path` live. Answering that is a schema design task
+   with its own issue; guessing at it here is how a narrow interface
+   extension turns into an architecture change.
+3. **The managed types carry fields `ArtifactManifest` has no slot for**:
+   `archive_format`, `bundle_member_checksums`, `executable_relative_path`,
+   `platform`, `architecture`, `minimum_free_ram_bytes`, `display_name`,
+   `summary`, `attribution_text`. Conformance either drops them or forces a
+   parallel type anyway.
+
+A fourth reason in an earlier draft — that binding the catalogs to a contract
+with no reader buys nothing — is **withdrawn**: correction 1 shows the
+contract has readers and committed data. It was the weakest of the four and
+the design does not depend on it.
+
+No projection function (`ManagedModelArtifact` → `ArtifactManifest`) is added
+either; it would be more code with no caller under `src/`.
+
+### Reconciling the duplicate record of the default model
+
+Correction 1 puts a second scope item on this milestone that the earlier
+draft missed. `artifacts/models/qwen2.5-1.5b-instruct-q4-k-m.manifest.json`
+and `QWEN2_5_1_5B_INSTRUCT_Q4_K_M` pin the same bytes with different URLs and
+different update-policy text, and nothing in the repository says how they
+relate. The milestone's own wording — "reconcile all three types" — covers
+this; a fourth representation simply went unnoticed when it was written.
+
+The two records exist for different reasons: the JSON files are Issue-13
+*evaluation candidates* describing a local install (`local_path`, and an
+`update_policy` that says so), while the catalog describes a *download
+source*. That is a defensible split, so the recommendation is **document the
+relationship rather than delete either record** — a short subsection in
+`docs/artifact-licensing.md` naming which record governs provisioning (the
+catalog) and which is an evaluation artifact (the JSON), plus the URL
+divergence from correction 4. Deleting the overlapping JSON is the
+alternative; it is a maintainer decision, listed for sign-off below.
+
+Documentation alone would not earn the word "reconcile": nothing would stop
+the two records from drifting apart tomorrow. So this item also carries a
+test, in `tests/test_artifact_licensing_doc.py`, over every committed
+`artifacts/models/*.manifest.json` whose `artifact_id` matches a
+`model_id` in `MANAGED_MODEL_CATALOG` — today exactly one, and the test
+asserts that count is 1 so that a new overlap cannot appear unnoticed. For
+each match it asserts:
+
+- `sha256` and `expected_size_bytes` are **equal** across the two records,
+  because they describe the same bytes and a divergence is a defect;
+- the two `source` URLs are **both** pinned to their currently recorded
+  values, so the known divergence is frozen rather than merely described. A
+  change to either URL fails the test and forces a maintainer decision, which
+  is also how the correction-4 fix will be picked up when its own issue lands.
+
+**What the test deliberately does not compare, and why.** "Reconcile" here
+means *the two records agree about the bytes*, not *the two records are the
+same record*. `license`, `redistribution_status`,
+`contains_copyrighted_full_text`, and `update_policy` are allowed to diverge,
+and the documentation subsection will say so explicitly rather than leaving
+"same file" to imply a stronger identity than the test enforces. The reason
+is that the two records answer different questions. The catalog's
+`update_policy` describes how a *download pin* is maintained; the JSON's says
+`Pinned Issue 13 evaluation candidate; upgrades require new provenance,
+checksum, compatibility testing, and semantic evaluation`, which describes
+how an *evaluation candidate* is retired or replaced. Both are true at once,
+and forcing them equal would destroy real information. The same holds for the
+licensing classifications: the sibling
+`smollm2-1.7b-instruct-q4-k-m.manifest.json` records
+`redistribution_status: unknown` and a license string flagging that
+conversion provenance needs maintainer review, which is a judgment made for
+evaluation purposes and has no counterpart in a catalog of artifacts approved
+for download.
+
+Only `sha256` and `expected_size_bytes` identify the bytes, so only those are
+required to agree. If either diverges, one record is simply wrong.
+
+The maintainer has chosen to document the relationship and retain the
+evaluation manifest, so this test and the documentation subsection are both
+in scope.
+
+### Defining `contains_copyrighted_full_text` before using it
+
+An earlier draft set this field to `False` for both GGUFs and called the
+values "taken verbatim" from `docs/artifact-licensing.md`. They are not
+verbatim, and the gap matters. The document says the model contains "no paper
+text from this project's corpus" — a claim M4 deliberately narrowed. A typed
+`contains_copyrighted_full_text = False` reads as the much broader claim that
+the artifact contains no copyrighted full text at all, which nothing here
+establishes: a GGUF's training data is not characterized in this repository.
+
+Two facts constrain the fix. First, the field is **not new and not
+unclassified**: all four committed `ArtifactManifest` instances already
+assert `false`, including
+`artifacts/models/qwen2.5-1.5b-instruct-q4-k-m.manifest.json`, which
+describes the very model the managed catalog defaults to. M6 would propagate
+an existing typed classification, not invent one. Second, the field's scope
+is genuinely undefined: `docs/artifact-manifest.md` documents it only as
+"Boolean disclosure".
+
+**Recommended resolution — define the scope, do not rename.** Add to
+`docs/artifact-manifest.md` an explicit definition covering both
+`ArtifactManifest` and the managed catalogs:
+
+> `contains_copyrighted_full_text` discloses whether the artifact's
+> distributed bytes contain copyrighted full text of research papers. It is a
+> corpus-content disclosure, which is why `AGENTS.md`'s corpus-and-licensing
+> section requires it. It is **not** a claim about a model's training data,
+> which this project does not characterize.
+
+Under that definition `False` is correct for all six artifacts, the M4 prose
+and the typed value stop disagreeing, and the four committed instances stay
+valid unchanged.
+
+Renaming the field to something like `contains_copyrighted_paper_text` is the
+honest alternative, and it is more expensive than it looks: the name is part
+of `ArtifactManifest`'s serialized schema, so renaming means a real schema
+bump plus migration of four committed JSON files — reinstating exactly the
+clause correction 2 removed. That trade-off is why the recommendation is to
+define rather than rename, but the choice is the maintainer's and is listed
+for sign-off below. **No `contains_copyrighted_full_text` value is written
+into either catalog until this is settled.**
+
+### Code changes
+
+A shared constant is added to `domain/artifacts.py`, next to
+`RedistributionStatus`:
+
+```python
+PINNED_UPDATE_POLICY = (
+    "Pinned to an exact URL, size, and SHA-256 in version-controlled data. "
+    "The application never tracks upstream releases or upgrades on its own; "
+    "changing a pin is a maintainer action verified against a real download."
+)
+```
+
+Placing it there makes the "one policy governs all six artifacts" claim an
+invariant of the code. On its own that does **not** bind the document, which
+could later describe a different policy while every test still passed; the
+declarations block described under "Tests" is what closes that gap.
+
+Both `ManagedModelArtifact` and `ManagedRuntimeArtifact` gain:
+
+| Field | Type | Validation |
+| --- | --- | --- |
+| `redistribution_status` | `RedistributionStatus` | must be an enum member |
+| `update_policy` | `str` | nonempty after `strip()` |
+| `contains_copyrighted_full_text` | `bool` | exact `isinstance(..., bool)`, so `1`/`0` are rejected |
+
+Three deliberate choices:
+
+- **`str`, not an enum, for `update_policy`**, matching
+  `ArtifactManifest.update_policy`'s type exactly, so "shared vocabulary" is
+  true rather than approximate. Drift is prevented by the shared constant,
+  not by the type.
+- **No defaults.** Adding a new pinned artifact must force its author to
+  state all three facts. That is the licensing guardrail working, and it is
+  worth the churn.
+- **Each module raises its own error type** — `ManagedModelManifestError` /
+  `ManagedRuntimeManifestError`, never `ArtifactManifestError` — preserving
+  each module's existing contract. One test per module pins this.
+
+Both module docstrings gain a note that these three fields are
+maintainer-supplied *classifications*, unlike `sha256` and the size fields,
+which are computed from a real download. This mirrors the safety boundary
+`docs/artifact-manifest.md` already states for `redistribution_status`.
+
+Churn: 20 construction sites — 6 under `src/` (2 model catalog entries, 4
+runtime artifacts in `domain/runtime_manifest_data.py`) and 14 in tests
+across **seven** files (an earlier draft said six):
+`tests/domain/test_runtime_manifest.py`,
+`tests/services/test_model_provisioning.py`,
+`tests/services/test_runtime_provisioning.py`,
+`tests/services/test_setup_command.py`,
+`tests/services/test_status_command.py`,
+`tests/services/test_update_command.py`, and
+`tests/services/_release_fixtures.py`. Two of those are shared factories
+(`test_runtime_manifest.py`, `test_runtime_provisioning.py`), leaving twelve
+literal sites needing three keyword arguments each.
+
+All six production artifacts take `RedistributionStatus.PERMITTED` and
+`PINNED_UPDATE_POLICY`. The `permitted` classification is genuinely already
+recorded — in the document for all six, and in typed committed data for the
+default model — but it is **not** transcribed verbatim from prose, and an
+earlier draft's claim that all three values were is withdrawn:
+`PINNED_UPDATE_POLICY` is new wording written for this milestone, and
+`contains_copyrighted_full_text` is blocked on the definition above.
+
+### Tests
+
+An earlier draft proposed asserting that each artifact's `attribution_text`
+appears in `docs/artifact-licensing.md` after whitespace normalization. That
+would have failed on first run for all four runtime artifacts, and the reason
+generalizes. `_LLAMA_CPP_ATTRIBUTION` reads `Copyright (c) 2023-2026 The ggml
+authors. Licensed under the MIT License; see the LICENSE file bundled in the
+downloaded archive for the full text.`, while the document reads `Copyright
+(c) 2023–2026 The ggml authors, licensed under the MIT License.` — different
+dash, different punctuation, different wording, and one clause absent.
+Whitespace normalization cannot repair any of that, and it should not: the
+document is *paraphrasing* the notice, which is a legitimate thing for prose
+to do.
+
+The lesson is that **containment is the wrong mechanism for free-text
+values.** It only ever worked for the two model attributions by luck. The
+same weakness is why an earlier draft could not bind `PINNED_UPDATE_POLICY`
+or the shared classifications to the document at all.
+
+**Mechanism: a generated declarations block, compared by equality.**
+`docs/artifact-licensing.md` gains one appendix section, "Typed declarations
+(generated — do not edit by hand)", holding a fenced block that renders every
+typed licensing fact for all six artifacts. A single helper renders that text
+from the two catalogs; the test asserts **byte-exact equality** between the
+committed block and the rendered text.
+
+#### Canonical form of the block
+
+An earlier draft said "exact equality after whitespace normalization", which
+promises two incompatible things. The block is machine-written, so there is
+no reason to tolerate any difference in it: comparison is **byte-exact**, and
+all normalization happens inside the renderer, where it is deterministic.
+Whitespace normalization survives only for the *narrative* containment
+guards, where a human line-wrapping a sentence is legitimate.
+
+The renderer emits, and the test compares:
+
+- UTF-8, `\n` line endings, no trailing whitespace on any line, exactly one
+  newline before the closing fence;
+- one record per artifact, records sorted by artifact identifier ascending
+  (`model_id` for models, `runtime_id` plus platform and architecture for the
+  four runtime archives, which share a `runtime_id`), models before runtimes;
+- one `key: value` per line in a fixed field order, records separated by a
+  single blank line;
+- sizes as plain decimal integers with no separators — the comma-grouped form
+  belongs to the narrative, not here; booleans as lowercase `true`/`false`;
+  enums as their `.value`;
+- free-text values — attribution and update policy — collapsed to a single
+  line, runs of whitespace reduced to one space. This is where whitespace
+  normalization actually belongs: in producing the canonical text, not in
+  comparing it.
+
+**Line endings are the script's responsibility, not git's.** An earlier draft
+justified byte-exact comparison by citing `.gitattributes` (`* text=auto
+eol=lf`). That is necessary and not sufficient, and the justification is
+withdrawn: `.gitattributes` governs what git writes at checkout, while
+Python's text mode independently translates `\n` to `\r\n` on write under
+Windows and collapses CRLF to LF on read. A `--write` using ordinary text I/O
+would therefore emit a CRLF document on Windows, which git would then
+renormalize, producing a file that differs from what the tool just wrote.
+
+So the script does **binary I/O throughout**: `Path.read_bytes()` then
+`.decode("utf-8")`, and `.encode("utf-8")` then `Path.write_bytes()`, with no
+text-mode `open()` anywhere. Equivalently explicit `newline="\n"` on both
+sides would do, but binary is harder to get wrong by accident. The script
+tests assert on the **bytes** written, including that the output contains no
+`\r`, so a regression to text mode fails on Windows CI rather than silently
+producing a file that only that platform sees.
+
+#### Authority hierarchy
+
+The document today opens by calling itself "the single authoritative record
+of every artifact the application downloads". After M6 that is no longer
+true, and leaving it would leave two things claiming authority over the same
+facts. The hierarchy M6 establishes, and writes into the document's opening
+section:
+
+1. **The catalogs** (`domain/model_manifest.py`,
+   `domain/runtime_manifest_data.py`) are the source of truth for every typed
+   licensing fact. They are what `setup` and `update` actually act on.
+2. **The generated declarations block** is a mechanically faithful projection
+   of the catalogs, and is authoritative *within the document* — including
+   for the four fields the narrative only paraphrases. It is generated, never
+   hand-edited, and a test fails if it drifts from the catalogs.
+3. **The human narrative** explains and contextualizes: why these assets and
+   not GPU builds, what `permitted` does and does not mean legally, how the
+   corpus rules differ. It is authoritative for nothing the block covers, and
+   where the two ever disagree the block wins.
+
+`AGENTS.md`'s requirement is unaffected: the seven licensing facts are still
+documented for all six artifacts, now in a form that cannot silently drift
+from the code.
+
+#### Regenerating the block
+
+The helper is `scripts/render_artifact_declarations.py`, alongside the
+existing `scripts/evaluate_generation.py` and `scripts/measure_retrieval.py`.
+It exposes a pure `render_declarations() -> str` over the two catalogs plus a
+`main()` with two modes:
+
+```bash
+# --check exits 1 on drift and prints the diff; --write rewrites in place.
+# --document defaults to docs/artifact-licensing.md; tests pass a tmp copy.
+python scripts/render_artifact_declarations.py --check
+python scripts/render_artifact_declarations.py --write
+python scripts/render_artifact_declarations.py --check --document PATH
+```
+
+The block is delimited in the document by explicit markers rather than by a
+heading, so both extraction and rewriting are unambiguous and survive
+editing of the surrounding prose:
+
+```text
+<!-- BEGIN GENERATED: artifact-declarations -->
+...fenced block...
+<!-- END GENERATED: artifact-declarations -->
+```
+
+`--write` replaces only the text between those markers and fails loudly,
+without modifying the file, if either marker is missing, either is
+duplicated, or the closing marker precedes the opening one. That is five
+failure branches, and the script tests below cover exactly those five.
+
+**The consistency test never regenerates.** It loads the script module with
+`importlib.util.spec_from_file_location`, following the precedent in
+`tests/evaluation/test_generation_script.py`, calls `render_declarations()`,
+and compares against the committed document. It never invokes `--write`,
+never imports anything that writes, and never touches `docs/` — a test that
+silently rewrote the file it checks would pass unconditionally, which is the
+same failure mode as a guard with no teeth.
+
+For that separation to be testable, the path is explicit at both layers.
+`render_declarations() -> str` is pure; `check_document(path)` and
+`write_document(path)` take the file to operate on; and `main()` accepts
+**`--document PATH`**, defaulting to `docs/artifact-licensing.md`. An earlier
+draft specified only `--check`/`--write`, which left the tests no way to
+exercise the CLI without writing to the real document — they would have had
+to bypass `main()` and lose coverage of argument parsing and exit codes.
+
+The script tests therefore drive `main()` with `--document` pointed at a
+`tmp_path` copy, so exit codes and output are part of what is covered. The
+only test that touches the real document runs `--check` against it, which
+reads.
+
+#### Tests for the script itself
+
+The renderer is the state-changing part of this milestone and an earlier
+draft left it entirely unverified — specified in prose, exercised by nothing.
+`tests/test_artifact_declarations_script.py` covers both modes and every
+failure branch:
+
+- `--check` against the committed document exits `0`;
+- `--check` against a copy whose block has been altered exits `1` and prints
+  a diff naming the changed line;
+- `--write` against that altered copy restores the block, and the bytes
+  **before the opening marker and after the closing marker are unchanged** —
+  asserted by comparing those two slices to the original, which is what
+  "replaces only the interior" has to mean to be worth claiming;
+- `--write` against an already-correct copy leaves the file byte-identical
+  and reports that nothing changed;
+- the bytes `--write` produces contain no `\r`, so a regression from binary
+  to text-mode I/O fails on Windows CI instead of silently emitting a CRLF
+  document that only that platform sees;
+- **five** marker-failure cases, each exiting non-zero **and leaving the file
+  byte-identical**, asserted by hashing before and after. The contract says
+  *either* marker missing or duplicated, which is two markers times two
+  failure modes, plus the ordering case — an earlier draft listed only three
+  and so contradicted its own "every failure branch" claim while omitting the
+  likelier delimiter bugs:
+  - opening marker absent;
+  - **closing marker absent**;
+  - opening marker duplicated;
+  - **closing marker duplicated**;
+  - markers in reverse order (`END` before `BEGIN`).
+
+  A rewriter that corrupts a document while failing is worse than one that
+  refuses, which is why byte-identity is asserted on all five rather than
+  just the exit code.
+
+The byte-identity assertions are the point: without them a `--write` that
+rewrote the whole file, or a marker check that failed after truncating,
+would pass.
+
+This is what makes the three new fields document-bound rather than
+code-only: every typed value fails the suite if the code and the block
+disagree, in either direction, including the shared policy text and the
+shared classifications.
+
+A new `tests/test_artifact_licensing_doc.py` holds the check, anchored by a
+`REPO_ROOT` computed from `Path(__file__).resolve().parents[1]`, following
+the `parents[2]` precedent in `tests/adapters/test_corpus.py`.
+
+#### What binds the human-written narrative, and what does not
+
+An earlier draft claimed the guards below mean "the narrative cannot quietly
+contradict the generated block". That was an overclaim: the guards it listed
+covered only source URL, license, checksum, and size, so the prose could have
+said redistribution was prohibited while the block said `permitted` and every
+test would still have passed. The block binds **code → block**; binding
+**block → narrative** needs its own guards, and for one field it is not
+achievable at all. The honest split:
+
+*Guards on the narrative body — the document with the generated block
+removed, so the block cannot satisfy a check about the prose. Only the first
+is genuinely per-artifact; the rest are whole-document consistency checks,
+and the plan calls them that:*
+
+- **per-artifact**: each artifact's `source_url`, artifact-level `sha256`,
+  and comma-grouped size (`f"{n:,}"`) appears in the narrative. These values
+  are distinct per artifact, so containment binds each one individually;
+- **whole-document**: the set of `license_name` values and the set of
+  `redistribution_status` values appearing in the catalogs each appear in the
+  narrative. Because all six artifacts currently share `permitted`, and five
+  of six share a license, a single occurrence satisfies the check for every
+  artifact — this detects a wholesale contradiction, not a single divergent
+  row;
+- **whole-document**: the narrative contains no affirmative form of the
+  copyrighted-full-text disclosure — no `yes` following a `contains
+  copyrighted full text` phrase in the normalized text;
+- **whole-document**: every 64-character hexadecimal token anywhere in the
+  document is one of the six artifact-level checksums, catching a stale pin
+  left behind after a code change. `bundle_member_checksums` are deliberately
+  not in the document.
+
+The copyrighted-full-text guard **does not invert automatically**, and an
+earlier draft claiming it would is withdrawn. The narrative has no
+per-artifact machine-readable disclosure for this field — the model tables
+say `Contains copyrighted full text | No.` and the runtime section makes one
+statement covering all four archives — so there is no structure from which a
+future `True` could be matched to the artifact it belongs to. Inventing one
+would mean an undocumented parsing convention, which is the brittleness this
+whole mechanism avoids.
+
+Instead the guard states its own precondition. It first asserts that all six
+artifacts are `False`, and if that ever stops holding it fails with a message
+naming the reason: the narrative guard assumes a uniform all-false
+disclosure, and a `True` value requires either per-artifact machine-readable
+disclosure in the document or dropping the prose guard and relying on the
+generated block alone. That is a loud, self-explaining failure rather than a
+guard that silently stops meaning anything — and the generated block, which
+*is* per-artifact and exact, keeps binding the field correctly either way.
+
+*Not bound, with the claim narrowed accordingly:*
+
+- **The narrative's "## Update policy" section is a paraphrase and is not
+  checked.** It cannot be: the same paraphrasing that broke attribution
+  containment applies to a multi-paragraph prose policy. The generated block
+  is authoritative for the exact `PINNED_UPDATE_POLICY` text, and the
+  document will say so in a pointer sentence at that section, so a human
+  reader knows which one governs.
+- **Attribution is not checked against the prose**, only against the block,
+  for the same reason.
+- **No reverse URL check**, because the document legitimately contains the
+  `llama.cpp` repository URL as attribution, which is not an artifact source,
+  and an allowlist would be brittle.
+
+*Residual weakness, stated rather than papered over:* the whole-document
+guards are containment, and all six artifacts currently share the same status
+and classification. If one of six entries were edited to disagree while the
+other five stayed correct, containment would still be satisfied. Catching
+that needs per-artifact prose parsing, which reintroduces exactly the
+brittleness the generated block exists to avoid. **The generated block is
+authoritative for redistribution status, update policy, the
+copyrighted-full-text disclosure, and attribution**; the narrative guards
+catch wholesale contradiction, not a single divergent row, and the acceptance
+criteria below say so in those terms.
+
+Validation tests go in the existing `tests/domain/test_model_manifest.py` and
+`tests/domain/test_runtime_manifest.py`: each new field rejected for the
+wrong type, each raising its own module's error type, and
+`contains_copyrighted_full_text=1` rejected specifically.
+
+**Mutation check before the work is called done**, following the M5 precedent
+that a checker with no teeth passes everything. Five separate mutations, each
+applied and reverted one at a time, each of which must fail the suite:
+
+1. corrupt one pinned checksum in code (exercises both the equality assertion
+   and the prose containment guard);
+2. corrupt one pinned size in code;
+3. change one artifact's `redistribution_status` to `UNKNOWN` in code
+   (exercises the declarations block on a field the prose cannot bind);
+4. change a **value** inside the generated block in the document — flip one
+   `permitted` to `prohibited` there, not a whitespace edit — exercising the
+   check in the document-drift direction, which is the direction the earlier
+   draft left entirely uncovered. A whitespace-only edit would prove nothing
+   about semantic drift, which is the failure this guard exists to catch;
+5. change every `permitted` in the *narrative* to `prohibited`, leaving the
+   generated block correct (exercises the narrative guard specifically — the
+   scenario that passed silently in the earlier draft).
+
+Reported in the summary, never committed.
+
+### Documentation
+
+| File | Change |
+| --- | --- |
+| `docs/artifact-licensing.md` | Replace "Residual schema gap — M6" with a "Typed representation" section; flip the "Until M6 lands, this document is the authoritative source" sentence; **replace the opening "single authoritative record" claim with the three-level hierarchy above**; update the Classification block, which currently marks that section **[planned]**; add a pointer at "## Update policy" naming the generated block as authoritative for the exact policy text. Add the generated "Typed declarations" appendix between its markers, and the subsection reconciling the duplicate default-model record. |
+| `scripts/render_artifact_declarations.py` | New maintainer helper: `render_declarations()` plus `--check`/`--write`. |
+| `docs/artifact-manifest.md` | New "Relationship to the managed catalogs" section: the three non-conformance reasons, and the accurate usage picture — no `src/` consumer, but four committed instances and four test/integration call sites. Add the `contains_copyrighted_full_text` scope definition, which governs both the schema and the catalogs. |
+| `AGENTS.md` | The "do not yet carry … tracked as M6" paragraph becomes a statement that they carry them, with the shared-vocabulary note. Also fix the false `artifacts/` claim in the repository map — see below. |
+| `MVP-PLAN.md` | Ladder row for M6 marked done; this section gains a run record. M4's historical sweep text stays as written — it records what was true then. |
+| `README.md` | Verified: makes no claim M6 falsifies. No edit. |
+| `docs/roadmap.md` | Verified: the prose facts remain documented. No edit. |
+
+### Two defects found while planning
+
+**In scope: the false `artifacts/` claim in `AGENTS.md`.** An earlier draft
+deferred this to its own issue. That was the wrong call and it is withdrawn:
+M6 already edits `AGENTS.md`, the false sentence sits in the same repository
+map, and leaving a known-wrong repository instruction in place changes how
+future agents behave and what a fresh clone is assumed to contain. The
+no-unrelated-changes rule protects reviewability, and a correction inside a
+file the milestone already touches, about the very artifact records the
+milestone is reconciling, does not threaten it.
+
+The fix is larger than the one word it looks like. `AGENTS.md`'s
+"Corpus, models, and papers/ directory" section lists `papers/`, `models/`,
+`runtimes/`, `artifacts/`, `generation-results/` as "local, gitignored
+working data", glosses them as including "artifact manifests", and concludes
+"None of this is committed or redistributed". Three claims are false for
+`artifacts/`: `.gitignore` has no such entry, the manifests under it *are*
+tracked, and they must be — `tests/evaluation/test_generation_evaluation.py`
+asserts on the exact set of files there, so a fresh clone fails without them.
+The other four directories are correctly ignored. So the sentence needs
+`artifacts/` removed from the list, the "artifact manifests" gloss removed,
+and a short clause added recording that `artifacts/models/*.manifest.json`
+are committed `ArtifactManifest` records. That change is itself covered by
+the reconciliation test above, which fails if those files stop existing.
+
+**Out of scope: the mutable `resolve/main` source URLs**, described in
+correction 4. Changing a pinned source URL is a maintainer action under the
+document's own update policy, needs a fresh download to confirm the pin, and
+belongs in its own issue. The reconciliation test freezes the current values
+so the divergence cannot widen unnoticed in the meantime.
+
+### Decisions requiring maintainer sign-off
+
+The first two were blocking. **Both were answered by the maintainer on
+2026-08-08 and are now settled**; the rest are standing choices recorded so
+they are not made by implication.
+
+1. **SETTLED — the scope of `contains_copyrighted_full_text`.** Adopt the
+   corpus-content definition proposed above: a disclosure about whether the
+   artifact's distributed bytes contain copyrighted *paper* text, explicitly
+   not a claim about a model's training data. **The serialized field is not
+   renamed**, so no schema bump and no migration of the four committed JSON
+   records follows, and correction 2's conclusion stands unconditionally.
+2. **SETTLED — the duplicate record of the default model.** Document the
+   relationship and **retain** the evaluation manifest; deleting it would
+   remove Issue-13 evaluation coverage for no gain. The identity test and the
+   documentation subsection above are both in scope, and
+   `tests/evaluation/test_generation_evaluation.py` needs no change.
+3. **No runtime consumer is added.** The rationale above says the point is
+   that `update`/`status` *could* read these fields. No CLI surface is added:
+   that is user-facing scope this milestone does not ask for, and
+   `license_name`/`attribution_text` set the precedent of licensing data with
+   no reader. Surfacing them in `status` is a one-line scope change if the
+   maintainer wants it.
+4. **No `schema_version` bump**, justified by correction 2. Decision 1
+   settling on "define, do not rename" removes the one condition that would
+   have forced one.
+5. **`attribution_text` is included in the generated declarations block**
+   even though it is not one of the seven `AGENTS.md` licensing facts — same
+   mechanism, no extra machinery, and it is the only way the exact notice
+   text stays checked now that prose containment has been dropped for it.
+6. **`ArtifactManifest` is left in place unchanged.** M6 documents its
+   accurate usage picture; deleting it, wiring it into `src/`, or migrating
+   the managed catalogs onto it are separate decisions, not ones to make by
+   implication here.
+
+### Sequencing constraint
+
+M6 must start from a clean working tree. At planning time the tree held
+seven modified files of unrelated in-progress work, including
+`domain/runtime_manifest_data.py`, which M6 also edits. `AGENTS.md` requires
+one issue per pull request and a final diff with no unrelated changes, so
+that work is committed or stashed first.
+
+### Acceptance
+
+`ManagedModelArtifact` and `ManagedRuntimeArtifact` each carry
+`redistribution_status`, `update_policy`, and `contains_copyrighted_full_text`
+as validated fields sharing `domain/artifacts.py`'s vocabulary, and all six
+pinned artifacts declare all three.
+
+`contains_copyrighted_full_text` has a written scope definition — the
+corpus-content reading settled in decision 1 — that a reader of either the
+schema or the catalogs will find, and the serialized field is not renamed.
+
+The generated declarations block matches the catalogs exactly and is the
+**authoritative** record of redistribution status, update policy, the
+copyrighted-full-text disclosure, and attribution. The document states the
+catalogs → block → narrative hierarchy in place of its former "single
+authoritative record" claim. `scripts/render_artifact_declarations.py`
+regenerates the block via `--write` and reports drift via `--check`, with
+`--document` selecting the target file; the script uses binary UTF-8 I/O
+throughout, so its output is LF on every platform; both modes and all five
+marker-failure branches — each marker absent, each marker duplicated, and the
+reversed pair — are driven through `main()` against `tmp_path` copies, each
+asserted to leave the target byte-identical; and
+the consistency test compares the committed block without ever regenerating
+it. The
+milestone-ladder row for M6 states the design that was actually chosen rather
+than the conformance it rejected. The narrative guards are
+weaker by design and the document says which is which: per-artifact for
+source URL, checksum, and size; whole-document consistency for license and
+redistribution status; and a whole-document check on the copyrighted-full-text
+disclosure that asserts its own all-false precondition and fails with a
+directive message if that precondition ever breaks. All five mutations fail
+the suite.
+
+The duplicate default-model record is documented, covered by the identity
+test, and accompanied by an explicit statement of which fields may legitimately
+diverge between the catalog and the evaluation manifest. `AGENTS.md`'s
+repository map no longer claims `artifacts/` is gitignored. The reason full
+conformance was rejected is written down where a reader of `ArtifactManifest`
+will find it. `ruff check .`, `ruff format --check .`, and `pytest` are
+clean, and the diff contains no part of the unrelated in-progress work.
+
+Out of scope: the M5 remainder (tier 2 run, run record, tag),
+`ArtifactKind.RUNTIME` and the serialized-schema design question behind it,
+any projection function, any change to `receipt.json` or durable
+configuration, and the mutable `resolve/main` source URLs.
