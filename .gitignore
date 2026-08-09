@@ -29,3 +29,6 @@ dist/
 /runtimes/
 /generation-results/
 *.gguf
+
+# macOS directory metadata
+.DS_Store
